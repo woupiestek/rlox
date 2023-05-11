@@ -48,16 +48,23 @@ pub enum TokenType {
     Var,
     While,
 
-    Error,
-    Eof,
+    Error(String),
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Token<'a> {
+pub struct Token {
     pub token_type: TokenType,
-    pub lexeme: &'a str,
+    //pub lexeme: &'a str,
+    from: usize,
+    to: usize,
     pub line: u16,
     pub column: u16,
+}
+
+impl Token {
+    pub fn lexeme<'a>(&self, source: &'a str) -> &'a str {
+        &source[self.from..self.to]
+    }
 }
 pub struct Scanner<'a> {
     source: &'a [u8],
@@ -77,8 +84,8 @@ impl Scanner<'_> {
             line: 1,
             column: 1,
             token_start: 0,
-            token_line: 0,
-            token_column: 0,
+            token_line: 1,
+            token_column: 1,
         }
     }
 
@@ -133,16 +140,18 @@ impl Scanner<'_> {
     fn token(&self, typ: TokenType) -> Token {
         Token {
             token_type: typ,
-            lexeme: &str::from_utf8(&self.source[self.token_start..self.current]).unwrap(),
+            from: self.token_start,
+            to: self.current,
             line: self.token_line,
             column: self.token_column,
         }
     }
 
-    fn error<'c>(&self, message: &'c str) -> Token<'c> {
+    fn error(&self, message: &str) -> Token {
         Token {
-            token_type: TokenType::Error,
-            lexeme: message,
+            token_type: TokenType::Error(String::from(message)),
+            from: self.token_start,
+            to: self.current,
             line: self.token_line,
             column: self.token_column,
         }
@@ -255,23 +264,27 @@ impl Scanner<'_> {
             }
         }
     }
+}
 
-    pub fn next_token(&mut self) -> Token {
+impl Iterator for Scanner<'_> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Self::Item> {
         self.skip_whitespace();
         self.token_start = self.current;
         self.token_line = self.line;
         self.token_column = self.column;
         if self.is_at_end() {
-            return self.token(TokenType::Eof);
+            return None;
         }
         let ch = self.advance();
         if ch.is_ascii_digit() {
-            return self.number();
+            return Some(self.number());
         }
         if ch.is_ascii_alphabetic() {
-            return self.identifier();
+            return Some(self.identifier());
         }
-        match ch {
+        let token = match ch {
             b'(' => self.token(TokenType::LeftParen),
             b')' => self.token(TokenType::RightParen),
             b'{' => self.token(TokenType::LeftBrace),
@@ -313,7 +326,8 @@ impl Scanner<'_> {
             }
             b'"' => self.string(),
             _ => self.error("unexpected character"),
-        }
+        };
+        Some(token)
     }
 }
 
@@ -324,80 +338,82 @@ mod tests {
     #[test]
     fn print_string() {
         let mut scanner = Scanner::new("print \"one 😲\";");
-        let print = scanner.next_token();
         assert_eq!(
-            print,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Print,
-                lexeme: "print",
+                from: 0,
+                to: 5,
                 line: 1,
                 column: 1
-            }
+            })
         );
-        let unicode = scanner.next_token();
         assert_eq!(
-            unicode,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::String,
-                lexeme: "\"one 😲\"",
+                from: 6,
+                to: 16,
+                //lexeme: "\"one 😲\"",
                 line: 1,
                 column: 7
-            }
+            })
         );
-        let semi = scanner.next_token();
         assert_eq!(
-            semi,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Semicolon,
-                lexeme: ";",
+                from: 16,
+                to: 17,
                 line: 1,
                 column: 14
-            }
+            })
         );
+        assert_eq!(scanner.next(), None);
     }
 
     #[test]
     fn var_a_is_true() {
         let mut scanner = Scanner::new("var a = true;");
-        let var = scanner.next_token();
         assert_eq!(
-            var,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Var,
-                lexeme: "var",
+                from: 0,
+                to: 3,
                 line: 1,
                 column: 1
-            }
+            })
         );
-        let a = scanner.next_token();
         assert_eq!(
-            a,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Identifier,
-                lexeme: "a",
+                from: 4,
+                to: 5,
                 line: 1,
                 column: 5
-            }
+            })
         );
-        let is = scanner.next_token();
         assert_eq!(
-            is,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Equal,
-                lexeme: "=",
+                from: 6,
+                to: 7,
                 line: 1,
                 column: 7
-            }
+            })
         );
-        let _true = scanner.next_token();
         assert_eq!(
-            _true,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::True,
-                lexeme: "true",
+                from: 8,
+                to: 12,
                 line: 1,
                 column: 9
-            }
+            })
         );
     }
 
@@ -408,65 +424,65 @@ mod tests {
             // let's make this more interesting 😉
             1 + 2; }",
         );
-        let left_brace = scanner.next_token();
         assert_eq!(
-            left_brace,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::LeftBrace,
-                lexeme: "{",
+                from: 0,
+                to: 1,
                 line: 1,
                 column: 1
-            }
+            })
         );
-        let one = scanner.next_token();
         assert_eq!(
-            one,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Number,
-                lexeme: "1",
+                from: 68,
+                to: 69,
                 line: 3,
                 column: 13
-            }
+            })
         );
-        let plus = scanner.next_token();
         assert_eq!(
-            plus,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Plus,
-                lexeme: "+",
+                from: 70,
+                to: 71,
                 line: 3,
                 column: 15
-            }
+            })
         );
-        let two = scanner.next_token();
         assert_eq!(
-            two,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Number,
-                lexeme: "2",
+                from: 72,
+                to: 73,
                 line: 3,
                 column: 17
-            }
+            })
         );
-        let semi = scanner.next_token();
         assert_eq!(
-            semi,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::Semicolon,
-                lexeme: ";",
+                from: 73,
+                to: 74,
                 line: 3,
                 column: 18
-            }
+            })
         );
-        let right_brace = scanner.next_token();
         assert_eq!(
-            right_brace,
-            Token {
+            scanner.next(),
+            Some(Token {
                 token_type: TokenType::RightBrace,
-                lexeme: "}",
+                from: 75,
+                to: 76,
                 line: 3,
                 column: 20
-            }
+            })
         );
     }
 }
