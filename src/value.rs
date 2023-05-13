@@ -1,25 +1,25 @@
 // chunk, object, value: the runtime data model
 
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, ptr::NonNull};
 
 // so I can change my mind later
-type Pointer<T> = *mut T;
+type Pointer<T> = NonNull<T>;
 
 // aren't these supposed to be the same size?
 // moved string & nativefn: those seem distinct enough
-#[derive(Debug,PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Value {
     Bool(bool),
     Nil,
     Number(f64),
-    String(Pointer< LoxString>),
+    String(Pointer<LoxString>),
     Object(Pointer<Obj>),
     Native(Pointer<Native>),
 }
 
 #[derive(Debug)]
 pub struct Obj {
-    isMarked: bool,
+    is_marked: bool,
     next: Option<Pointer<Obj>>,
     body: ObjBody,
 }
@@ -27,9 +27,9 @@ pub struct Obj {
 pub type NativeFn = fn(arg_count: usize, args: &[Value]) -> Value;
 
 pub struct Native {
-    function: NativeFn
+    function: NativeFn,
 }
-impl Debug for  Native {
+impl Debug for Native {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "<native fn>")
     }
@@ -118,8 +118,12 @@ pub struct UpValue {
 }
 
 impl UpValue {
-    pub fn new (location:Pointer<Value>)->UpValue {
-        UpValue { location, closed: Value::Nil, next: None }
+    pub fn new(location: Pointer<Value>) -> UpValue {
+        UpValue {
+            location,
+            closed: Value::Nil,
+            next: None,
+        }
     }
 }
 

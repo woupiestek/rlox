@@ -1,7 +1,8 @@
 // deviate to get a small part correct
+use std::mem;
 
 #[derive(Debug, PartialEq)]
-struct InternedString {
+pub struct InternedString {
     hash: u32,
     mark: bool,
     string: String,
@@ -54,25 +55,21 @@ impl StringPool {
     }
 
     fn grow(&mut self, capacity: usize) {
-        let entries = &self.entries;
-        self.entries = Vec::with_capacity(capacity);
-        for i in 0..capacity {
-            self.entries[i] = None
-        }
+        let entries = mem::replace(&mut self.entries, (0..capacity).map(|_| None).collect());
         self.count = 0;
         for entry in entries {
-            if let Some(interned_string) = entry {
+            if let Some(interned_string) = &entry {
                 let index = self.find(&interned_string.string, interned_string.hash as usize);
-                self.entries[index] = Some(*interned_string);
+                self.entries[index] = entry;
             }
         }
     }
 
-    pub fn copy(&mut self, key: &str) -> InternedString {
+    pub fn copy(&mut self, key: &str) -> &InternedString {
         self.take(String::from(key))
     }
 
-    pub fn take(&mut self, string: String) -> InternedString {
+    pub fn take(&mut self, string: String) -> &InternedString {
         if (self.count + 1) as f32 > self.entries.capacity() as f32 * StringPool::MAX_LOAD {
             self.grow(if self.entries.capacity() < 8 {
                 8
@@ -82,18 +79,14 @@ impl StringPool {
         }
         let hash = hash(&string);
         let index = self.find(&string, hash as usize);
-        if let Some(interned_string) = self.entries[index] { return interned_string; }
-                let interned_string = InternedString {
-                    hash,
-                    mark: false,
-                    string,
-                };
-                self.entries[index] = Some(interned_string);
-                self.count += 1;
-                interned_string
+        self.entries[index].get_or_insert_with(|| InternedString {
+            hash,
+            mark: false,
+            string,
+        })
     }
 
-    pub fn mark(&mut self) {
+    pub fn mark(self) {
         for entry in self.entries {
             if let Some(mut interned_string) = entry {
                 interned_string.mark = true;
@@ -103,9 +96,9 @@ impl StringPool {
 
     pub fn sweep(&mut self) {
         for index in 0..self.entries.len() {
-            if let Some(interned_string) = self.entries[index] {
+            if let Some(interned_string) = &self.entries[index] {
                 if interned_string.mark == true {
-                    self.entries[index] = None
+                    self.entries[index] = None;
                 }
             }
         }

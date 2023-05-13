@@ -1,6 +1,6 @@
 mod scanner;
-mod value;
 mod string_pool;
+mod value;
 
 fn main() {
     println!("Hello, world!");
