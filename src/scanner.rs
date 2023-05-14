@@ -1,6 +1,6 @@
 use std::str;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TokenType {
     // Single-character tokens.
     LeftParen,
@@ -48,10 +48,11 @@ pub enum TokenType {
     Var,
     While,
 
-    Error(String),
+    ErrorOddChar,
+    ErrorNoStringEnd,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Token {
     pub token_type: TokenType,
     //pub lexeme: &'a str,
@@ -140,16 +141,6 @@ impl Scanner<'_> {
     fn token(&self, typ: TokenType) -> Token {
         Token {
             token_type: typ,
-            from: self.token_start,
-            to: self.current,
-            line: self.token_line,
-            column: self.token_column,
-        }
-    }
-
-    fn error(&self, message: &str) -> Token {
-        Token {
-            token_type: TokenType::Error(String::from(message)),
             from: self.token_start,
             to: self.current,
             line: self.token_line,
@@ -257,7 +248,7 @@ impl Scanner<'_> {
     fn string(&mut self) -> Token {
         loop {
             if self.is_at_end() {
-                return self.error("unterminated string");
+                return self.token(TokenType::ErrorNoStringEnd);
             }
             if self.advance() == b'"' {
                 return self.token(TokenType::String);
@@ -325,7 +316,7 @@ impl Iterator for Scanner<'_> {
                 }
             }
             b'"' => self.string(),
-            _ => self.error("unexpected character"),
+            _ => self.token(TokenType::ErrorOddChar),
         };
         Some(token)
     }

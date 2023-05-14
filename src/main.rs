@@ -1,3 +1,4 @@
+mod parser;
 mod scanner;
 mod string_pool;
 mod value;
