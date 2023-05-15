@@ -1,7 +1,8 @@
 mod parser;
 mod scanner;
 mod string_pool;
-mod value;
+mod class;
+mod object;
 
 fn main() {
     println!("Hello, world!");

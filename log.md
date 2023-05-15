@@ -1,5 +1,28 @@
 # rust-lox
 
+## 2023-05-15
+
+### changing things up
+
+Make a distinction between static and duynamic strings, then note that hashmaps
+thoughout lox are only keyed with static strings, or aren't they? There is a
+cross over from static to dynamic with string literals, but that is all. The
+dynamic strings don't need the interning or the hash codes, The static ones
+don't need memory management. As far as dynamic strings go, can we do more than
+print them or add them up?
+
+Use the enums for the objects. The main concern is wasting space now, which clos
+doesn't do, can it be prevented? Rust enums will take up as much spacer as their
+greatest member plus extra bytes for telling apart. Many members is therefore
+good. I've designed the types first, and may have to change them later, but we
+will see.
+
+For nan boxing, if needed: there are 51 bits and 48 bit pointers, we could have
+7 flavors of pointer, then, needing the 8th for `nil`, `true` and `false`, and
+maybe some other values. Fortunately, I now only need 6! This is after reducing
+closures to the tripled of constructor instance and bound method: the closure is
+a slimmed down version of the latter.
+
 ## 2023-05-14
 
 ### why linked lists?
@@ -11,7 +34,7 @@ everything into an array would be less convenient. The requirement to handle
 memory probably figures into this.
 
 I.e. nested compilers, unvalues etc. could be arrays, but that would require
-more heap allocation adn garbage collection.
+more heap allocation and garbage collection.
 
 The issue case with the objects is more complex different. For example a Vec
 holding all the objects, and garbage collection consisting of moving all the
@@ -114,6 +137,60 @@ handle memory for the compiler, and use lox strictly for dynamic data.
 
 Wanted to build a vm, didn't like C, did something in typescript, but without
 the garbage collector. Retry it in a more interesting language.
+
+### considerations
+
+The runtime structure becomes different, with no functions in managed memory.
+
+- the class declaration is reinterpreted as the construction of an object that
+  contains methods, and the actual constructor.
+- instantiation links to the constructor instance instead of the class.
+- the bound method is roughly the same, though, just another instance pointing
+  to the object and method
+- finally closures: they might get hidden classes to hold a single method.
+
+I am unsure how the upvalue stuff works in clox, but the data structure suggest
+that they are linked to individual members of a class, rather than to the class.
+This implies duplication: it is the class that closes over those variables, and
+the methods are part of the class. This translates into the following variation:
+
+- class: (upvalues[], functions{})
+- closure: (upvalues[], function)
+- instance: (class, values{})
+- bound_method: (instance, function)
+
+Is there something about the semantics of Lox i've misunderstood? How could a
+method ever be more than function? At least with the bound method, one can argue
+that the chain is needlessly long, but then the solution is to With the class,
+maybe that is my mistake... though I miss where the upvalues are otherwise.
+
+A simple test seems to demonstrate that methods can close over variables.
+
+### what actually happens
+
+So all functions are stored as constants in chunks, and only the byte that
+points to the constant actually makes to to the stack.
+
+Okay, the test seems to show that method can close over variables, but the data
+structure show classes don't. So it looks like one way or another, we are
+attaching upvalues to individual methods which are then added to classes as
+closures. let's inspect method calls. Yes, the vm casts methods to closures upon
+calling.
+
+### bound methods again
+
+Why aren't they just pairs of objects and method names? I guess pulling out the
+closure is just faster.
+
+### reconsidering chunks etc.
+
+So the chunk contain the code of a single function, which is also the only place
+where the upvalue count is stored. I think that explains it.
+
+We could use a data structure that is more like a class, and add
+anonymous/eponymous classes where closures show up. It would is interesting to
+consider sharing a constant table between all methods, though maybe the methods
+ought to be in the constant table.
 
 ## 2023-05-13
 

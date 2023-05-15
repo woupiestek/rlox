@@ -4,8 +4,7 @@ use std::mem;
 #[derive(Debug, PartialEq)]
 pub struct InternedString {
     hash: u32,
-    mark: bool,
-    string: String,
+    value: String,
 }
 
 pub fn hash(chars: &str) -> u32 {
@@ -45,7 +44,7 @@ impl StringPool {
                     return index;
                 }
                 Some(interned_string) => {
-                    if interned_string.string == key {
+                    if interned_string.value == key {
                         return index;
                     }
                     index = (index + 1) & mask;
@@ -59,7 +58,7 @@ impl StringPool {
         self.count = 0;
         for entry in entries {
             if let Some(interned_string) = &entry {
-                let index = self.find(&interned_string.string, interned_string.hash as usize);
+                let index = self.find(&interned_string.value, interned_string.hash as usize);
                 self.entries[index] = entry;
             }
         }
@@ -81,26 +80,7 @@ impl StringPool {
         let index = self.find(&string, hash as usize);
         self.entries[index].get_or_insert_with(|| InternedString {
             hash,
-            mark: false,
-            string,
+            value: string,
         })
-    }
-
-    pub fn mark(self) {
-        for entry in self.entries {
-            if let Some(mut interned_string) = entry {
-                interned_string.mark = true;
-            }
-        }
-    }
-
-    pub fn sweep(&mut self) {
-        for index in 0..self.entries.len() {
-            if let Some(interned_string) = &self.entries[index] {
-                if interned_string.mark == true {
-                    self.entries[index] = None;
-                }
-            }
-        }
     }
 }
