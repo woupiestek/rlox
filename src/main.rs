@@ -1,4 +1,5 @@
 mod class;
+mod heap;
 mod object;
 mod parser;
 mod scanner;

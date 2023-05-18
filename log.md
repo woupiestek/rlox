@@ -29,6 +29,46 @@ but I need a way to point to them from unmanaged memory.
 There is a lot is still have to leanr bout rust, and none of the code is
 actually functional now. But let's continue, and make changes wherever needed.
 
+### heaping
+
+And yet another kink: what does the heap contain? `Vec<Box<?>>`! The type
+punning approach looks scary, but I see it solves a problem.
+
+I guess I need a static memory in the end: the 'class path', because of the
+split I made. Was deviating form the clox example a good idea?
+
+### powers combining
+
+Rust calls drop, but this is takes as a signal by the garbage collector that an
+object potentially is garbage. Only at that point, the object becomes managed.
+It is too soon to think about such optimisations.
+
+### remaining memory
+
+- class path
+- string pool
+- globals
+-
+
+### heaping strategies
+
+I put the objects in a vec, because i don't not want a linked list. sweep now
+means popping handles from one vec into another. This has nothing to do with
+layout of course.
+
+One idea: instead of marking objects, just register them again. no: we'd have no
+idea whcih object are ready to go.
+
+### gray matter
+
+instead of recursively going through the graph, collect all the marked object in
+the gray stack, and process their references from there: this prevents stack
+overflow.
+
+Like this: the current vec is white, gray is a middle vec, handles move in and
+out ending up in the third black vec. this becomes the new white vec, as the old
+one is discarded, destroying some handles, and unmarking others.
+
 ## 2023-05-15
 
 ### changing things up

@@ -1,4 +1,4 @@
-use std::{mem::MaybeUninit};
+use std::mem::MaybeUninit;
 
 use crate::{
     class::{Method, Path},
