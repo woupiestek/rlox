@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 
 use crate::{
     class::{Method, Path},
-    object::{Handle, RuntimeError, Upvalue, Value},
+    object::{RuntimeError, Value},
 };
 
 pub struct Stack<T: Copy, const SIZE: usize> {
@@ -63,5 +63,5 @@ struct CallFrame {
 pub struct VMStacks {
     values: Stack<Value, STACK_SIZE>,
     frames: Stack<CallFrame, MAX_FRAMES>,
-    open_upvalues: Stack<Handle<Upvalue>, U8_COUNT>,
+    // open_upvalues: Stack<TypedHandle<Upvalue>, U8_COUNT>,
 }

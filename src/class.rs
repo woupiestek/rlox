@@ -17,9 +17,7 @@ impl<T> Copy for Path<T> {}
 
 impl<T> Clone for Path<T> {
     fn clone(&self) -> Self {
-        Self {
-            address: self.address,
-        }
+        *self
     }
 }
 

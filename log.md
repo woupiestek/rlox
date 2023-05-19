@@ -1,5 +1,66 @@
 # rust-lox
 
+## 2023-05-19
+
+To gc or not to gc? I was thinking the compiler doesn't need garbage collection,
+since bytecode, constants etc. last forever. But how does this work on the
+commandline? How do we manage memory otherwise?
+
+Maybe the clox example is just the simplest solution, and I should just go for
+that.
+
+What happens to the vecs an hashmaps placed on the heap?
+
+The remove from heap ensure that we properly deallocate the subobjects.
+
+We are left hanging somewhere in the middle, are we not?
+
+### trait object for management
+
+Maybe it is better for any heap managed entity to have a trait for the heap
+allocation:
+
+- move to heap
+- remove from heap
+- mark & trace
+
+All that is needed is a function to fetch the trait object belonging to the
+managed type.
+
+### lifetimes
+
+So that could be another solution: always borrow objects form the heap,
+lifetimes and all. That seems too complicated, though. Maybe it a better to
+somehow change the state of handles to indicate that they have been garbage
+collected, so dangling pointers become runtime errors.
+
+### embedded vecs and hashmaps
+
+So this is my concern: the vecs and hasmaps have data allocated on the heap out
+of sight of my garbage collector. When garbage is collected, the pointers to
+that data are lost, but the data remains.
+
+I try to move it back out, but the borrow checker won't let it happen.
+
+I can:
+
+- create my own associative array and hashmap, as shown in clox
+- figure out some solution to restore the embedded structures.
+
+To put it in sharper perspective: I do not know how Vecs and HashMaps allocate
+and deallocate, and therefore cannot manage their memory. `
+
+gains from self implementation: 1 use generics for type safety 2 don't manage
+memory that doesn't need it.
+
+Such a big project, and almost no running code yet.
+
+Note: this may be another reason to implement datastructures from scratch: even
+if C has nice hashtables, they would not necessarily play nice with the garbage
+collector.
+
+Another note: maybe clone and copy are not so bad...?
+
 ## 2023-05-18
 
 ### stacking

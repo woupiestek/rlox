@@ -1,12 +1,9 @@
-use std::{
-    alloc::{alloc, handle_alloc_error, Layout},
-    mem,
-};
+use std::mem;
 
-use crate::object::{Constructor, Handle, Kind, Obj};
+use crate::object::Handle;
 struct Heap {
-    objects: Vec<Handle<()>>,
-    gray: Vec<Handle<()>>,
+    objects: Vec<Handle>,
+    gray: Vec<Handle>,
 }
 
 impl Heap {
@@ -22,7 +19,7 @@ impl Heap {
         }
     }
 
-    pub fn manage(&mut self, handle: Handle<()>) {
+    pub fn manage(&mut self, handle: Handle) {
         self.objects.push(handle);
     }
 
@@ -34,7 +31,7 @@ impl Heap {
     }
 
     unsafe fn sweep(&mut self) {
-        let mut objects: Vec<Handle<()>> = Vec::new();
+        let mut objects: Vec<Handle> = Vec::new();
         let mut objects = mem::replace(&mut self.objects, Vec::new());
         while let Some(mut handle) = objects.pop() {
             if (*handle.obj).is_marked {
