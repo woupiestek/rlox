@@ -12,7 +12,7 @@ pub fn hash(chars: &str) -> u32 {
     let mut hash = 2166136261u32;
     for byte in bytes.iter() {
         hash ^= *byte as u32;
-        hash *= 16777619;
+        hash = hash.wrapping_mul(16777619);
     }
     return hash;
 }

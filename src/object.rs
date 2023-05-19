@@ -26,12 +26,15 @@ impl<T> Clone for TypedHandle<T> {
 }
 
 impl<T> TypedHandle<T> {
+    const LAYOUT: Layout = Layout::new::<(Obj, T)>();
+
     fn build(kind: Kind, body: T) -> Self {
         unsafe {
-            let obj = alloc(kind.layout()) as *mut (Obj, T);
+            let obj = alloc(Self::LAYOUT) as *mut (Obj, T);
+            assert!(!obj.is_null());
             (*obj).0.is_marked = false;
             (*obj).0.kind = kind;
-            (*obj).1 = body; // is this cleaned up?
+            (*obj).1 = body;
             Self { obj }
         }
     }
@@ -40,7 +43,7 @@ impl<T> TypedHandle<T> {
         unsafe {
             // does this solve our problem?
             ptr::drop_in_place(&mut (*self.obj).1);
-            dealloc(self.obj as *mut u8, (*self.obj).0.kind.layout());
+            dealloc(self.obj as *mut u8, Self::LAYOUT);
         }
     }
 
@@ -94,7 +97,7 @@ impl<T> TypedHandle<T> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Handle {
     pub obj: *mut Obj,
 }
@@ -176,14 +179,22 @@ impl Handle {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Value {
     Nil,
     True,
     False,
     Number(f64),
     Obj(Handle),
-    Native(fn(args: &[Value]) -> Value),
+    Native(NativeFn),
+}
+
+#[derive(Copy, Clone)]
+pub struct NativeFn(fn(args: &[Value]) -> Value);
+impl std::fmt::Debug for NativeFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<native function>")
+    }
 }
 
 impl Value {
@@ -202,18 +213,6 @@ pub enum Kind {
     Upvalue,
 }
 
-impl Kind {
-    pub fn layout(&self) -> Layout {
-        match self {
-            Kind::Constructor => Layout::new::<(Obj, Constructor)>(),
-            Kind::Instance => Layout::new::<(Obj, Instance)>(),
-            Kind::BoundMethod => Layout::new::<(Obj, BoundMethod)>(),
-            Kind::String => Layout::new::<(Obj, String)>(),
-            Kind::Upvalue => Layout::new::<(Obj, Upvalue)>(),
-        }
-    }
-}
-
 pub struct Upvalue {
     location: *mut Value,
     closed: Option<Value>,
@@ -222,18 +221,18 @@ pub struct Upvalue {
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
 pub struct Constructor {
-    class: Path<Class>,                  // maybe trouble
-    upvalues: Vec<TypedHandle<Upvalue>>, //trouble
+    class: Path<Class>,
+    upvalues: Vec<TypedHandle<Upvalue>>,
 }
 
 pub struct Instance {
     constructor: TypedHandle<Constructor>,
-    fields: HashMap<Symbol, Value>, // trouble
+    fields: HashMap<Symbol, Value>,
 }
 
 pub struct BoundMethod {
     receiver: TypedHandle<Instance>,
-    method: Path<Method>, // maybe trouble
+    method: Path<Method>,
 }
 
 pub enum RuntimeError {

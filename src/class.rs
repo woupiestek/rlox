@@ -31,7 +31,7 @@ impl Symbol {
         let mut hash = 2166136261u32;
         for byte in bytes.iter() {
             hash ^= *byte as u32;
-            hash *= 16777619;
+            hash = hash.wrapping_mul(16777619);
         }
         return hash;
     }
@@ -57,13 +57,35 @@ pub enum Constant {
     Class(Path<Class>),
 }
 
-pub enum OpCode {}
+#[repr(u8)]
+#[derive(Copy, Clone, Debug)]
+pub enum OpCode {
+    Return,
+}
+impl TryFrom<u8> for OpCode {
+    type Error = String;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        // keep updating...
+        const OP_CODES: [OpCode; 1] = [OpCode::Return];
+        match OP_CODES.get(value as usize) {
+            Some(op_code) => Ok(*op_code),
+            None => Err(format!("unknown upcode {value}")),
+        }
+    }
+}
 
 pub struct Method {
     pub name: Path<Symbol>,
     pub arity: u16,
     code: Vec<u8>, // cannot just be opcodes.
     lines: Vec<u16>,
+}
+
+impl Method {
+    pub fn write(&mut self, byte: u8, line: u16) {
+        self.code.push(byte);
+        self.lines.push(line);
+    }
 }
 
 pub struct Class {

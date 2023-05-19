@@ -1,9 +1,11 @@
 use std::mem;
 
 use crate::object::Handle;
-struct Heap {
+pub struct Heap {
     objects: Vec<Handle>,
     gray: Vec<Handle>,
+    bytes_allocated: usize,
+    next_gc: usize,
 }
 
 impl Heap {
@@ -11,9 +13,11 @@ impl Heap {
         Self {
             objects: Vec::new(),
             gray: Vec::new(),
+            bytes_allocated: 0,
+            next_gc: 0,
         }
     }
-    pub fn freeObjects(&mut self) {
+    pub fn free_objects(&mut self) {
         while let Some(mut handle) = self.objects.pop() {
             handle.destroy();
         }
@@ -43,7 +47,7 @@ impl Heap {
         }
     }
 
-    pub fn collectGarbage() {
+    pub fn collect_garbage() {
         // requires access to 'roots'
     }
 }

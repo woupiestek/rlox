@@ -61,6 +61,13 @@ collector.
 
 Another note: maybe clone and copy are not so bad...?
 
+### managing compile time data
+
+For a file, the compiler can just deliver the result and be done, but the cli
+has repeated runs, that can at least shadow classes and methods with new ones.
+
+Originally I intended to separate storage, but is that wise?
+
 ## 2023-05-18
 
 ### stacking
