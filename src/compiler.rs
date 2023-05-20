@@ -1,5 +1,5 @@
 use crate::{
-    class::{Class, Method},
+    object::{Class, Method},
     scanner::{Scanner, Token, TokenType},
     stack::Stack,
 };

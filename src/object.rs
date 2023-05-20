@@ -2,10 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::{
-    class::{Class, Method, Symbol},
-    memory::{Handle, Kind, Traceable, TypedHandle},
-};
+use crate::memory::{Handle, Traceable, TypedHandle};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Value {
@@ -14,34 +11,63 @@ pub enum Value {
     False,
     Number(f64),
     Obj(Handle),
-    Native(NativeFn),
 }
 
-#[derive(Copy, Clone)]
-pub struct NativeFn(fn(args: &[Value]) -> Value);
-impl std::fmt::Debug for NativeFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<native function>")
-    }
+impl Traceable for String {
+    const KIND: u8 = 0;
+    fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
-impl PartialEq for NativeFn {
-    fn eq(&self, other: &Self) -> bool {
-        self == other
+
+pub struct Method {
+    pub name: TypedHandle<String>,
+    pub arity: u16,
+    code: Vec<u8>, // cannot just be opcodes.
+    lines: Vec<u16>,
+}
+
+impl Method {
+    pub fn write(&mut self, byte: u8, line: u16) {
+        self.code.push(byte);
+        self.lines.push(line);
     }
 }
 
-impl Value {
-    pub fn mark(&mut self, gray: &mut Vec<Handle>) {
-        if let Value::Obj(mut handle) = self {
-            handle.mark(true);
-            gray.push(handle);
-        }
+impl Traceable for Method {
+    const KIND: u8 = 1;
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(self.name.downgrade());
+    }
+}
+
+pub struct Class {
+    pub name: TypedHandle<String>,
+    up_value_count: u16,
+    methods: Vec<Method>,
+    constant: Vec<Value>,
+}
+
+impl Traceable for Class {
+    const KIND: u8 = 2;
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(self.name.downgrade())
     }
 }
 
 pub struct Upvalue {
-    location: *mut Value,
+    location: usize, // don't know yet
     closed: Option<Value>,
+}
+
+impl Traceable for Upvalue {
+    const KIND: u8 = 3;
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        if let Some(Value::Obj(handle)) = self.closed {
+            collector.push(handle);
+        }
+    }
 }
 
 // I guess the constructor can own the upvalues,
@@ -61,18 +87,30 @@ impl Constructor {
 }
 
 impl Traceable for Constructor {
-    const KIND: Kind = Kind::Constructor;
+    const KIND: u8 = 4;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         for upvalue in self.upvalues.iter() {
-            // upvalue not yet the right type
+            collector.push(upvalue.downgrade());
         }
     }
 }
 
 pub struct Instance {
     constructor: TypedHandle<Constructor>,
-    fields: HashMap<Symbol, Value>,
+    fields: HashMap<String, Value>,
+}
+
+impl Traceable for Instance {
+    const KIND: u8 = 5;
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        for value in self.fields.values() {
+            if let Value::Obj(handle) = value {
+                collector.push(*handle)
+            }
+        }
+    }
 }
 
 impl Instance {
@@ -95,10 +133,24 @@ impl BoundMethod {
     }
 }
 
-pub enum RuntimeError {
-    TypeMismatch,
-    ArityMismatch,
-    StackOverflow,
-    OutOfMemory,
-    FieldNotFound,
+impl Traceable for BoundMethod {
+    const KIND: u8 = 6;
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        todo!()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct NativeFn(fn(args: &[Value]) -> Value);
+impl std::fmt::Debug for NativeFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<native function>")
+    }
+}
+
+impl Traceable for NativeFn {
+    const KIND: u8 = 7;
+
+    fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
