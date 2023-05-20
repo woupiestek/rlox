@@ -1,6 +1,7 @@
 use std::str;
 
-#[derive(Clone, Debug, PartialEq)]
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TokenType {
     // Single-character tokens.
     LeftParen,
@@ -50,9 +51,11 @@ pub enum TokenType {
 
     ErrorOddChar,
     ErrorNoStringEnd,
+
+    End,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Token {
     pub token_type: TokenType,
     from: usize,
@@ -254,27 +257,23 @@ impl Scanner<'_> {
             }
         }
     }
-}
 
-impl Iterator for Scanner<'_> {
-    type Item = Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    pub fn next(&mut self) -> Token {
         self.skip_whitespace();
         self.token_start = self.current;
         self.token_line = self.line;
         self.token_column = self.column;
         if self.is_at_end() {
-            return None;
+            return self.token(TokenType::End);
         }
         let ch = self.advance();
         if ch.is_ascii_digit() {
-            return Some(self.number());
+            return self.number();
         }
         if ch.is_ascii_alphabetic() {
-            return Some(self.identifier());
+            return self.identifier();
         }
-        let token = match ch {
+        match ch {
             b'(' => self.token(TokenType::LeftParen),
             b')' => self.token(TokenType::RightParen),
             b'{' => self.token(TokenType::LeftBrace),
@@ -316,8 +315,7 @@ impl Iterator for Scanner<'_> {
             }
             b'"' => self.string(),
             _ => self.token(TokenType::ErrorOddChar),
-        };
-        Some(token)
+        }
     }
 }
 
@@ -330,7 +328,7 @@ mod tests {
         let mut scanner = Scanner::new("print \"one 😲\";");
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Print,
                 from: 0,
                 to: 5,
@@ -340,7 +338,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::String,
                 from: 6,
                 to: 16,
@@ -351,7 +349,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Semicolon,
                 from: 16,
                 to: 17,
@@ -359,7 +357,16 @@ mod tests {
                 column: 14
             })
         );
-        assert_eq!(scanner.next(), None);
+        assert_eq!(
+            scanner.next(),
+            Token {
+                token_type: TokenType::End,
+                from: 17,
+                to: 17,
+                line: 1,
+                column: 15
+            }
+        );
     }
 
     #[test]
@@ -367,7 +374,7 @@ mod tests {
         let mut scanner = Scanner::new("var a = true;");
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Var,
                 from: 0,
                 to: 3,
@@ -377,7 +384,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Identifier,
                 from: 4,
                 to: 5,
@@ -387,7 +394,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Equal,
                 from: 6,
                 to: 7,
@@ -397,7 +404,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::True,
                 from: 8,
                 to: 12,
@@ -416,7 +423,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::LeftBrace,
                 from: 0,
                 to: 1,
@@ -426,7 +433,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Number,
                 from: 68,
                 to: 69,
@@ -436,7 +443,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Plus,
                 from: 70,
                 to: 71,
@@ -446,7 +453,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Number,
                 from: 72,
                 to: 73,
@@ -456,7 +463,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::Semicolon,
                 from: 73,
                 to: 74,
@@ -466,7 +473,7 @@ mod tests {
         );
         assert_eq!(
             scanner.next(),
-            Some(Token {
+            (Token {
                 token_type: TokenType::RightBrace,
                 from: 75,
                 to: 76,

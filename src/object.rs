@@ -43,6 +43,7 @@ impl Traceable for Method {
 pub struct Class {
     pub name: TypedHandle<String>,
     up_value_count: u16,
+    super_class: Option<TypedHandle<Class>>,
     methods: Vec<Method>,
     constant: Vec<Value>,
 }

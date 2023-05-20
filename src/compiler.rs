@@ -1,146 +1,12 @@
 use crate::{
+    memory::Heap,
     object::{Class, Method},
     scanner::{Scanner, Token, TokenType},
     stack::Stack,
 };
 
-pub struct ParseFail {
-    location: Option<Token>,
-    message: String,
-}
-pub struct Parser<'a> {
-    source: &'a str,
-    scanner: Scanner<'a>,
-    current: Option<Token>,
-    previous: Option<Token>,
-    panic_mode: bool,
-    errors: Vec<ParseFail>,
-}
-
-impl Parser<'_> {
-    pub fn new(source: &str) -> Parser {
-        let mut scanner = Scanner::new(source);
-        let current = scanner.next();
-        Parser {
-            source,
-            scanner,
-            current,
-            previous: None,
-            panic_mode: false,
-            errors: Vec::new(),
-        }
-    }
-
-    fn fail(&mut self, location: Option<Token>, msg: &str) {
-        self.errors.push(ParseFail {
-            location,
-            message: msg.to_string(),
-        });
-        self.panic_mode = true;
-    }
-
-    fn advance(&mut self) {
-        loop {
-            if let Some(token) = self.scanner.next() {
-                match token.token_type {
-                    TokenType::ErrorNoStringEnd => {
-                        self.fail(Some(token), "missing string ending");
-                    }
-                    TokenType::ErrorOddChar => {
-                        self.fail(Some(token), "unexpected character");
-                    }
-                    _ => {
-                        self.previous = self.current.replace(token);
-                        return;
-                    }
-                }
-            } else {
-                // None means end of input
-                self.current = None;
-                return;
-            }
-        }
-    }
-
-    fn check(&mut self, token_type: TokenType) -> bool {
-        if let Some(token) = &self.current {
-            token.token_type == token_type
-        } else {
-            false
-        }
-    }
-
-    fn match_type(&mut self, token_type: TokenType) -> bool {
-        if self.check(token_type) {
-            self.advance();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn consume(&mut self, token_type: TokenType, msg: &str) {
-        if self.check(token_type) {
-            self.advance();
-        } else {
-            // maybe the clone isn't needed?
-            // let's first see if the error handling won't be uprooted.
-            self.fail(self.current.clone(), msg);
-        }
-    }
-
-    fn synchronize(&mut self) {
-        self.panic_mode = false;
-        loop {
-            if let Some(token) = &self.current {
-                if let Some(previous) = &self.previous {
-                    if let TokenType::Semicolon = previous.token_type {
-                        return;
-                    }
-                }
-                match token.token_type {
-                    TokenType::Class
-                    | TokenType::Fun
-                    | TokenType::Var
-                    | TokenType::For
-                    | TokenType::If
-                    | TokenType::While
-                    | TokenType::Print
-                    | TokenType::Return => {
-                        return;
-                    }
-                    _ => {
-                        self.advance();
-                        continue;
-                    }
-                }
-            }
-            return;
-        }
-    }
-}
-
-pub enum Precedence {
-    None,
-    Assignment, // =
-    Or,         // or
-    And,        // and
-    Equality,   // == !=
-    Comparison, // < > <= >=
-    Term,       // + -
-    Factor,     // * /
-    Unary,      // ! -
-    Call,       // . ()
-    Primary,
-}
-
-type ParseFn = fn(can_assign: bool) -> ();
-struct ParseRule {
-    prefix: Option<ParseFn>,
-    infix: Option<ParseFn>,
-    precedence: Precedence,
-}
-
+pub struct ParseFail(Token, String);
+type ParseResult<T> = Result<T, ParseFail>;
 struct Local {
     name: Token,
     depth: i32,
@@ -168,3 +34,130 @@ struct ClassCompiler {
     class: Class,
     has_super: bool,
 }
+
+pub struct Parser<'a> {
+    source: &'a str,
+    scanner: Scanner<'a>,
+    current: Token,
+    next: Token,
+    methods: Vec<MethodCompiler>,
+    classes: Vec<ClassCompiler>,
+    heap: Heap,
+}
+
+impl Parser<'_> {
+    pub fn new(source: &str, heap: Heap) -> Parser {
+        let mut scanner = Scanner::new(source);
+        let current = scanner.next();
+        let next = scanner.next();
+        Parser {
+            source,
+            scanner,
+            current,
+            next,
+            methods: Vec::new(),
+            classes: Vec::new(),
+            heap,
+        }
+    }
+
+    fn fail(&self, msg: &str) -> ParseResult<()> {
+        Err(ParseFail(self.current, msg.to_string()))
+    }
+
+    // forgot about the loop here...
+    fn advance(&mut self) -> Result<(), ParseFail> {
+        if self.check(TokenType::End) {
+            return Ok(());
+        }
+        let token = self.scanner.next();
+        match token.token_type {
+            TokenType::ErrorNoStringEnd => self.fail("missing string ending"),
+            TokenType::ErrorOddChar => self.fail("unexpected character"),
+            _ => {
+                self.current = self.next;
+                self.next = token;
+                Ok(())
+            }
+        }
+    }
+
+    fn check(&mut self, token_type: TokenType) -> bool {
+        self.current.token_type == token_type
+    }
+
+    fn match_type(&mut self, token_type: TokenType) -> Result<bool, ParseFail> {
+        if self.check(token_type) {
+            self.advance()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn consume(&mut self, token_type: TokenType, msg: &str) -> Result<(), ParseFail> {
+        if self.check(token_type) {
+            self.advance()
+        } else {
+            self.fail(msg)
+        }
+    }
+
+    fn synchronize(&mut self) -> Result<(), ParseFail> {
+        loop {
+            match self.current.token_type {
+                TokenType::Class
+                | TokenType::End
+                | TokenType::Fun
+                | TokenType::Var
+                | TokenType::For
+                | TokenType::If
+                | TokenType::While
+                | TokenType::Print
+                | TokenType::Return => {
+                    return Ok(());
+                }
+                TokenType::Semicolon => {
+                    self.advance()?;
+                    return Ok(());
+                }
+                _ => {
+                    self.advance()?;
+                    continue;
+                }
+            }
+        }
+    }
+}
+
+pub enum Precedence {
+    None,
+    Assignment, // =
+    Or,         // or
+    And,        // and
+    Equality,   // == !=
+    Comparison, // < > <= >=
+    Term,       // + -
+    Factor,     // * /
+    Unary,      // ! -
+    Call,       // . ()
+    Primary,
+}
+
+type ParseFn = fn(can_assign: bool);
+struct ParseRule {
+    prefix: Option<ParseFn>,
+    infix: Option<ParseFn>,
+    precedence: Precedence,
+}
+
+const DEFAULT_RULE: ParseRule = ParseRule {
+    prefix: None,
+    infix: None,
+    precedence: Precedence::None,
+};
+const RULES: [ParseRule; 41] = {
+    let mut rules = [DEFAULT_RULE; 41];
+    rules[TokenType::And as usize] = DEFAULT_RULE;
+    rules
+};
