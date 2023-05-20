@@ -1,6 +1,5 @@
-use std::mem;
-
 use crate::object::Handle;
+use std::mem;
 pub struct Heap {
     objects: Vec<Handle>,
     gray: Vec<Handle>,
@@ -17,9 +16,10 @@ impl Heap {
             next_gc: 0,
         }
     }
+
     pub fn free_objects(&mut self) {
         while let Some(mut handle) = self.objects.pop() {
-            handle.destroy();
+            // handle.destroy();
         }
     }
 
@@ -29,7 +29,7 @@ impl Heap {
 
     unsafe fn trace(&mut self) {
         while let Some(mut handle) = self.gray.pop() {
-            handle.trace(&mut self.gray);
+            // handle.trace(&mut self.gray);
             // handle could already be placed on the new list of objects...
         }
     }
@@ -38,12 +38,12 @@ impl Heap {
         let mut objects: Vec<Handle> = Vec::new();
         let mut objects = mem::replace(&mut self.objects, Vec::new());
         while let Some(mut handle) = objects.pop() {
-            if (*handle.obj).is_marked {
-                (*handle.obj).is_marked = false;
-                self.manage(handle);
-            } else {
-                handle.destroy();
-            }
+            // if (*handle.ptr).is_marked {
+            //     (*handle.ptr).is_marked = false;
+            //     self.manage(handle);
+            // } else {
+            //     handle.destroy();
+            // }
         }
     }
 

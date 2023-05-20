@@ -55,7 +55,6 @@ pub enum TokenType {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Token {
     pub token_type: TokenType,
-    //pub lexeme: &'a str,
     from: usize,
     to: usize,
     pub line: u16,

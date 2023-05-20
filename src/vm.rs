@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     class::{Method, Path, Symbol},
-    heap::Heap,
-    object::{TypedHandle, Upvalue, Value},
+    common::U8_COUNT,
+    memory::{Heap, TypedHandle},
+    object::{Upvalue, Value},
     stack::Stack,
 };
 
 const MAX_FRAMES: usize = 1 << 6;
-const U8_COUNT: usize = 1 << 8;
 const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 
 #[derive(Copy, Clone)]
@@ -19,9 +19,9 @@ struct CallFrame {
 }
 
 pub struct VM {
-    values: Stack<Value, STACK_SIZE>,
-    frames: Stack<CallFrame, MAX_FRAMES>,
-    open_upvalues: Stack<TypedHandle<Upvalue>, U8_COUNT>,
+    values: Stack<Value>,
+    frames: Stack<CallFrame>,
+    open_upvalues: Stack<TypedHandle<Upvalue>>,
     globals: HashMap<Symbol, Value>,
     symbol_pool: HashSet<Symbol>,
     init_symbol: Symbol,
@@ -31,9 +31,9 @@ pub struct VM {
 impl VM {
     pub fn new() -> Self {
         Self {
-            values: Stack::new(),
-            frames: Stack::new(),
-            open_upvalues: Stack::new(),
+            values: Stack::new(STACK_SIZE),
+            frames: Stack::new(MAX_FRAMES),
+            open_upvalues: Stack::new(U8_COUNT),
             globals: HashMap::new(),
             symbol_pool: HashSet::new(),
             init_symbol: Symbol::copy("init"),

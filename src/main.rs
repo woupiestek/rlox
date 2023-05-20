@@ -1,9 +1,10 @@
 use crate::vm::VM;
 
 mod class;
-mod heap;
+mod common;
+mod compiler;
+mod memory;
 mod object;
-mod parser;
 mod scanner;
 mod stack;
 mod string_pool;

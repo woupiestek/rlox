@@ -1,21 +1,20 @@
 use std::{
     alloc::{self, Layout},
-    mem,
-    ptr::{self},
+    mem, ptr,
 };
 
-use crate::object::RuntimeError;
-
-pub struct Stack<T, const CAPACITY: usize> {
+pub struct Stack<T> {
     entries: *mut T,
     len: usize,
+    cap: usize,
 }
 
-// maybe different types require different implementations dispite the superficial similarities
-impl<T: Copy, const CAPACITY: usize> Stack<T, CAPACITY> {
-    pub fn new() -> Self {
+// fixed size stack
+impl<T> Stack<T> {
+    pub fn new(cap: usize) -> Self {
+        assert!(cap != 0);
         assert!(mem::size_of::<T>() != 0, "We're not ready to handle ZSTs");
-        let layout = Layout::array::<T>(CAPACITY).unwrap();
+        let layout = Layout::array::<T>(cap).unwrap();
         let ptr = unsafe { alloc::alloc(layout) };
         if ptr.is_null() {
             alloc::handle_alloc_error(layout);
@@ -23,23 +22,24 @@ impl<T: Copy, const CAPACITY: usize> Stack<T, CAPACITY> {
         Self {
             entries: ptr as *mut T,
             len: 0,
+            cap,
         }
     }
 
-    pub fn push(&mut self, entry: T) -> Result<usize, RuntimeError> {
-        if self.len == CAPACITY {
-            return Err(RuntimeError::StackOverflow);
+    pub fn push(&mut self, entry: T) -> Option<usize> {
+        if self.len == self.cap {
+            return None;
         }
-        unsafe { ptr::write({ self.entries.add(self.len) }, entry) }
+        unsafe { ptr::write(self.entries.add(self.len), entry) }
         self.len += 1;
-        Ok(self.len)
+        Some(self.len)
     }
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
         } else {
             self.len -= 1;
-            unsafe { Some(ptr::read({ self.entries.add(self.len) })) }
+            unsafe { Some(ptr::read(self.entries.add(self.len))) }
         }
     }
     pub fn peek(&mut self, distance: usize) -> Option<&mut T> {
@@ -47,18 +47,25 @@ impl<T: Copy, const CAPACITY: usize> Stack<T, CAPACITY> {
             None
         } else {
             // god I hope this is right
-            unsafe { Some(&mut *({ self.entries.add(self.len - 1 - distance) })) }
+            unsafe { Some(&mut *self.entries.add(self.len - 1 - distance)) }
         }
     }
     pub fn reset(&mut self) {
         for i in 0..self.len {
             unsafe {
-                ptr::drop_in_place({
-                    let ref this = self;
-                    this.entries.add(i)
-                });
+                ptr::drop_in_place(self.entries.add(i));
             }
         }
         self.len = 0;
+    }
+}
+
+impl<T> Drop for Stack<T> {
+    fn drop(&mut self) {
+        self.reset();
+        let layout = Layout::array::<T>(self.cap).unwrap();
+        unsafe {
+            alloc::dealloc(self.entries as *mut u8, layout);
+        }
     }
 }

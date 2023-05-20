@@ -1,5 +1,153 @@
 # rust-lox
 
+## 2023-05-12
+
+### roots
+
+The things clox garbage collector keeps track of:
+
+- functions in the compiler (static)
+- operand stack (dynamic)
+- closures in stack frames (static)
+- upvalue stack (dynamic)
+- globals table (dynamic)
+- initstring (static)
+
+It does not track the stringpool, but makes sure to remove the elements before
+they are dereferenced.
+
+### dynamic typing
+
+There are kinds for every type in this world, and I keep thinking these should
+just be like classes, carrying a number of methods and so on, so no mathined
+needs to happen, but this doesn't fit rust to well.
+
+- turn kind into a trait. once again, do
+
+### recover value from handle
+
+it feels like each kind should have a service to take care of this.
+
+for a lot of stuff i just want oop like semantics: there is an instance in
+storage, and the pointer points there, until the object is cleaned up.
+
+Maybe I think too much about how to do this in java or scala... The kinds would
+be objects with their own build, destroy & trace methods
+
+How to link these up, btw?
+
+- build: type dependent
+- detroy: potentially value dependent
+- trace: somewhere in the middle I guess
+
+Note that kind only takes up one byte, and the boolean next to it another. We
+could even make that tighter. So how about explicit vtables?
+
+i mean, the memory manager need the layout and the trace function
+
+Ideas:
+
+- add a header to each allocation (note that due to alignment, the header is
+  typically 8 bytes long, so there is no point in saving space by combining the
+  is_marker boolean and the )
+- have a static table of kinds, with layouts and trace methods.
+- the layouts may not even be that useful ~
+- use an index into this table
+- there is a global list of kinds
+
+The garbage collector need to know the type when allocating and dropping managed
+objects. Those types are recorded in the object headers. Now we just need a
+mapping from these reifications back to the types. How? What is efficient?
+
+Dispatch needs to happen somehow. I just want it to be correct, ergonomic and
+fast. Bonus if the indices are automatically correct.
+
+Maybe a kinds manager can take care that the indices are correct.
+
+A lot of effort here, and it may all be in vain, because we need to cast to
+specific types in other contexts, and we need the kinds for that as well. i.e.
+is_constructor, how is that going to work?
+
+Kind can still be u8, but the u8 needs to show up more often. Like we have a
+generic method somewhere to do all that work:
+`Kinder::register::<T:Traceable> {}` To wrap a value now requires this id again,
+though. Ok, don't register the ids, put them in the Traceble trait, perhaps
+check that there are no duplicates.
+
+Dispatch is unavoidable, since we need to map the reified types back to their
+originals, with .is_<type> and .as_<type> methods. maybe we can do that with a
+table lookup once, and just generate the code for each type.
+
+Where would be put this? `register!(kind, Type, is_type, as_type)`
+
+- the handle needs some of these methods,
+- Traceable works on `Type` itself, but is needs the same kind,
+
+### reconsidering the linked list
+
+Consider that building the vec of live objects may mean allocating space of that
+vec first--potentially reallocating as it grows--and releasing the space of the
+old vec afterward. Simple approach, but possibly time consuming?
+
+Alternatives:
+
+- look for a live object from the top down; then look for a dead object from the
+  bottom up; swap; repeat.
+- look for dead objects from the bottom, then look for the next live one, swap,
+  and repeat;
+
+I think the first one may slow down the cache, while the second one may do more
+swaps, since some dead objects will be swapped multiple times. I don't know when
+the cache gets involved to slow up down.
+
+The links in the linked list don't have to be moved at all, so that is a plus
+for clox.
+
+### compile time data
+
+It seems like after the compiler is done, the structures can be borrowed
+indefinitely,until the machine quits. Even the commandline version should be
+able to live with append only semantics. So can't we just build it like that?
+
+options:
+
+- allocate extra space on the heap to copy compile time structures
+- do something complicated with borrows: the shared lifetime of the
+- build a second heap, with compile time data, and the semantics above
+
+### strategy
+
+Ordinarily storing an object should check if garbage collection, but that can
+only happen if we know all the roots. Alternative: let the heap refuse to store
+new objects if it is at capacity. Just panic! This forces the caller to go
+through the effort of increasing capacity and triggering garbage collection. So
+we arive at the problem of measuring how many bytes are allocated. And here we
+see the true reason why clox needs to define its own dynamic arrays and
+hashmaps: it is not possible to say how may bytes are allocated, if
+reallocations happen in hashmaps and vecs that aren't tracked by the vm.
+
+options:
+
+- use the number of objects allocated as proxy, or use some other threshold;
+- implement dynamic arrays and tables, as in clox; perhaps add an allocator
+  class, for good measure;
+
+Keeping track of every allocated byte seems really careful. How could you trick
+the garbage collector into actually running out of memory with garbage? If there
+is an object number trigger, then creating lots of objects is out of the
+question, but filling an object with values maybe? A regular OOM is unfortunate,
+but not what we are defending against. So have do the values become garbage? It
+feel like: as soons as an object is garbage, then there is nothing that could
+make it grow further. So make a few really big objects, by flooding their field
+tables with assignments (to different fields), and discard them.
+
+Other allocations are more predicatible, but could be an issue just the same.
+I imagine thats we could count certain instructions, and just garbage collect 
+whenever a certain number is exceeded. 
+
+
+
+
 ## 2023-05-19
 
 To gc or not to gc? I was thinking the compiler doesn't need garbage collection,
@@ -67,6 +215,10 @@ For a file, the compiler can just deliver the result and be done, but the cli
 has repeated runs, that can at least shadow classes and methods with new ones.
 
 Originally I intended to separate storage, but is that wise?
+
+### structure
+
+In clox everything seems to depend on everything. That drives me nuts.
 
 ## 2023-05-18
 

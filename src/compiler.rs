@@ -1,6 +1,8 @@
-use std::mem;
-
-use crate::scanner::{Scanner, Token, TokenType};
+use crate::{
+    class::{Class, Method},
+    scanner::{Scanner, Token, TokenType},
+    stack::Stack,
+};
 
 pub struct ParseFail {
     location: Option<Token>,
@@ -132,7 +134,37 @@ pub enum Precedence {
     Primary,
 }
 
-trait ParseRule {
-    fn prefix(can_assign: bool);
-    fn infix(can_assign: bool);
+type ParseFn = fn(can_assign: bool) -> ();
+struct ParseRule {
+    prefix: Option<ParseFn>,
+    infix: Option<ParseFn>,
+    precedence: Precedence,
+}
+
+struct Local {
+    name: Token,
+    depth: i32,
+    is_captured: bool,
+}
+struct Upvalue {
+    index: u8,
+    is_local: bool,
+}
+enum FunctionType {
+    Function,
+    Initializer,
+    Method,
+    Script,
+}
+
+struct MethodCompiler {
+    method: Method,
+    function_type: FunctionType,
+    locals: Stack<Local>,
+    upvalues: Stack<Upvalue>,
+}
+
+struct ClassCompiler {
+    class: Class,
+    has_super: bool,
 }
