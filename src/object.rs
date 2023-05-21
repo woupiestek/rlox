@@ -22,15 +22,15 @@ impl Traceable for String {
 }
 
 pub struct Method {
-    pub name: Option<TypedHandle<String>>,
+    pub name: TypedHandle<String>,
     pub arity: u16,
     pub chunk: Chunk,
 }
 
 impl Method {
-    pub fn new() -> Self {
+    pub fn new(name: TypedHandle<String>) -> Self {
         Self {
-            name: None,
+            name,
             arity: 0,
             chunk: Chunk::new(),
         }
@@ -41,17 +41,15 @@ impl Traceable for Method {
     const KIND: u8 = 1;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        if let Some(name) = &self.name {
-            collector.push(name.downgrade());
-        }
+        collector.push(self.name.downgrade());
     }
 }
 
 pub struct Class {
     pub name: Option<TypedHandle<String>>,
-    up_value_count: u16,
-    super_class: Option<TypedHandle<Class>>,
-    methods: Vec<Method>,
+    pub up_value_count: u16,
+    pub super_class: Option<TypedHandle<Class>>,
+    pub methods: Vec<Method>,
     pub constants: Vec<Value>,
 }
 

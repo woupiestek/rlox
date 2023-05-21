@@ -71,6 +71,15 @@ impl Token {
     pub fn lexeme<'a>(&self, source: &'a str) -> &'a str {
         &source[self.from..self.to]
     }
+    pub fn nil() -> Self {
+        Self {
+            token_type: TokenType::Error,
+            from: 0,
+            to: 0,
+            line: 0,
+            column: 0,
+        }
+    }
 }
 pub struct Scanner<'a> {
     source: &'a [u8],

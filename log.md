@@ -32,6 +32,27 @@ So lox has 36 opcodes, which suggest room to add many more. I'd like to have a
 lot of compare and jump operators for interpretation. Is that difficult to
 implement?
 
+### matter of organisation
+
+It seems attractive to attach more methods to the compiler struct, because the
+compiler module is such a beast.
+
+### some ideas
+
+Don't have the methods in the class or the compiler, just the typed handles.
+Perhaps that also removes some of the struggles I have had with Rust: the fact
+that I want to take part of the data structure and change it, isn't accepted.
+
+Garbage is created by the compiler, every time a vec is resized to contain more
+elements. Hence the need to run the garbage collector at that time as well.
+
+This changes a lot of things...
+
+The top level script will now be an empty name method. This is because we force
+it into some virtual class. Maybe there is a workaround... the runtime could
+generate a new name, for each query. as long as it is no valid identifier-- e.g.
+a number--it should never lead to conflicts.
+
 ## 2023-05-20
 
 ### roots
