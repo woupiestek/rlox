@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use crate::memory::{Handle, Traceable, TypedHandle};
+use crate::{
+    chunk::Chunk,
+    memory::{Handle, Traceable, TypedHandle},
+};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Value {
@@ -19,16 +22,18 @@ impl Traceable for String {
 }
 
 pub struct Method {
-    pub name: TypedHandle<String>,
+    pub name: Option<TypedHandle<String>>,
     pub arity: u16,
-    code: Vec<u8>, // cannot just be opcodes.
-    lines: Vec<u16>,
+    pub chunk: Chunk,
 }
 
 impl Method {
-    pub fn write(&mut self, byte: u8, line: u16) {
-        self.code.push(byte);
-        self.lines.push(line);
+    pub fn new() -> Self {
+        Self {
+            name: None,
+            arity: 0,
+            chunk: Chunk::new(),
+        }
     }
 }
 
@@ -36,23 +41,42 @@ impl Traceable for Method {
     const KIND: u8 = 1;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.name.downgrade());
+        if let Some(name) = &self.name {
+            collector.push(name.downgrade());
+        }
     }
 }
 
 pub struct Class {
-    pub name: TypedHandle<String>,
+    pub name: Option<TypedHandle<String>>,
     up_value_count: u16,
     super_class: Option<TypedHandle<Class>>,
     methods: Vec<Method>,
-    constant: Vec<Value>,
+    pub constants: Vec<Value>,
+}
+
+impl Class {
+    pub fn new() -> Self {
+        Self {
+            name: None,
+            up_value_count: 0,
+            super_class: None,
+            methods: Vec::new(),
+            constants: Vec::new(),
+        }
+    }
 }
 
 impl Traceable for Class {
     const KIND: u8 = 2;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.name.downgrade())
+        if let Some(name) = &self.name {
+            collector.push(name.downgrade())
+        }
+        if let Some(class) = &self.super_class {
+            collector.push(class.downgrade())
+        }
     }
 }
 
@@ -99,14 +123,14 @@ impl Traceable for Constructor {
 
 pub struct Instance {
     constructor: TypedHandle<Constructor>,
-    fields: HashMap<String, Value>,
+    properties: HashMap<String, Value>,
 }
 
 impl Traceable for Instance {
     const KIND: u8 = 5;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        for value in self.fields.values() {
+        for value in self.properties.values() {
             if let Value::Obj(handle) = value {
                 collector.push(*handle)
             }
@@ -118,7 +142,7 @@ impl Instance {
     pub fn new(constructor: TypedHandle<Constructor>) -> Self {
         Self {
             constructor,
-            fields: HashMap::new(),
+            properties: HashMap::new(),
         }
     }
 }

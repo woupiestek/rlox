@@ -1,5 +1,6 @@
 use crate::vm::VM;
 
+mod chunk;
 mod compiler;
 mod memory;
 mod object;

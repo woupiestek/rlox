@@ -119,7 +119,7 @@ impl Handler {
         }
     }
 }
-const DefaultHandler: Handler = Handler {
+const DEFAULT_HANDLER: Handler = Handler {
     drop: |_handle| panic!(),
     trace: |_handle, _collector| panic!(),
 };
@@ -134,12 +134,12 @@ impl Heap {
     pub fn new() -> Self {
         Self {
             handles: Vec::with_capacity(1 << 12),
-            handlers: [DefaultHandler; 8],
+            handlers: [DEFAULT_HANDLER; 8],
         }
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> TypedHandle<T> {
-        if self.handlers[T::KIND as usize] == DefaultHandler {
+        if self.handlers[T::KIND as usize] == DEFAULT_HANDLER {
             self.handlers[T::KIND as usize] = Handler::of::<T>();
         }
         let typed = TypedHandle::from(t);

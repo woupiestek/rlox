@@ -49,10 +49,13 @@ pub enum TokenType {
     Var,
     While,
 
-    ErrorOddChar,
-    ErrorNoStringEnd,
+    Error,
 
     End,
+}
+
+impl TokenType {
+    pub const COUNT: usize = TokenType::End as usize + 1;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -250,7 +253,7 @@ impl Scanner<'_> {
     fn string(&mut self) -> Token {
         loop {
             if self.is_at_end() {
-                return self.token(TokenType::ErrorNoStringEnd);
+                return self.token(TokenType::Error);
             }
             if self.advance() == b'"' {
                 return self.token(TokenType::String);
@@ -314,7 +317,7 @@ impl Scanner<'_> {
                 }
             }
             b'"' => self.string(),
-            _ => self.token(TokenType::ErrorOddChar),
+            _ => self.token(TokenType::Error),
         }
     }
 }

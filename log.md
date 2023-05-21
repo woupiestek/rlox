@@ -1,6 +1,38 @@
-# rust-lox
+# Rlox
 
-## 2023-05-12
+## 2023-05-21
+
+### some parsin'
+
+I want to use the rust error handling system. The idea would be to propagate any
+error up to `declaration`, at which point it is handled by synchronize. but I
+run into the response of `advance` to error tokens: it puts the parser back in
+panic mode. Why though?
+
+Let's work this out later.
+
+### splitting between classes and methods
+
+I reinterpret a closure as the bound method of a single method class. So they
+are syntactic sugar. Even when compiling a function, you are still inside a
+rudimentary class. This should even apply at the top level. The main difference
+is that constants and upvalues are collected at the class level.
+
+During compilation clox uses a stacks of compiler classes to keep track of
+context data I did the same, but split these up as well. Maybe I moved to
+fast...
+
+It is possible to be in a class declaration without being in a method, but it is
+not very useful. So this could be a special case, where no compiler struct is
+generated. So, I can merge the structures!
+
+### parsing expressions
+
+So lox has 36 opcodes, which suggest room to add many more. I'd like to have a
+lot of compare and jump operators for interpretation. Is that difficult to
+implement?
+
+## 2023-05-20
 
 ### roots
 
