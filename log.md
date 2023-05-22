@@ -1,5 +1,82 @@
 # Rlox
 
+## 2023-05-22
+
+### growing understanding
+
+Things are getting allowcated on the stack or heap as intended.
+
+### variable things
+
+There is some ceremony around the names, required for variables to be resolved
+correctly.
+
+### super class
+
+So note what needs to happen. The compiler sees the name of the superclass but
+nothing else Classes must therefore be linked up at runtime! this requires:
+
+1 getting the superclass on the stack 2 getting the superclass added to the
+object we are creating
+
+Under the name of the class, what gets in scope is an initializer. So 'super'
+links up these initializers instead. Now super will be a value, since it lives
+on the stack, though it should be a value of init type.
+
+Is class still worth it?
+
+- name: just a local variable refering to init, or not? it may be needed for
+  print and stringification.
+- up_value_count: relevant
+- super_class: seem pointless now: the compiler doesn't know what it is
+- methods: though one. A vec of methods is not as useful as a hashmap of one.
+
+- constants: also relevant
+
+At the site of the class declaration, what is actually constructed is an
+initializer. It is distinct from a bound method, because an initializer has no
+instance.
+
+Theoretically the initializer can constructed many times off the template that
+the class provides. The class and the methods are not created from scratch at
+that point.
+
+The methods though... Remember how the get copied over every time. There is no
+traversal, except maybe for super calls, which are resolved by keeping the super
+init on the stack.
+
+Okay, so this is where the upvalue stuff breaks: inherit a method, and its
+upvalues are still part of the initializer of the superclass. Is that a problem
+now? the compile time method just refers to upvalue n, but at run time, the
+method may run ondar a new initializer with a new set of upvalues.
+
+Why isn't this a problem for the constants though? Because those are attached to
+the closure objects and copied over as well.
+
+### deminishing distance
+
+I feel like giving up on my ideas and just sticking to the clox model now. break
+up the class object and spread its contents. There may be a point to sharing
+constants between methods, but that means methods must keep a reference to their
+classes, which potentially slows things down. Also, the change of overflowing
+the constant table, that only allows 256 entries, become much bigger.
+
+For the upvalues: I am unsure that sharing between methods of a class would do
+much good. And the initializer thing... the methods would need to link to their
+initializer for the upvalues, and maybe the constants a extra step, it seems, in
+their execution.
+
+### resistance
+
+Let all the methods defined in the same scope share an upvalue object, if not a
+link to the closure that birthed them. It feels like it could be more
+efficient...
+
+Then again, I don't get upvalues well enough. Let's just refactor to be closer
+to the original. Keep these ideas for some other time.
+
+### methods and classes
+
 ## 2023-05-21
 
 ### some parsin'

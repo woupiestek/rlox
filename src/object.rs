@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     chunk::Chunk,
-    memory::{Handle, Traceable, TypedHandle},
+    memory::{Handle, Obj, Traceable},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -21,59 +21,50 @@ impl Traceable for String {
     fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
 
-pub struct Method {
-    pub name: TypedHandle<String>,
-    pub arity: u16,
+pub struct Function {
+    pub name: Option<Obj<String>>,
+    pub arity: u8,
+    pub upvalue_count: u8,
     pub chunk: Chunk,
 }
 
-impl Method {
-    pub fn new(name: TypedHandle<String>) -> Self {
+impl Function {
+    pub fn new() -> Self {
         Self {
-            name,
+            name: None,
             arity: 0,
+            upvalue_count: 0,
             chunk: Chunk::new(),
         }
     }
 }
 
-impl Traceable for Method {
+impl Traceable for Function {
     const KIND: u8 = 1;
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.name.downgrade());
-    }
+    fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
 
 pub struct Class {
-    pub name: Option<TypedHandle<String>>,
-    pub up_value_count: u16,
-    pub super_class: Option<TypedHandle<Class>>,
-    pub methods: Vec<Method>,
-    pub constants: Vec<Value>,
+    pub name: Obj<String>,
+    pub methods: HashMap<String, Obj<Closure>>,
 }
 
 impl Class {
-    pub fn new() -> Self {
+    pub fn new(name: Obj<String>) -> Self {
         Self {
-            name: None,
-            up_value_count: 0,
-            super_class: None,
-            methods: Vec::new(),
-            constants: Vec::new(),
+            name,
+            methods: HashMap::new(),
         }
     }
 }
 
 impl Traceable for Class {
     const KIND: u8 = 2;
-
     fn trace(&self, collector: &mut Vec<Handle>) {
-        if let Some(name) = &self.name {
-            collector.push(name.downgrade())
-        }
-        if let Some(class) = &self.super_class {
-            collector.push(class.downgrade())
+        collector.push(self.name.downgrade());
+        for method in self.methods.values() {
+            collector.push(method.downgrade());
         }
     }
 }
@@ -95,24 +86,24 @@ impl Traceable for Upvalue {
 
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
-pub struct Constructor {
-    class: *const Class,
-    upvalues: Vec<TypedHandle<Upvalue>>,
+pub struct Closure {
+    class: Obj<Function>,
+    upvalues: Vec<Obj<Upvalue>>,
 }
 
-impl Constructor {
-    pub fn new(class: *const Class) -> Self {
+impl Closure {
+    pub fn new(function: Obj<Function>, super_init: Option<Obj<Closure>>) -> Self {
         Self {
-            class,
+            class: function,
             upvalues: Vec::new(),
         }
     }
 }
 
-impl Traceable for Constructor {
+impl Traceable for Closure {
     const KIND: u8 = 4;
-
     fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(self.class.downgrade());
         for upvalue in self.upvalues.iter() {
             collector.push(upvalue.downgrade());
         }
@@ -120,7 +111,7 @@ impl Traceable for Constructor {
 }
 
 pub struct Instance {
-    constructor: TypedHandle<Constructor>,
+    class: Obj<Class>,
     properties: HashMap<String, Value>,
 }
 
@@ -137,21 +128,21 @@ impl Traceable for Instance {
 }
 
 impl Instance {
-    pub fn new(constructor: TypedHandle<Constructor>) -> Self {
+    pub fn new(class: Obj<Class>) -> Self {
         Self {
-            constructor,
+            class,
             properties: HashMap::new(),
         }
     }
 }
 
 pub struct BoundMethod {
-    receiver: TypedHandle<Instance>,
-    method: TypedHandle<Method>,
+    receiver: Obj<Instance>,
+    method: Obj<Closure>,
 }
 
 impl BoundMethod {
-    pub fn new(receiver: TypedHandle<Instance>, method: TypedHandle<Method>) -> Self {
+    pub fn new(receiver: Obj<Instance>, method: Obj<Closure>) -> Self {
         Self { receiver, method }
     }
 }

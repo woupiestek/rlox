@@ -1,3 +1,5 @@
+use crate::object::Value;
+
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Op {
@@ -25,11 +27,14 @@ pub enum Op {
     SuperInvoke,
     CloseUpvalue,
     Return,
+    Class,
+    Inherit,
 }
 
 pub struct Chunk {
     code: Vec<u8>,
     lines: Vec<u16>,
+    constants: Vec<Value>,
 }
 
 impl Chunk {
@@ -37,6 +42,7 @@ impl Chunk {
         Self {
             code: Vec::new(),
             lines: Vec::new(),
+            constants: Vec::new(),
         }
     }
     pub fn write(&mut self, bytes: &[u8], line: u16) {
@@ -54,5 +60,14 @@ impl Chunk {
     }
     pub fn count(&self) -> usize {
         self.code.len()
+    }
+    pub fn add_constant(&mut self, value: Value) -> Result<u8, String> {
+        let len = self.constants.len();
+        if len == u8::MAX as usize {
+            Err("too many constants in function".to_string())
+        } else {
+            self.constants.push(value);
+            Ok(len as u8)
+        }
     }
 }

@@ -61,16 +61,13 @@ impl TokenType {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Token {
     pub token_type: TokenType,
-    from: usize,
-    to: usize,
+    pub from: usize,
+    pub to: usize,
     pub line: u16,
     pub column: u16,
 }
 
 impl Token {
-    pub fn lexeme<'a>(&self, source: &'a str) -> &'a str {
-        &source[self.from..self.to]
-    }
     pub fn nil() -> Self {
         Self {
             token_type: TokenType::Error,

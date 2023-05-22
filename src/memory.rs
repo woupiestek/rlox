@@ -28,9 +28,9 @@ impl Handle {
     fn mark(&mut self, value: bool) {
         unsafe { (*self.ptr).is_marked = value }
     }
-    pub fn upgrade<T: Traceable>(&self) -> Option<TypedHandle<T>> {
+    pub fn upgrade<T: Traceable>(&self) -> Option<Obj<T>> {
         if T::KIND == self.kind() {
-            Some(TypedHandle {
+            Some(Obj {
                 ptr: self.ptr as *mut (Header, T),
             })
         } else {
@@ -39,11 +39,11 @@ impl Handle {
     }
 }
 
-pub struct TypedHandle<Body> {
+pub struct Obj<Body> {
     ptr: *mut (Header, Body),
 }
 
-impl<T: Traceable> TypedHandle<T> {
+impl<T: Traceable> Obj<T> {
     // heap argument? method on heap?
     fn from(t: T) -> Self {
         unsafe {
@@ -52,7 +52,7 @@ impl<T: Traceable> TypedHandle<T> {
             (*ptr).0.is_marked = false;
             (*ptr).0.kind = T::KIND;
             (*ptr).1 = t;
-            TypedHandle { ptr }
+            Obj { ptr }
         }
     }
     pub fn downgrade(&self) -> Handle {
@@ -65,7 +65,7 @@ impl<T: Traceable> TypedHandle<T> {
     }
 }
 
-impl<T> Deref for TypedHandle<T> {
+impl<T> Deref for Obj<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -73,7 +73,7 @@ impl<T> Deref for TypedHandle<T> {
     }
 }
 
-impl<T> DerefMut for TypedHandle<T> {
+impl<T> DerefMut for Obj<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.ptr).1 }
     }
@@ -85,9 +85,9 @@ where
 {
     const KIND: u8;
     fn trace(&self, collector: &mut Vec<Handle>);
-    fn upgrade(handle: &Handle) -> Option<TypedHandle<Self>> {
+    fn upgrade(handle: &Handle) -> Option<Obj<Self>> {
         if Self::KIND == handle.kind() {
-            Some(TypedHandle {
+            Some(Obj {
                 ptr: handle.ptr as *mut (Header, Self),
             })
         } else {
@@ -138,11 +138,11 @@ impl Heap {
         }
     }
 
-    pub fn store<T: Traceable>(&mut self, t: T) -> TypedHandle<T> {
+    pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
         if self.handlers[T::KIND as usize] == DEFAULT_HANDLER {
             self.handlers[T::KIND as usize] = Handler::of::<T>();
         }
-        let typed = TypedHandle::from(t);
+        let typed = Obj::from(t);
         self.handles.push(typed.downgrade());
         typed
     }

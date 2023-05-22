@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    memory::{Heap, TypedHandle},
-    object::{Method, Upvalue, Value},
+    memory::{Heap, Obj},
+    object::{Function, Upvalue, Value},
     stack::Stack,
 };
 
@@ -13,13 +13,16 @@ const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 struct CallFrame {
     ip: usize,
     slots: usize,
-    method: TypedHandle<Method>,
+    // we seem to need a nullpointer, but isn't that a bit much?
+    method: Obj<Function>,
 }
 
 pub struct VM {
-    values: Stack<Value>,
+    values: [Value; STACK_SIZE],
+    // once we know what goes here,
+    // we can arrays here too.
     frames: Stack<CallFrame>,
-    open_upvalues: Stack<TypedHandle<Upvalue>>,
+    open_upvalues: Stack<Obj<Upvalue>>,
     globals: HashMap<String, Value>,
     init_string: String,
     heap: Heap,
@@ -28,7 +31,7 @@ pub struct VM {
 impl VM {
     pub fn new() -> Self {
         Self {
-            values: Stack::new(STACK_SIZE),
+            values: [Value::Nil; STACK_SIZE],
             frames: Stack::new(MAX_FRAMES),
             open_upvalues: Stack::new(U8_COUNT),
             globals: HashMap::new(),
