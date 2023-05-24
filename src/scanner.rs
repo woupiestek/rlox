@@ -59,27 +59,25 @@ impl TokenType {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Token {
+pub struct Token<'src> {
     pub token_type: TokenType,
-    pub from: usize,
-    pub to: usize,
+    pub lexeme: &'src str,
     pub line: u16,
     pub column: u16,
 }
 
-impl Token {
+impl<'src> Token<'src> {
     pub fn nil() -> Self {
         Self {
             token_type: TokenType::Error,
-            from: 0,
-            to: 0,
+            lexeme: "",
             line: 0,
             column: 0,
         }
     }
 }
-pub struct Scanner<'a> {
-    source: &'a [u8],
+pub struct Scanner<'src> {
+    source: &'src str,
     current: usize,
     line: u16,
     column: u16,
@@ -88,10 +86,10 @@ pub struct Scanner<'a> {
     token_column: u16,
 }
 
-impl Scanner<'_> {
-    pub fn new(source: &str) -> Scanner {
-        Scanner {
-            source: source.as_bytes(),
+impl<'src> Scanner<'src> {
+    pub fn new(source: &'src str) -> Self {
+        Self {
+            source, //.as_bytes(),
             current: 0,
             line: 1,
             column: 1,
@@ -105,11 +103,15 @@ impl Scanner<'_> {
         self.source.len() <= self.current
     }
 
+    fn get_byte(&self, index: usize) -> u8 {
+        self.source.as_bytes()[index]
+    }
+
     fn peek(&self) -> u8 {
         if self.is_at_end() {
             0
         } else {
-            self.source[self.current]
+            self.get_byte(self.current)
         }
     }
 
@@ -117,14 +119,14 @@ impl Scanner<'_> {
         if self.current + 1 >= self.source.len() {
             return 0;
         }
-        self.source[self.current + 1]
+        self.get_byte(self.current + 1)
     }
 
     fn advance(&mut self) -> u8 {
         if self.is_at_end() {
             return 0;
         }
-        let ch = self.source[self.current];
+        let ch = self.get_byte(self.current);
         if ch == b'\n' {
             self.line += 1;
             self.column = 1;
@@ -134,7 +136,7 @@ impl Scanner<'_> {
         // for unicode
         loop {
             self.current += 1;
-            if self.is_at_end() || self.source[self.current] as i8 >= -64 {
+            if self.is_at_end() || self.get_byte(self.current) as i8 >= -64 {
                 return ch;
             }
         }
@@ -149,11 +151,14 @@ impl Scanner<'_> {
         }
     }
 
-    fn token(&self, typ: TokenType) -> Token {
+    fn lexeme(&self) -> &'src str {
+        &self.source[self.token_start..self.current]
+    }
+
+    fn token(&self, typ: TokenType) -> Token<'src> {
         Token {
             token_type: typ,
-            from: self.token_start,
-            to: self.current,
+            lexeme: self.lexeme(),
             line: self.token_line,
             column: self.token_column,
         }
@@ -188,14 +193,14 @@ impl Scanner<'_> {
 
     fn check_keyword(&self, word: &str, typ: TokenType) -> TokenType {
         let start = self.current - word.len();
-        if self.source[start..self.current] == *word.as_bytes() {
+        if self.source[start..self.current] == *word {
             return typ;
         }
         TokenType::Identifier
     }
 
     fn identifier_type(&self) -> TokenType {
-        let start = self.source[self.token_start];
+        let start = self.get_byte(self.token_start);
         println!("{}", start as char);
         match start {
             b'a' => self.check_keyword("nd", TokenType::And),
@@ -203,7 +208,7 @@ impl Scanner<'_> {
             b'e' => self.check_keyword("lse", TokenType::Else),
             b'f' => {
                 if self.current > self.token_start + 1 {
-                    match self.source[self.token_start + 1] {
+                    match self.get_byte(self.token_start + 1) {
                         b'a' => self.check_keyword("lse", TokenType::False),
                         b'o' => self.check_keyword("r", TokenType::For),
                         b'u' => self.check_keyword("n", TokenType::Fun),
@@ -221,7 +226,7 @@ impl Scanner<'_> {
             b's' => self.check_keyword("uper", TokenType::Super),
             b't' => {
                 if self.current > self.token_start + 1 {
-                    match self.source[self.token_start + 1] {
+                    match self.get_byte(self.token_start + 1) {
                         b'h' => self.check_keyword("is", TokenType::This),
                         b'r' => self.check_keyword("ue", TokenType::True),
                         _ => TokenType::Identifier,
@@ -236,14 +241,14 @@ impl Scanner<'_> {
         }
     }
 
-    fn identifier(&mut self) -> Token {
+    fn identifier(&mut self) -> Token<'src> {
         while self.peek().is_ascii_alphanumeric() {
             self.advance();
         }
         self.token(self.identifier_type())
     }
 
-    fn number(&mut self) -> Token {
+    fn number(&mut self) -> Token<'src> {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
@@ -256,7 +261,7 @@ impl Scanner<'_> {
         self.token(TokenType::Number)
     }
 
-    fn string(&mut self) -> Token {
+    fn string(&mut self) -> Token<'src> {
         loop {
             if self.is_at_end() {
                 return self.token(TokenType::Error);
@@ -267,7 +272,7 @@ impl Scanner<'_> {
         }
     }
 
-    pub fn next(&mut self) -> Token {
+    pub fn next(&mut self) -> Token<'src> {
         self.skip_whitespace();
         self.token_start = self.current;
         self.token_line = self.line;
@@ -339,8 +344,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Print,
-                from: 0,
-                to: 5,
+                lexeme: "print",
                 line: 1,
                 column: 1
             })
@@ -349,9 +353,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::String,
-                from: 6,
-                to: 16,
-                //lexeme: "\"one 😲\"",
+                lexeme: "\"one 😲\"",
                 line: 1,
                 column: 7
             })
@@ -360,8 +362,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Semicolon,
-                from: 16,
-                to: 17,
+                lexeme: ";",
                 line: 1,
                 column: 14
             })
@@ -370,8 +371,7 @@ mod tests {
             scanner.next(),
             Token {
                 token_type: TokenType::End,
-                from: 17,
-                to: 17,
+                lexeme: "",
                 line: 1,
                 column: 15
             }
@@ -385,8 +385,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Var,
-                from: 0,
-                to: 3,
+                lexeme: "var",
                 line: 1,
                 column: 1
             })
@@ -395,8 +394,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Identifier,
-                from: 4,
-                to: 5,
+                lexeme: "a",
                 line: 1,
                 column: 5
             })
@@ -405,8 +403,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Equal,
-                from: 6,
-                to: 7,
+                lexeme: "=",
                 line: 1,
                 column: 7
             })
@@ -415,8 +412,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::True,
-                from: 8,
-                to: 12,
+                lexeme: "true",
                 line: 1,
                 column: 9
             })
@@ -434,8 +430,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::LeftBrace,
-                from: 0,
-                to: 1,
+                lexeme: "{",
                 line: 1,
                 column: 1
             })
@@ -444,8 +439,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Number,
-                from: 68,
-                to: 69,
+                lexeme: "1",
                 line: 3,
                 column: 13
             })
@@ -454,8 +448,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Plus,
-                from: 70,
-                to: 71,
+                lexeme: "+",
                 line: 3,
                 column: 15
             })
@@ -464,8 +457,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Number,
-                from: 72,
-                to: 73,
+                lexeme: "2",
                 line: 3,
                 column: 17
             })
@@ -474,8 +466,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::Semicolon,
-                from: 73,
-                to: 74,
+                lexeme: ";",
                 line: 3,
                 column: 18
             })
@@ -484,8 +475,7 @@ mod tests {
             scanner.next(),
             (Token {
                 token_type: TokenType::RightBrace,
-                from: 75,
-                to: 76,
+                lexeme: "}",
                 line: 3,
                 column: 20
             })

@@ -25,6 +25,7 @@ pub enum Op {
     Call,
     Invoke,
     SuperInvoke,
+    Closure,
     CloseUpvalue,
     Return,
     Class,

@@ -1,5 +1,32 @@
 # Rlox
 
+## 2023-05-24
+
+### driven nuts
+
+So in clox compiler, a string is a pointer and a length. Rust allows that as
+slice, but requires that we track the life time. This is killing. Indexing into
+the source string works until synthetic token pop up, which index into other
+strings.
+
+Got it, I think. I didn't use generic lifetime parameters in the impls. This
+made working with types with lifetypes attached impossible. Even after I
+corrected that, I still menages to get strange error because the lifteimes
+needed to be in retrun variables.
+
+This get me thinking about the gabrage collector: We could still go for a
+solution where every managed reference is a borrow from the heap. The heap could
+still deallocate, but perhaps this gives a little more control?
+
+### reverse marking
+
+So on dropping handles, objects could be marked as potnetially garbage. As the
+collection cycle begins, the collector assumes not dropped means rooted. This
+leads cycles never getting cleaned up.
+
+Trace through teh object for potential garbage, then assume waht is left over
+are roots, then trace again. This is probabaly really bad for performance.
+
 ## 2023-05-22
 
 ### growing understanding

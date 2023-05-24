@@ -92,7 +92,7 @@ pub struct Closure {
 }
 
 impl Closure {
-    pub fn new(function: Obj<Function>, super_init: Option<Obj<Closure>>) -> Self {
+    pub fn new(function: Obj<Function>) -> Self {
         Self {
             class: function,
             upvalues: Vec::new(),
@@ -151,7 +151,8 @@ impl Traceable for BoundMethod {
     const KIND: u8 = 6;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        todo!()
+        collector.push(self.receiver.downgrade());
+        collector.push(self.method.downgrade());
     }
 }
 

@@ -1,10 +1,10 @@
-use std::mem;
+use std::iter::Scan;
 
 use crate::{
     chunk::Op,
     memory::Heap,
-    object::{Class, Function, Value},
-    scanner::{Scanner, Token, TokenType},
+    object::{Function, Value},
+    scanner::{self, Scanner, Token, TokenType},
 };
 
 pub enum Precedence {
@@ -20,10 +20,23 @@ pub enum Precedence {
     Call,       // . ()
     Primary,
 }
-struct Local {
-    name: String,
-    depth: i32,
+
+// make this smaller later
+#[derive(Clone, Copy)]
+struct Local<'src> {
+    name: &'src str,
+    depth: Option<u16>,
     is_captured: bool,
+}
+
+impl<'src> Local<'src> {
+    fn new(name: &'src str) -> Self {
+        Self {
+            name,
+            depth: None,
+            is_captured: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -40,20 +53,20 @@ enum FunctionType {
     Script,
 }
 
-struct Compiler {
+struct Compiler<'src> {
+    function_type: FunctionType,
     function: Function,
     upvalues: Vec<Upvalue>,
-    function_type: FunctionType,
-    scope_depth: i32,
-    locals: Vec<Local>,
+    scope_depth: u16,
+    locals: Vec<Local<'src>>,
 }
 
-impl Compiler {
-    fn new() -> Self {
+impl<'src> Compiler<'src> {
+    fn new(function_type: FunctionType) -> Self {
         Self {
             function: Function::new(),
             upvalues: Vec::new(),
-            function_type: FunctionType::Script,
+            function_type,
             scope_depth: 0,
             locals: Vec::new(),
         }
@@ -64,7 +77,7 @@ impl Compiler {
         loop {
             let local = &self.locals[i];
             if local.name == name {
-                return if local.depth == -1 {
+                return if local.depth.is_none() {
                     Err("Can't read local variable in its own initializer.".to_string())
                 } else {
                     Ok(Some(i as u8))
@@ -79,15 +92,11 @@ impl Compiler {
         }
     }
 
-    fn add_local(&mut self, name: &str) -> Result<(), String> {
+    fn add_local(&mut self, name: &'src str) -> Result<(), String> {
         if self.locals.len() == 256 {
             return Err("Too many local variables in function.".to_string());
         }
-        self.locals.push(Local {
-            name: name.to_string(),
-            depth: -1,
-            is_captured: false,
-        });
+        self.locals.push(Local::new(name));
         return Ok(());
     }
 
@@ -96,7 +105,7 @@ impl Compiler {
             return false;
         }
         let i = self.locals.len() - 1;
-        self.locals[i].depth = self.scope_depth;
+        self.locals[i].depth = Some(self.scope_depth);
         return true;
     }
 
@@ -135,7 +144,7 @@ impl Compiler {
         }
     }
 
-    fn declare_variable(&mut self, name: &str) -> Result<(), String> {
+    fn declare_variable(&mut self, name: &'src str) -> Result<(), String> {
         if self.scope_depth == 0 {
             return Ok(());
         }
@@ -148,21 +157,19 @@ impl Compiler {
     }
 }
 
-pub struct Source<'b> {
-    source: &'b str,
-    scanner: Scanner<'b>,
-    current_token: Token,
-    previous_token: Token,
+pub struct Source<'src> {
+    scanner: Scanner<'src>,
+    current_token: Token<'src>,
+    previous_token: Token<'src>,
 }
 
-impl Source<'_> {
-    pub fn new(source: &str) -> Source {
+impl<'src> Source<'src> {
+    pub fn new(source: &'src str) -> Self {
         let mut scanner = Scanner::new(source);
-        let current = scanner.next();
-        Source {
-            source,
+        let current_token = scanner.next();
+        Self {
             scanner,
-            current_token: current,
+            current_token,
             previous_token: Token::nil(),
         }
     }
@@ -179,7 +186,7 @@ impl Source<'_> {
         self.current_token = self.scanner.next();
     }
 
-    fn check(&mut self, token_type: TokenType) -> bool {
+    fn check(&self, token_type: TokenType) -> bool {
         self.current_token.token_type == token_type
     }
 
@@ -198,10 +205,6 @@ impl Source<'_> {
         } else {
             Err(msg)
         }
-    }
-
-    fn line(&self) -> u16 {
-        self.previous_token.line
     }
 
     fn synchronize(&mut self) -> Result<(), String> {
@@ -231,13 +234,12 @@ impl Source<'_> {
     }
 }
 
-pub struct Parser<'b> {
+pub struct Parser<'src> {
     // source
-    source: Source<'b>,
+    source: Source<'src>,
 
     // targets
-    current_compiler: Compiler,
-    compilers: Vec<Compiler>,
+    compilers: Vec<Compiler<'src>>,
 
     has_super: bool,
     had_super: Vec<bool>,
@@ -245,34 +247,29 @@ pub struct Parser<'b> {
     heap: Heap,
 }
 
-// why couldn't this be a method!?
-macro_rules! lexeme {
-    ($s:ident) => {
-        &$s.source.source[$s.source.previous_token.from..$s.source.previous_token.to]
-    };
-}
-
-impl Parser<'_> {
-    pub fn new(source: Source, heap: Heap) -> Parser {
-        Parser {
+impl<'src> Parser<'src> {
+    pub fn new(source: Source<'src>, heap: Heap) -> Self {
+        Self {
             source,
-            current_compiler: Compiler::new(),
-            compilers: Vec::new(),
+            compilers: vec![Compiler::new(FunctionType::Script)],
             has_super: false,
             had_super: Vec::new(),
             heap,
         }
     }
 
+    fn current_compiler(&mut self) -> &mut Compiler<'src> {
+        let i = self.compilers.len() - 1;
+        &mut self.compilers[i]
+    }
+
     fn emit_bytes(&mut self, bytes: &[u8]) {
-        self.current_compiler
-            .function
-            .chunk
-            .write(bytes, self.source.line());
+        let line = self.source.previous_token.line;
+        self.current_compiler().function.chunk.write(bytes, line);
     }
 
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
-        let offset = self.current_compiler.count() - start + 2;
+        let offset = self.current_compiler().count() - start + 2;
         if offset > u16::MAX as usize {
             Err("loop size to large".to_string())
         } else {
@@ -283,11 +280,11 @@ impl Parser<'_> {
 
     fn emit_jump(&mut self, instruction: u8) -> usize {
         self.emit_bytes(&[instruction, 0xff, 0xff]);
-        self.current_compiler.count() - 2
+        self.current_compiler().count() - 2
     }
 
     fn emit_return(&mut self) {
-        if self.current_compiler.function_type == FunctionType::Initializer {
+        if self.current_compiler().function_type == FunctionType::Initializer {
             self.emit_bytes(&[Op::GetLocal as u8, 0, Op::Return as u8]);
         } else {
             self.emit_bytes(&[Op::Nil as u8, Op::Return as u8]);
@@ -295,21 +292,32 @@ impl Parser<'_> {
     }
 
     fn emit_constant(&mut self, value: Value) -> Result<(), String> {
-        let make_constant = self.current_compiler.make_constant(value)?;
+        let make_constant = self.current_compiler().make_constant(value)?;
         Ok(self.emit_bytes(&[Op::Constant as u8, make_constant]))
     }
 
     fn begin_scope(&mut self) {
-        self.current_compiler.scope_depth += 1;
+        self.current_compiler().scope_depth += 1;
     }
 
     fn end_scope(&mut self) {
-        self.current_compiler.scope_depth -= 1;
-        while let Some(local) = self.current_compiler.locals.last() {
-            if local.depth <= self.current_compiler.scope_depth {
-                break;
+        self.current_compiler().scope_depth -= 1;
+        let mut i = self.current_compiler().locals.len();
+        loop {
+            if i == 0 {
+                return;
             }
-            self.emit_bytes(&[if local.is_captured {
+            i -= 1;
+
+            if self.current_compiler().locals[i]
+                .depth
+                .filter(|it| self.current_compiler().scope_depth > *it)
+                .is_none()
+            {
+                return;
+            }
+            let is_captured = self.current_compiler().locals.pop().unwrap().is_captured;
+            self.emit_bytes(&[if is_captured {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
@@ -350,7 +358,7 @@ impl Parser<'_> {
             is_local = false;
         }
         Ok(Some(
-            self.current_compiler.add_upvalue(index as u8, is_local)?,
+            self.current_compiler().add_upvalue(index as u8, is_local)?,
         ))
     }
 
@@ -379,7 +387,7 @@ impl Parser<'_> {
         let end_jump = self.emit_jump(Op::JumpIfFalse as u8);
         self.emit_bytes(&[Op::Pop as u8]);
         self.parse_precedence(Precedence::And)?;
-        self.current_compiler.patch_jump(end_jump)
+        self.current_compiler().patch_jump(end_jump)
     }
 
     fn binary(&mut self) -> Result<(), String> {
@@ -407,13 +415,17 @@ impl Parser<'_> {
 
     fn intern(&mut self, name: &str) -> Result<u8, String> {
         let value = self.string_value(name);
-        let index = self.current_compiler.make_constant(value)?;
+        let index = self.current_compiler().make_constant(value)?;
         Ok(index)
+    }
+
+    fn lexeme(&self) -> &'src str {
+        &self.source.previous_token.lexeme
     }
 
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        self.intern(lexeme!(self))
+        self.intern(self.lexeme())
     }
 
     fn literal(&mut self, token_type: &TokenType) {
@@ -421,7 +433,7 @@ impl Parser<'_> {
             TokenType::False => Op::False as u8,
             TokenType::Nil => Op::Nil as u8,
             TokenType::True => Op::True as u8,
-            _ => panic!("'{}' mistaken for literal", lexeme!(self)),
+            _ => panic!("'{}' mistaken for literal", self.lexeme()),
         }]);
     }
 
@@ -433,7 +445,7 @@ impl Parser<'_> {
     }
 
     fn number(&mut self) -> Result<(), String> {
-        match lexeme!(self).parse::<f64>() {
+        match self.lexeme().parse::<f64>() {
             Ok(number) => self.emit_constant(Value::Number(number)),
             Err(err) => Err(err.to_string()),
         }
@@ -449,7 +461,7 @@ impl Parser<'_> {
     }
 
     fn string(&mut self) -> Result<(), String> {
-        let lexeme = lexeme!(self);
+        let lexeme = self.lexeme();
         let value = self.string_value(&lexeme[1..lexeme.len() - 1]);
         self.emit_constant(value)
     }
@@ -457,13 +469,13 @@ impl Parser<'_> {
     // admit code for variable access
     fn variable(&mut self, name: &str, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
-            if let Some(arg) = self.current_compiler.resolve_local(name)? {
+            if let Some(arg) = self.current_compiler().resolve_local(name)? {
                 (arg, Op::GetGlobal as u8, Op::SetGlobal as u8)
             } else if let Some(arg) = self.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
             } else {
                 let value = self.string_value(name);
-                let arg = self.current_compiler.make_constant(value)?;
+                let arg = self.current_compiler().make_constant(value)?;
                 (arg, Op::GetGlobal as u8, Op::SetGlobal as u8)
             }
         };
@@ -487,7 +499,7 @@ impl Parser<'_> {
         self.source
             .consume(TokenType::Dot, "Expect '.' after 'super'.")?;
         let index = self.identifier_constant("Expect superclass method name.")?;
-        self.variable("this", false)?;
+        self.variable("this", false)?; // and it doesn't friggin' work!
         if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
             self.variable("super", false)?;
@@ -522,18 +534,18 @@ impl Parser<'_> {
 
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        let name = lexeme!(self);
-        self.current_compiler.declare_variable(name)?;
-        Ok(if self.current_compiler.scope_depth > 0 {
+        let name = self.lexeme();
+        self.current_compiler().declare_variable(name)?;
+        Ok(if self.current_compiler().scope_depth > 0 {
             0
         } else {
             let value = self.string_value(name);
-            self.current_compiler.make_constant(value)?
+            self.current_compiler().make_constant(value)?
         })
     }
 
     fn define_variable(&mut self, global: u8) {
-        if !self.current_compiler.mark_initialized() {
+        if !self.current_compiler().mark_initialized() {
             self.emit_bytes(&[Op::DefineGlobal as u8, global])
         }
     }
@@ -551,27 +563,22 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn function(&mut self, function_type: FunctionType, name: Option<u8>) -> Result<(), String> {
-        assert_eq!(self.current_compiler.count(), 0, "assert empty chunk start");
-        // grab the previous identifier for the name
-        // may be strange for the top level script, but this is the way it is.
-        // let name = lexeme!(self).to_string();
+    fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
+        self.compilers.push(Compiler::new(function_type));
+        self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
-        let mut arity = 0u16;
         if !self.source.check(TokenType::RightParen) {
             loop {
+                if self.current_compiler().function.arity == u8::MAX {
+                    return Err("Can't have more than 255 parameters.".to_string());
+                }
+                self.current_compiler().function.arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index);
-                if self.source.match_type(TokenType::Comma) {
-                    if arity < u8::MAX as u16 {
-                        arity += 1;
-                        continue;
-                    } else {
-                        return Err("Can't have more than 255 parameters.".to_string());
-                    }
+                if !self.source.match_type(TokenType::Comma) {
+                    break;
                 }
-                break;
             }
         }
         self.source
@@ -579,23 +586,25 @@ impl Parser<'_> {
         self.source
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
-
+        let function = self.compilers.pop().unwrap().function;
+        let value = Value::Obj(self.heap.store(function).downgrade());
+        let index = self.current_compiler().make_constant(value)?;
+        self.emit_bytes(&[Op::Closure as u8, index]);
         todo!();
-
         Ok(())
     }
 
     fn method(&mut self) -> Result<(), String> {
         self.source
             .consume(TokenType::Identifier, "Expect method name.")?;
-        let name = lexeme!(self);
+        let name = self.lexeme();
         let function_type = if name == "init" {
             FunctionType::Initializer
         } else {
             FunctionType::Method
         };
         let intern = self.intern(name)?;
-        self.function(function_type, Some(intern))
+        self.function(function_type)
         // emit what? why?
         // how do methods names get in scope?
         // ok, that are accessed as members, so no need?
@@ -606,28 +615,28 @@ impl Parser<'_> {
         // first thing in the class, so maybe not so spectacular?
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
-        let class_name = lexeme!(self);
-        self.current_compiler.declare_variable(class_name)?;
+        let class_name = self.lexeme();
+        self.current_compiler().declare_variable(class_name)?;
         let index = self.intern(class_name)?;
         self.emit_bytes(&[Op::Class as u8, index]);
         self.define_variable(index);
 
         // start a new class; 184 byte replace!
-        self.compilers
-            .push(mem::replace(&mut self.current_compiler, Compiler::new()));
-        // self.current_compiler.class.name = Some(index);
+        // self.compilers
+        //     .push(mem::replace(&mut self.current_compiler(), Compiler::new()));
+        // self.current_compiler().class.name = Some(index);
 
         // super decl
         if self.source.match_type(TokenType::Less) {
             self.source
                 .consume(TokenType::Identifier, "Expect superclass name.")?;
-            let super_name = lexeme!(self);
+            let super_name = self.lexeme();
             self.variable(super_name, false)?;
             if class_name == super_name {
                 return Err("A class can't inherit from itself.".to_string());
             }
             self.begin_scope();
-            self.current_compiler.add_local("super")?;
+            self.current_compiler().add_local("super")?;
             self.define_variable(0);
             self.variable(class_name, false)?;
             self.emit_bytes(&[Op::Inherit as u8]);
@@ -656,12 +665,12 @@ impl Parser<'_> {
         }
 
         // I can iterate over the upvalue, just not in a convenient way. Why not?
-        let len = self.current_compiler.upvalues.len();
+        let len = self.current_compiler().upvalues.len();
         for i in 0..len {
-            let upvalue = self.current_compiler.upvalues[i];
+            let upvalue = self.current_compiler().upvalues[i];
             self.emit_bytes(&[if upvalue.is_local { 1 } else { 0 }, upvalue.index]);
         }
-        // self.current_compiler.up_value_count = len as u8;
+        // self.current_compiler().up_value_count = len as u8;
 
         todo!()
     }
