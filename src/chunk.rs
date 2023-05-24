@@ -30,6 +30,7 @@ pub enum Op {
     Return,
     Class,
     Inherit,
+    Method,
 }
 
 pub struct Chunk {

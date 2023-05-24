@@ -1,11 +1,11 @@
-use std::iter::Scan;
-
 use crate::{
     chunk::Op,
     memory::Heap,
     object::{Function, Value},
-    scanner::{self, Scanner, Token, TokenType},
+    scanner::{Scanner, Token, TokenType},
 };
+
+const U8_COUNT: usize = 0x100;
 
 pub enum Precedence {
     None,
@@ -56,25 +56,38 @@ enum FunctionType {
 struct Compiler<'src> {
     function_type: FunctionType,
     function: Function,
-    upvalues: Vec<Upvalue>,
+    // same idea?
+    upvalues: [Upvalue; U8_COUNT],
     scope_depth: u16,
-    locals: Vec<Local<'src>>,
+    // have one local vec, the compiler just keeping offsets?
+    locals: [Local<'src>; U8_COUNT],
+    local_count: usize,
 }
 
 impl<'src> Compiler<'src> {
     fn new(function_type: FunctionType) -> Self {
         Self {
             function: Function::new(),
-            upvalues: Vec::new(),
+            upvalues: [Upvalue {
+                index: 0,
+                is_local: false,
+            }; U8_COUNT],
             function_type,
             scope_depth: 0,
-            locals: Vec::new(),
+            locals: [Local::new(""); U8_COUNT],
+            local_count: 0,
         }
     }
 
     fn resolve_local(&self, name: &str) -> Result<Option<u8>, String> {
-        let mut i = self.locals.len() - 1;
+        let mut i = self.local_count;
         loop {
+            if i == 0 {
+                return Ok(None);
+            } else {
+                i -= 1;
+                continue;
+            }
             let local = &self.locals[i];
             if local.name == name {
                 return if local.depth.is_none() {
@@ -83,20 +96,15 @@ impl<'src> Compiler<'src> {
                     Ok(Some(i as u8))
                 };
             }
-            if i == 0 {
-                return Ok(None); // same as -1 ?
-            } else {
-                i -= 1;
-                continue;
-            }
         }
     }
 
     fn add_local(&mut self, name: &'src str) -> Result<(), String> {
-        if self.locals.len() == 256 {
+        if self.local_count == U8_COUNT {
             return Err("Too many local variables in function.".to_string());
         }
-        self.locals.push(Local::new(name));
+        self.locals[self.local_count] = Local::new(name);
+        self.local_count += 1;
         return Ok(());
     }
 
@@ -104,24 +112,25 @@ impl<'src> Compiler<'src> {
         if self.scope_depth == 0 {
             return false;
         }
-        let i = self.locals.len() - 1;
+        let i = self.local_count - 1;
         self.locals[i].depth = Some(self.scope_depth);
         return true;
     }
 
     fn add_upvalue(&mut self, index: u8, is_local: bool) -> Result<u8, String> {
-        let len = self.upvalues.len();
-        for i in 0..len {
-            let upvalue = &self.upvalues[i];
+        let count = self.function.upvalue_count;
+        for i in 0..count {
+            let upvalue = &self.upvalues[i as usize];
             if upvalue.is_local == is_local && upvalue.index == index {
                 return Ok(i as u8);
             }
         }
-        if len > u8::MAX as usize {
+        if count == u8::MAX {
             return Err("Too many closure variables in function.".to_string());
         }
-        self.upvalues.push(Upvalue { index, is_local });
-        Ok(len as u8)
+        self.upvalues[count as usize] = Upvalue { index, is_local };
+        self.function.upvalue_count += 1;
+        Ok(count as u8)
     }
 
     fn count(&mut self) -> usize {
@@ -302,26 +311,24 @@ impl<'src> Parser<'src> {
 
     fn end_scope(&mut self) {
         self.current_compiler().scope_depth -= 1;
-        let mut i = self.current_compiler().locals.len();
         loop {
-            if i == 0 {
+            let local_count = self.current_compiler().local_count;
+            if local_count == 0 {
                 return;
+            };
+            let local = self.current_compiler().locals[local_count - 1];
+            if let Some(depth) = local.depth {
+                if depth > self.current_compiler().scope_depth {
+                    self.emit_bytes(&[if local.is_captured {
+                        Op::CloseUpvalue
+                    } else {
+                        Op::Pop
+                    } as u8]);
+                    self.current_compiler().local_count -= 1;
+                    continue;
+                }
             }
-            i -= 1;
-
-            if self.current_compiler().locals[i]
-                .depth
-                .filter(|it| self.current_compiler().scope_depth > *it)
-                .is_none()
-            {
-                return;
-            }
-            let is_captured = self.current_compiler().locals.pop().unwrap().is_captured;
-            self.emit_bytes(&[if is_captured {
-                Op::CloseUpvalue
-            } else {
-                Op::Pop
-            } as u8]);
+            return;
         }
     }
 
@@ -423,6 +430,11 @@ impl<'src> Parser<'src> {
         &self.source.previous_token.lexeme
     }
 
+    fn identifier_name(&mut self, error_msg: &str) -> Result<&'src str, String> {
+        self.source.consume(TokenType::Identifier, error_msg)?;
+        Ok(self.lexeme())
+    }
+
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         self.intern(self.lexeme())
@@ -470,7 +482,7 @@ impl<'src> Parser<'src> {
     fn variable(&mut self, name: &str, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
             if let Some(arg) = self.current_compiler().resolve_local(name)? {
-                (arg, Op::GetGlobal as u8, Op::SetGlobal as u8)
+                (arg, Op::GetLocal as u8, Op::SetGlobal as u8)
             } else if let Some(arg) = self.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
             } else {
@@ -587,10 +599,16 @@ impl<'src> Parser<'src> {
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
         let function = self.compilers.pop().unwrap().function;
+        let count = function.upvalue_count;
         let value = Value::Obj(self.heap.store(function).downgrade());
         let index = self.current_compiler().make_constant(value)?;
         self.emit_bytes(&[Op::Closure as u8, index]);
-        todo!();
+
+        // I don't get this yet
+        for i in 0..count {
+            let upvalue = self.current_compiler().upvalues[i as usize];
+            self.emit_bytes(&[if upvalue.is_local { 1 } else { 0 }, upvalue.index]);
+        }
         Ok(())
     }
 
@@ -604,27 +622,21 @@ impl<'src> Parser<'src> {
             FunctionType::Method
         };
         let intern = self.intern(name)?;
-        self.function(function_type)
-        // emit what? why?
-        // how do methods names get in scope?
-        // ok, that are accessed as members, so no need?
+        self.function(function_type)?;
+        self.emit_bytes(&[Op::Method as u8, intern]);
+        Ok(())
     }
 
     //classDecl      → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
     fn class(&mut self) -> Result<(), String> {
-        // first thing in the class, so maybe not so spectacular?
-        self.source
-            .consume(TokenType::Identifier, "Expect class name.")?;
-        let class_name = self.lexeme();
+        let class_name = self.identifier_name("Expect class name.")?;
         self.current_compiler().declare_variable(class_name)?;
         let index = self.intern(class_name)?;
         self.emit_bytes(&[Op::Class as u8, index]);
         self.define_variable(index);
 
-        // start a new class; 184 byte replace!
-        // self.compilers
-        //     .push(mem::replace(&mut self.current_compiler(), Compiler::new()));
-        // self.current_compiler().class.name = Some(index);
+        self.had_super.push(self.has_super);
+        self.has_super = false;
 
         // super decl
         if self.source.match_type(TokenType::Less) {
@@ -664,16 +676,42 @@ impl<'src> Parser<'src> {
             self.end_scope();
         }
 
-        // I can iterate over the upvalue, just not in a convenient way. Why not?
-        let len = self.current_compiler().upvalues.len();
-        for i in 0..len {
-            let upvalue = self.current_compiler().upvalues[i];
-            self.emit_bytes(&[if upvalue.is_local { 1 } else { 0 }, upvalue.index]);
-        }
-        // self.current_compiler().up_value_count = len as u8;
-
-        todo!()
+        self.has_super = self.had_super.pop().unwrap();
+        Ok(())
     }
+
+    fn function_declaration(&mut self) -> Result<(), String> {
+        let index = self.parse_variable("Expect function name.")?;
+        self.current_compiler().mark_initialized();
+        self.function(FunctionType::Function)?;
+        self.define_variable(index);
+        Ok(())
+    }
+
+    fn var_declaration(&mut self) -> Result<(), String> {
+        let index = self.parse_variable("Expect variable name.")?;
+        if self.source.match_type(TokenType::Equal) {
+            self.expression()?;
+        } else {
+            self.emit_bytes(&[Op::Nil as u8])
+        }
+        self.source.consume(
+            TokenType::Semicolon,
+            "Expect ';' after variable declaration.",
+        )?;
+        self.define_variable(index);
+        Ok(())
+    }
+
+    fn expression_statement(&mut self) -> Result<(), String> {
+        self.expression()?;
+        self.source
+            .consume(TokenType::Semicolon, "Expect ';' after expression.")?;
+        self.emit_bytes(&[Op::Pop as u8]);
+        Ok(())
+    }
+
+    // hiero
 
     fn statement(&mut self) -> Result<(), String> {
         !todo!()

@@ -27,6 +27,28 @@ leads cycles never getting cleaned up.
 Trace through teh object for potential garbage, then assume waht is left over
 are roots, then trace again. This is probabaly really bad for performance.
 
+### one stack of locals
+
+There is only one stack, so does the compiler really need multiple collections
+of locals? Maybe we can alllocate all the spaece at once! And the upvalues...
+
+So basically, have one big vec with all the locals in it
+
+- each 'compiler' has an offset in a shared locals vec
+- begin_scope stores offsets, and end_scope resets them, while ensuring that
+  bytes are emitted as they should. No depth in local variable needed
+- add_local just pushes on top
+- mark_initialized: could that not just be a status, like is captured?
+- declare_varibale just looks for the name in current scope, as determined by
+  offset... is this a bad system?
+- resolve upvalue: the hard part may be getting all the upvalues right. putting
+  data with the variables might be helpful: which 'compiler' and 'scope' do they
+  belong to? but with indices to those tables.
+
+Interesting data to add: types of variables on the stack!
+
+Whether there are similar options with upvalues is a mystery to me.
+
 ## 2023-05-22
 
 ### growing understanding
