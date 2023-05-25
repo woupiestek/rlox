@@ -58,6 +58,7 @@ impl<T> Stack<T> {
         }
         self.len = 0;
     }
+    pub fn len(&self) -> usize { self.len }
 }
 
 impl<T> Drop for Stack<T> {

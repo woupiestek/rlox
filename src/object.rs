@@ -13,7 +13,7 @@ pub enum Value {
     True,
     False,
     Number(f64),
-    Obj(Handle),
+    Object(Handle),
 }
 
 impl Traceable for String {
@@ -47,7 +47,7 @@ impl Traceable for Function {
             collector.push(n.downgrade())
         }
         for value in &self.chunk.constants {
-            if let Value::Obj(h) = value {
+            if let Value::Object(h) = value {
                 collector.push(*h)
             }
         }
@@ -87,7 +87,7 @@ impl Traceable for Upvalue {
     const KIND: u8 = 3;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        if let Some(Value::Obj(handle)) = self.closed {
+        if let Some(Value::Object(handle)) = self.closed {
             collector.push(handle);
         }
     }
@@ -96,14 +96,14 @@ impl Traceable for Upvalue {
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
 pub struct Closure {
-    class: Obj<Function>,
-    upvalues: Vec<Obj<Upvalue>>,
+    pub function: Obj<Function>,
+    pub upvalues: Vec<Obj<Upvalue>>,
 }
 
 impl Closure {
     pub fn new(function: Obj<Function>) -> Self {
         Self {
-            class: function,
+            function,
             upvalues: Vec::new(),
         }
     }
@@ -112,7 +112,7 @@ impl Closure {
 impl Traceable for Closure {
     const KIND: u8 = 4;
     fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.class.downgrade());
+        collector.push(self.function.downgrade());
         for upvalue in self.upvalues.iter() {
             collector.push(upvalue.downgrade());
         }
@@ -129,7 +129,7 @@ impl Traceable for Instance {
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         for value in self.properties.values() {
-            if let Value::Obj(handle) = value {
+            if let Value::Object(handle) = value {
                 collector.push(*handle)
             }
         }
@@ -166,7 +166,8 @@ impl Traceable for BoundMethod {
 }
 
 #[derive(Copy, Clone)]
-pub struct NativeFn(fn(args: &[Value]) -> Value);
+pub struct NativeFn(pub fn(args: &[Value]) -> Value);
+
 impl std::fmt::Debug for NativeFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<native function>")

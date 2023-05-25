@@ -4,6 +4,9 @@
 
 Main has stack overflow on 'hello world'. Big frames or endless loop?
 
+The rust version takes more time, but that is because I am trying to learn the
+language.
+
 ## 2023-05-24
 
 ### driven nuts

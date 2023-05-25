@@ -290,6 +290,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.current_compiler().function.chunk.write(bytes, line);
     }
 
+    fn emit_op(&mut self, op: Op) {
+        let line = self.source.previous_token.line;
+        self.current_compiler()
+            .function
+            .chunk
+            .write(&[op as u8], line);
+    }
+
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
         let offset = self.current_compiler().count() - start + 2;
         if offset > u16::MAX as usize {
@@ -347,7 +355,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn string_value(&mut self, str: &str) -> Value {
         let downgrade = self.heap.store(str.to_string()).downgrade();
-        Value::Obj(downgrade)
+        Value::Object(downgrade)
     }
 
     fn resolve_upvalue(&mut self, name: &str) -> Result<Option<u8>, String> {
@@ -406,7 +414,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn and(&mut self) -> Result<(), String> {
         let end_jump = self.emit_jump(Op::JumpIfFalse);
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
         self.parse_precedence(Prec::And)?;
         self.current_compiler().patch_jump(end_jump)
     }
@@ -419,11 +427,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
             TokenType::EqualEqual => {
                 self.parse_precedence(Prec::Equality)?;
-                self.emit_bytes(&[Op::Equal as u8])
+                self.emit_op(Op::Equal)
             }
             TokenType::Greater => {
                 self.parse_precedence(Prec::Equality)?;
-                self.emit_bytes(&[Op::Greater as u8])
+                self.emit_op(Op::Greater)
             }
             TokenType::GreaterEqual => {
                 self.parse_precedence(Prec::Equality)?;
@@ -431,7 +439,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
             TokenType::Less => {
                 self.parse_precedence(Prec::Equality)?;
-                self.emit_bytes(&[Op::Less as u8])
+                self.emit_op(Op::Less)
             }
             TokenType::LessEqual => {
                 self.parse_precedence(Prec::Equality)?;
@@ -439,19 +447,19 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
             TokenType::Plus => {
                 self.parse_precedence(Prec::Factor)?;
-                self.emit_bytes(&[Op::Add as u8])
+                self.emit_op(Op::Add)
             }
             TokenType::Minus => {
                 self.parse_precedence(Prec::Factor)?;
-                self.emit_bytes(&[Op::Subtract as u8])
+                self.emit_op(Op::Subtract)
             }
             TokenType::Star => {
                 self.parse_precedence(Prec::Unary)?;
-                self.emit_bytes(&[Op::Multiply as u8])
+                self.emit_op(Op::Multiply)
             }
             TokenType::Slash => {
                 self.parse_precedence(Prec::Unary)?;
-                self.emit_bytes(&[Op::Divide as u8])
+                self.emit_op(Op::Divide)
             }
             _ => (), // Unreachable.
         }
@@ -497,15 +505,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.intern(self.lexeme())
     }
 
-    fn literal(&mut self, token_type: TokenType) {
-        self.emit_bytes(&[match token_type {
-            TokenType::False => Op::False as u8,
-            TokenType::Nil => Op::Nil as u8,
-            TokenType::True => Op::True as u8,
-            _ => panic!("'{}' mistaken for literal", self.lexeme()),
-        }]);
-    }
-
     fn grouping(&mut self) -> Result<(), String> {
         self.expression()?;
         self.source
@@ -527,7 +526,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         let end_jump = self.emit_jump(Op::Jump);
 
         self.current_compiler().patch_jump(else_jump)?;
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
 
         self.parse_precedence(Prec::Or)?;
         self.current_compiler().patch_jump(end_jump)?;
@@ -595,8 +594,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn unary(&mut self, token_type: TokenType) -> Result<(), String> {
         self.parse_precedence(Prec::Unary)?;
         match token_type {
-            TokenType::Bang => self.emit_bytes(&[Op::Not as u8]),
-            TokenType::Minus => self.emit_bytes(&[Op::Negative as u8]),
+            TokenType::Bang => self.emit_op(Op::Not),
+            TokenType::Minus => self.emit_op(Op::Negative),
             _ => panic!(),
         }
         Ok(())
@@ -629,7 +628,9 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             TokenType::Identifier => self.variable(self.source.previous_token.lexeme, can_assign),
             TokenType::String => self.string(),
             TokenType::Number => self.number(),
-            TokenType::False | TokenType::True | TokenType::Nil => Ok(self.literal(token_type)),
+            TokenType::False => Ok(self.emit_op(Op::False)),
+            TokenType::Nil => Ok(self.emit_op(Op::Nil)),
+            TokenType::True => Ok(self.emit_op(Op::True)),
             TokenType::Super => self.super_(),
             TokenType::This => self.this(can_assign),
             _ => Err("Expect expression.".to_string()),
@@ -710,7 +711,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.block()?;
         let function = self.compilers.pop().unwrap().function;
         let count = function.upvalue_count;
-        let value = Value::Obj(function.downgrade());
+        let value = Value::Object(function.downgrade());
         let index = self.current_compiler().make_constant(value)?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 
@@ -761,7 +762,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.current_compiler().add_local("super")?;
             self.define_variable(0);
             self.variable(class_name, false)?;
-            self.emit_bytes(&[Op::Inherit as u8]);
+            self.emit_op(Op::Inherit);
             self.has_super = true
         }
 
@@ -780,7 +781,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             }
             self.method()?;
         }
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
 
         if self.has_super {
             self.end_scope();
@@ -803,7 +804,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if self.source.match_type(TokenType::Equal) {
             self.expression()?;
         } else {
-            self.emit_bytes(&[Op::Nil as u8])
+            self.emit_op(Op::Nil)
         }
         self.source.consume(
             TokenType::Semicolon,
@@ -817,7 +818,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.expression()?;
         self.source
             .consume(TokenType::Semicolon, "Expect ';' after expression.")?;
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
         Ok(())
     }
 
@@ -842,14 +843,14 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
             // Jump out of the loop if the condition is false.
             exit_jump = Some(self.emit_jump(Op::JumpIfFalse));
-            self.emit_bytes(&[Op::Pop as u8]); // Condition.
+            self.emit_op(Op::Pop); // Condition.
         }
 
         if !self.source.match_type(TokenType::RightParen) {
             let body_jump = self.emit_jump(Op::Jump);
             let increment_start = self.current_compiler().count();
             self.expression()?;
-            self.emit_bytes(&[Op::Pop as u8]);
+            self.emit_op(Op::Pop);
             self.source
                 .consume(TokenType::RightParen, "Expect ')' after for clauses.")?;
 
@@ -862,7 +863,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_loop(loop_start)?;
         if let Some(i) = exit_jump {
             self.current_compiler().patch_jump(i)?;
-            self.emit_bytes(&[Op::Pop as u8]);
+            self.emit_op(Op::Pop);
         }
         self.end_scope();
         Ok(())
@@ -876,11 +877,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             .consume(TokenType::RightParen, "Expect ')' after condition.")?;
 
         let then_jump = self.emit_jump(Op::JumpIfFalse);
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
         self.statement()?;
         let else_jump = self.emit_jump(Op::Jump);
         self.current_compiler().patch_jump(then_jump)?;
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
         if self.source.match_type(TokenType::Else) {
             self.statement()?;
         }
@@ -892,7 +893,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.expression()?;
         self.source
             .consume(TokenType::Semicolon, "Expect ';' after value.")?;
-        self.emit_bytes(&[Op::Print as u8]);
+        self.emit_op(Op::Print);
         Ok(())
     }
 
@@ -912,7 +913,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.expression()?;
             self.source
                 .consume(TokenType::Semicolon, "Expect ';' after return value.")?;
-            self.emit_bytes(&[Op::Return as u8]);
+            self.emit_op(Op::Return);
             Ok(())
         }
     }
@@ -926,12 +927,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             .consume(TokenType::RightParen, "Expect ')' after condition.")?;
 
         let exit_jump = self.emit_jump(Op::JumpIfFalse);
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
         self.statement()?;
         self.emit_loop(loop_start)?;
 
         self.current_compiler().patch_jump(exit_jump)?;
-        self.emit_bytes(&[Op::Pop as u8]);
+        self.emit_op(Op::Pop);
         Ok(())
     }
 
