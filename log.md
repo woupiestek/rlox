@@ -1,5 +1,9 @@
 # Rlox
 
+## 2023-05-25
+
+Main has stack overflow on 'hello world'. Big frames or endless loop?
+
 ## 2023-05-24
 
 ### driven nuts

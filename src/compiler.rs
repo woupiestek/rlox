@@ -1,13 +1,14 @@
 use crate::{
     chunk::Op,
-    memory::Heap,
+    memory::{Heap, Obj},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
 };
 
 const U8_COUNT: usize = 0x100;
 
-pub enum Precedence {
+#[derive(PartialEq, PartialOrd)]
+pub enum Prec {
     None,
     Assignment, // =
     Or,         // or
@@ -18,9 +19,25 @@ pub enum Precedence {
     Factor,     // * /
     Unary,      // ! -
     Call,       // . ()
-    Primary,
 }
 
+impl TokenType {
+    fn precedence(&self) -> Prec {
+        match self {
+            TokenType::LeftParen | TokenType::Dot => Prec::Call,
+            TokenType::Minus | TokenType::Plus => Prec::Term,
+            TokenType::Slash | TokenType::Star => Prec::Factor,
+            TokenType::BangEqual | TokenType::EqualEqual => Prec::Equality,
+            TokenType::Greater
+            | TokenType::GreaterEqual
+            | TokenType::Less
+            | TokenType::LessEqual => Prec::Comparison,
+            TokenType::And => Prec::And,
+            TokenType::Or => Prec::Or,
+            _ => Prec::None,
+        }
+    }
+}
 // make this smaller later
 #[derive(Clone, Copy)]
 struct Local<'src> {
@@ -55,7 +72,7 @@ enum FunctionType {
 
 struct Compiler<'src> {
     function_type: FunctionType,
-    function: Function,
+    function: Obj<Function>,
     // same idea?
     upvalues: [Upvalue; U8_COUNT],
     scope_depth: u16,
@@ -65,9 +82,9 @@ struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    fn new(function_type: FunctionType) -> Self {
+    fn new(function_type: FunctionType, heap: &mut Heap) -> Self {
         Self {
-            function: Function::new(),
+            function: heap.store(Function::new()),
             upvalues: [Upvalue {
                 index: 0,
                 is_local: false,
@@ -86,7 +103,6 @@ impl<'src> Compiler<'src> {
                 return Ok(None);
             } else {
                 i -= 1;
-                continue;
             }
             let local = &self.locals[i];
             if local.name == name {
@@ -183,13 +199,6 @@ impl<'src> Source<'src> {
         }
     }
 
-    // I guess this simplification means that:
-    //
-    // 1 error tokens are not always reported
-    // 2 sometimes an error token makes its way up to the parser and
-    // causes failure there.
-    //
-    // report and continue, maybe that should be the pattern.
     fn advance(&mut self) {
         self.previous_token = self.current_token;
         self.current_token = self.scanner.next();
@@ -216,7 +225,7 @@ impl<'src> Source<'src> {
         }
     }
 
-    fn synchronize(&mut self) -> Result<(), String> {
+    fn synchronize(&mut self) {
         loop {
             match self.current_token.token_type {
                 TokenType::Class
@@ -228,11 +237,11 @@ impl<'src> Source<'src> {
                 | TokenType::While
                 | TokenType::Print
                 | TokenType::Return => {
-                    return Ok(());
+                    return;
                 }
                 TokenType::Semicolon => {
                     self.advance();
-                    return Ok(());
+                    return;
                 }
                 _ => {
                     self.advance();
@@ -243,7 +252,7 @@ impl<'src> Source<'src> {
     }
 }
 
-pub struct Parser<'src> {
+pub struct Parser<'src, 'vm> {
     // source
     source: Source<'src>,
 
@@ -253,17 +262,21 @@ pub struct Parser<'src> {
     has_super: bool,
     had_super: Vec<bool>,
     // helper service
-    heap: Heap,
+    heap: &'vm mut Heap,
+
+    // status
+    had_error: bool,
 }
 
-impl<'src> Parser<'src> {
-    pub fn new(source: Source<'src>, heap: Heap) -> Self {
+impl<'src, 'vm> Parser<'src, 'vm> {
+    pub fn new(source: Source<'src>, heap: &'vm mut Heap) -> Self {
         Self {
             source,
-            compilers: vec![Compiler::new(FunctionType::Script)],
+            compilers: vec![Compiler::new(FunctionType::Script, heap)],
             has_super: false,
             had_super: Vec::new(),
             heap,
+            had_error: false,
         }
     }
 
@@ -287,8 +300,8 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn emit_jump(&mut self, instruction: u8) -> usize {
-        self.emit_bytes(&[instruction, 0xff, 0xff]);
+    fn emit_jump(&mut self, instruction: Op) -> usize {
+        self.emit_bytes(&[instruction as u8, 0xff, 0xff]);
         self.current_compiler().count() - 2
     }
 
@@ -333,7 +346,8 @@ impl<'src> Parser<'src> {
     }
 
     fn string_value(&mut self, str: &str) -> Value {
-        Value::Obj(self.heap.store(str.to_string()).downgrade())
+        let downgrade = self.heap.store(str.to_string()).downgrade();
+        Value::Obj(downgrade)
     }
 
     fn resolve_upvalue(&mut self, name: &str) -> Result<Option<u8>, String> {
@@ -391,14 +405,57 @@ impl<'src> Parser<'src> {
     }
 
     fn and(&mut self) -> Result<(), String> {
-        let end_jump = self.emit_jump(Op::JumpIfFalse as u8);
+        let end_jump = self.emit_jump(Op::JumpIfFalse);
         self.emit_bytes(&[Op::Pop as u8]);
-        self.parse_precedence(Precedence::And)?;
+        self.parse_precedence(Prec::And)?;
         self.current_compiler().patch_jump(end_jump)
     }
 
     fn binary(&mut self) -> Result<(), String> {
-        todo!()
+        match self.source.previous_token.token_type {
+            TokenType::BangEqual => {
+                self.parse_precedence(Prec::Equality)?;
+                self.emit_bytes(&[Op::Equal as u8, Op::Not as u8])
+            }
+            TokenType::EqualEqual => {
+                self.parse_precedence(Prec::Equality)?;
+                self.emit_bytes(&[Op::Equal as u8])
+            }
+            TokenType::Greater => {
+                self.parse_precedence(Prec::Equality)?;
+                self.emit_bytes(&[Op::Greater as u8])
+            }
+            TokenType::GreaterEqual => {
+                self.parse_precedence(Prec::Equality)?;
+                self.emit_bytes(&[Op::Less as u8, Op::Not as u8])
+            }
+            TokenType::Less => {
+                self.parse_precedence(Prec::Equality)?;
+                self.emit_bytes(&[Op::Less as u8])
+            }
+            TokenType::LessEqual => {
+                self.parse_precedence(Prec::Equality)?;
+                self.emit_bytes(&[Op::Greater as u8, Op::Not as u8])
+            }
+            TokenType::Plus => {
+                self.parse_precedence(Prec::Factor)?;
+                self.emit_bytes(&[Op::Add as u8])
+            }
+            TokenType::Minus => {
+                self.parse_precedence(Prec::Factor)?;
+                self.emit_bytes(&[Op::Subtract as u8])
+            }
+            TokenType::Star => {
+                self.parse_precedence(Prec::Unary)?;
+                self.emit_bytes(&[Op::Multiply as u8])
+            }
+            TokenType::Slash => {
+                self.parse_precedence(Prec::Unary)?;
+                self.emit_bytes(&[Op::Divide as u8])
+            }
+            _ => (), // Unreachable.
+        }
+        Ok(())
     }
 
     fn call(&mut self) -> Result<(), String> {
@@ -440,7 +497,7 @@ impl<'src> Parser<'src> {
         self.intern(self.lexeme())
     }
 
-    fn literal(&mut self, token_type: &TokenType) {
+    fn literal(&mut self, token_type: TokenType) {
         self.emit_bytes(&[match token_type {
             TokenType::False => Op::False as u8,
             TokenType::Nil => Op::Nil as u8,
@@ -465,11 +522,16 @@ impl<'src> Parser<'src> {
 
     // I want different logic...
     fn or(&mut self) -> Result<(), String> {
-        //let end_jump = self.emit_jump(Op::JumpIfFalse as u8);
-        //self.emit_bytes(&[Op::Pop as u8]);
-        self.parse_precedence(Precedence::Or)?;
-        //self.patch_jump(end_jump)
-        todo!();
+        // no negate top of stack, jump_if, etc.
+        let else_jump = self.emit_jump(Op::JumpIfFalse);
+        let end_jump = self.emit_jump(Op::Jump);
+
+        self.current_compiler().patch_jump(else_jump)?;
+        self.emit_bytes(&[Op::Pop as u8]);
+
+        self.parse_precedence(Prec::Or)?;
+        self.current_compiler().patch_jump(end_jump)?;
+        Ok(())
     }
 
     fn string(&mut self) -> Result<(), String> {
@@ -482,7 +544,7 @@ impl<'src> Parser<'src> {
     fn variable(&mut self, name: &str, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
             if let Some(arg) = self.current_compiler().resolve_local(name)? {
-                (arg, Op::GetLocal as u8, Op::SetGlobal as u8)
+                (arg, Op::GetLocal as u8, Op::SetLocal as u8)
             } else if let Some(arg) = self.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
             } else {
@@ -531,7 +593,7 @@ impl<'src> Parser<'src> {
     }
 
     fn unary(&mut self, token_type: TokenType) -> Result<(), String> {
-        self.parse_precedence(Precedence::Unary)?;
+        self.parse_precedence(Prec::Unary)?;
         match token_type {
             TokenType::Bang => self.emit_bytes(&[Op::Not as u8]),
             TokenType::Minus => self.emit_bytes(&[Op::Negative as u8]),
@@ -540,8 +602,55 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), String> {
-        todo!()
+    fn parse_infix(&mut self, token_type: TokenType, can_assign: bool) -> Result<(), String> {
+        match token_type {
+            TokenType::LeftParen => self.call(),
+            TokenType::Dot => self.dot(can_assign),
+            TokenType::Minus
+            | TokenType::Plus
+            | TokenType::Slash
+            | TokenType::Star
+            | TokenType::BangEqual
+            | TokenType::EqualEqual
+            | TokenType::Greater
+            | TokenType::GreaterEqual
+            | TokenType::Less
+            | TokenType::LessEqual => self.binary(),
+            TokenType::And => self.and(),
+            TokenType::Or => self.or(),
+            _ => Ok(()), // unreacheable
+        }
+    }
+
+    fn parse_prefix(&mut self, token_type: TokenType, can_assign: bool) -> Result<(), String> {
+        match token_type {
+            TokenType::LeftParen => self.grouping(),
+            TokenType::Minus | TokenType::Bang => self.unary(token_type),
+            TokenType::Identifier => self.variable(self.source.previous_token.lexeme, can_assign),
+            TokenType::String => self.string(),
+            TokenType::Number => self.number(),
+            TokenType::False | TokenType::True | TokenType::Nil => Ok(self.literal(token_type)),
+            TokenType::Super => self.super_(),
+            TokenType::This => self.this(can_assign),
+            _ => Err("Expect expression.".to_string()),
+        }
+    }
+
+    fn parse_precedence(&mut self, precedence: Prec) -> Result<(), String> {
+        self.source.advance();
+        let can_assign = precedence <= Prec::Assignment;
+        self.parse_prefix(self.source.previous_token.token_type, can_assign)?;
+
+        while precedence <= self.source.current_token.token_type.precedence() {
+            self.source.advance();
+            self.parse_infix(self.source.previous_token.token_type, can_assign)?;
+        }
+
+        if can_assign && self.source.match_type(TokenType::Equal) {
+            Err("Invalid assignment target.".to_string())
+        } else {
+            Ok(())
+        }
     }
 
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
@@ -563,7 +672,7 @@ impl<'src> Parser<'src> {
     }
 
     fn expression(&mut self) -> Result<(), String> {
-        self.parse_precedence(Precedence::Assignment)
+        self.parse_precedence(Prec::Assignment)
     }
 
     fn block(&mut self) -> Result<(), String> {
@@ -576,7 +685,8 @@ impl<'src> Parser<'src> {
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
-        self.compilers.push(Compiler::new(function_type));
+        self.compilers
+            .push(Compiler::new(function_type, &mut self.heap));
         self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
@@ -600,7 +710,7 @@ impl<'src> Parser<'src> {
         self.block()?;
         let function = self.compilers.pop().unwrap().function;
         let count = function.upvalue_count;
-        let value = Value::Obj(self.heap.store(function).downgrade());
+        let value = Value::Obj(function.downgrade());
         let index = self.current_compiler().make_constant(value)?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 
@@ -680,7 +790,7 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn function_declaration(&mut self) -> Result<(), String> {
+    fn fun_declaration(&mut self) -> Result<(), String> {
         let index = self.parse_variable("Expect function name.")?;
         self.current_compiler().mark_initialized();
         self.function(FunctionType::Function)?;
@@ -712,11 +822,168 @@ impl<'src> Parser<'src> {
     }
 
     // hiero
+    fn for_statement(&mut self) -> Result<(), String> {
+        self.begin_scope();
+        self.source
+            .consume(TokenType::LeftParen, "Expect '(' after 'for'.")?;
+        if !self.source.match_type(TokenType::Semicolon) {
+            if self.source.match_type(TokenType::Var) {
+                self.var_declaration()
+            } else {
+                self.expression_statement()
+            }?;
+        }
+        let mut loop_start = self.current_compiler().count();
+        let mut exit_jump: Option<usize> = None;
+        if !self.source.match_type(TokenType::Semicolon) {
+            self.expression()?;
+            self.source
+                .consume(TokenType::Semicolon, "Expect ';' after loop condition.")?;
+
+            // Jump out of the loop if the condition is false.
+            exit_jump = Some(self.emit_jump(Op::JumpIfFalse));
+            self.emit_bytes(&[Op::Pop as u8]); // Condition.
+        }
+
+        if !self.source.match_type(TokenType::RightParen) {
+            let body_jump = self.emit_jump(Op::Jump);
+            let increment_start = self.current_compiler().count();
+            self.expression()?;
+            self.emit_bytes(&[Op::Pop as u8]);
+            self.source
+                .consume(TokenType::RightParen, "Expect ')' after for clauses.")?;
+
+            self.emit_loop(loop_start)?;
+            loop_start = increment_start;
+            self.current_compiler().patch_jump(body_jump)?;
+        }
+
+        self.statement()?;
+        self.emit_loop(loop_start)?;
+        if let Some(i) = exit_jump {
+            self.current_compiler().patch_jump(i)?;
+            self.emit_bytes(&[Op::Pop as u8]);
+        }
+        self.end_scope();
+        Ok(())
+    }
+
+    fn if_statement(&mut self) -> Result<(), String> {
+        self.source
+            .consume(TokenType::LeftParen, "Expect '(' after 'if'.")?;
+        self.expression()?;
+        self.source
+            .consume(TokenType::RightParen, "Expect ')' after condition.")?;
+
+        let then_jump = self.emit_jump(Op::JumpIfFalse);
+        self.emit_bytes(&[Op::Pop as u8]);
+        self.statement()?;
+        let else_jump = self.emit_jump(Op::Jump);
+        self.current_compiler().patch_jump(then_jump)?;
+        self.emit_bytes(&[Op::Pop as u8]);
+        if self.source.match_type(TokenType::Else) {
+            self.statement()?;
+        }
+        self.current_compiler().patch_jump(else_jump)?;
+        Ok(())
+    }
+
+    fn print_statement(&mut self) -> Result<(), String> {
+        self.expression()?;
+        self.source
+            .consume(TokenType::Semicolon, "Expect ';' after value.")?;
+        self.emit_bytes(&[Op::Print as u8]);
+        Ok(())
+    }
+
+    fn return_statement(&mut self) -> Result<(), String> {
+        if self.current_compiler().function_type == FunctionType::Script {
+            return Err("Can't return from top-level code.".to_string());
+        }
+
+        if self.source.match_type(TokenType::Semicolon) {
+            self.emit_return();
+            Ok(())
+        } else {
+            if self.current_compiler().function_type == FunctionType::Initializer {
+                return Err("Can't return a value from an initializer.".to_string());
+            }
+
+            self.expression()?;
+            self.source
+                .consume(TokenType::Semicolon, "Expect ';' after return value.")?;
+            self.emit_bytes(&[Op::Return as u8]);
+            Ok(())
+        }
+    }
+
+    fn while_statement(&mut self) -> Result<(), String> {
+        let loop_start = self.current_compiler().count();
+        self.source
+            .consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
+        self.expression()?;
+        self.source
+            .consume(TokenType::RightParen, "Expect ')' after condition.")?;
+
+        let exit_jump = self.emit_jump(Op::JumpIfFalse);
+        self.emit_bytes(&[Op::Pop as u8]);
+        self.statement()?;
+        self.emit_loop(loop_start)?;
+
+        self.current_compiler().patch_jump(exit_jump)?;
+        self.emit_bytes(&[Op::Pop as u8]);
+        Ok(())
+    }
+
+    fn declaration(&mut self) {
+        let result = if self.source.match_type(TokenType::Class) {
+            self.class()
+        } else if self.source.match_type(TokenType::Fun) {
+            self.fun_declaration()
+        } else if self.source.match_type(TokenType::Var) {
+            self.var_declaration()
+        } else {
+            self.statement()
+        };
+
+        if let Err(msg) = result {
+            println!("{msg}");
+            self.had_error = true;
+            self.source.synchronize();
+        }
+    }
 
     fn statement(&mut self) -> Result<(), String> {
-        !todo!()
+        if self.source.match_type(TokenType::Print) {
+            self.print_statement()
+        } else if self.source.match_type(TokenType::For) {
+            self.for_statement()
+        } else if self.source.match_type(TokenType::If) {
+            self.if_statement()
+        } else if self.source.match_type(TokenType::Return) {
+            self.return_statement()
+        } else if self.source.match_type(TokenType::While) {
+            self.while_statement()
+        } else if self.source.match_type(TokenType::LeftBrace) {
+            self.begin_scope();
+            let result = self.block();
+            self.end_scope();
+            result
+        } else {
+            self.expression_statement()
+        }
     }
-    fn declaration(&mut self) {
-        !todo!()
+}
+
+pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Option<Obj<Function>> {
+    let mut parser: Parser<'src, 'hp> = Parser::new(Source::new(source), heap);
+    while !parser.source.match_type(TokenType::End) {
+        parser.declaration();
+    }
+    let obj = parser.current_compiler().function.clone();
+    if parser.had_error {
+        None
+    } else {
+        Some(obj)
     }
 }

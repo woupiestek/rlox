@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    compiler::compile,
     memory::{Heap, Obj},
     object::{Function, Upvalue, Value},
     stack::Stack,
@@ -39,7 +40,8 @@ impl VM {
             heap: Heap::new(),
         }
     }
-    pub fn interpret(&self, source: &str) -> Result<(), String> {
+    pub fn interpret(&mut self, source: &str) -> Result<(), String> {
+        compile(source, &mut self.heap);
         println!("{source}");
         Ok(())
     }

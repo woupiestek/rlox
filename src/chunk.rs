@@ -18,8 +18,17 @@ pub enum Op {
     GetProperty,
     SetProperty,
     GetSuper,
+    Equal,
+    Greater,
+    Less,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
     Not,
     Negative,
+    Print,
+    Jump,
     JumpIfFalse,
     Loop,
     Call,
@@ -34,9 +43,9 @@ pub enum Op {
 }
 
 pub struct Chunk {
-    code: Vec<u8>,
-    lines: Vec<u16>,
-    constants: Vec<Value>,
+    pub code: Vec<u8>,
+    pub lines: Vec<u16>,
+    pub constants: Vec<Value>,
 }
 
 impl Chunk {

@@ -65,6 +65,14 @@ impl<T: Traceable> Obj<T> {
     }
 }
 
+impl<T> Clone for Obj<T> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr.clone(),
+        }
+    }
+}
+
 impl<T> Deref for Obj<T> {
     type Target = T;
 
@@ -153,26 +161,22 @@ impl Heap {
         self.sweep();
     }
 
-    pub fn count_objects(&self) -> usize {
-        self.handles.len()
-    }
-
     fn get_handler(&self, handle: &Handle) -> &Handler {
         &self.handlers[handle.kind() as usize]
     }
     fn drop_handle(&self, handle: Handle) {
         (self.get_handler(&handle).drop)(handle)
     }
-    fn trace_handle(&self, handle: &mut Handle, collector: &mut Vec<Handle>) {
-        (self.get_handler(&handle).trace)(handle, collector)
-    }
+
     fn trace(&self, mut roots: Vec<Handle>) {
         while let Some(mut handle) = roots.pop() {
             if handle.is_marked() {
                 continue;
             }
             handle.mark(true);
-            self.trace_handle(&mut handle, &mut roots);
+            let handle: &mut Handle = &mut handle;
+            let collector: &mut Vec<Handle> = &mut roots;
+            (self.get_handler(&handle).trace)(handle, collector);
         }
     }
     fn sweep(&mut self) {

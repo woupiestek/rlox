@@ -9,6 +9,6 @@ mod stack;
 mod vm;
 
 fn main() {
-    let vm = VM::new();
+    let mut vm = VM::new();
     vm.interpret("Hello, world!").unwrap();
 }

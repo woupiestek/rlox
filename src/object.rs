@@ -42,7 +42,16 @@ impl Function {
 impl Traceable for Function {
     const KIND: u8 = 1;
 
-    fn trace(&self, _collector: &mut Vec<Handle>) {}
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        if let Some(n) = &self.name {
+            collector.push(n.downgrade())
+        }
+        for value in &self.chunk.constants {
+            if let Value::Obj(h) = value {
+                collector.push(*h)
+            }
+        }
+    }
 }
 
 pub struct Class {
