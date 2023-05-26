@@ -74,30 +74,25 @@ struct Compiler<'src> {
     function_type: FunctionType,
     function: Obj<Function>,
     // same idea?
-    upvalues: [Upvalue; U8_COUNT],
+    upvalues: Vec<Upvalue>,
     scope_depth: u16,
     // have one local vec, the compiler just keeping offsets?
-    locals: [Local<'src>; U8_COUNT],
-    local_count: usize,
+    locals: Vec<Local<'src>>,
 }
 
 impl<'src> Compiler<'src> {
     fn new(function_type: FunctionType, heap: &mut Heap) -> Self {
         Self {
             function: heap.store(Function::new()),
-            upvalues: [Upvalue {
-                index: 0,
-                is_local: false,
-            }; U8_COUNT],
+            upvalues: Vec::new(),
             function_type,
             scope_depth: 0,
-            locals: [Local::new(""); U8_COUNT],
-            local_count: 0,
+            locals: Vec::new(),
         }
     }
 
     fn resolve_local(&self, name: &str) -> Result<Option<u8>, String> {
-        let mut i = self.local_count;
+        let mut i = self.locals.len();
         loop {
             if i == 0 {
                 return Ok(None);
@@ -116,11 +111,10 @@ impl<'src> Compiler<'src> {
     }
 
     fn add_local(&mut self, name: &'src str) -> Result<(), String> {
-        if self.local_count == U8_COUNT {
+        if self.locals.len() == U8_COUNT {
             return Err("Too many local variables in function.".to_string());
         }
-        self.locals[self.local_count] = Local::new(name);
-        self.local_count += 1;
+        self.locals.push(Local::new(name));
         return Ok(());
     }
 
@@ -128,7 +122,7 @@ impl<'src> Compiler<'src> {
         if self.scope_depth == 0 {
             return false;
         }
-        let i = self.local_count - 1;
+        let i = self.locals.len() - 1;
         self.locals[i].depth = Some(self.scope_depth);
         return true;
     }
@@ -144,7 +138,7 @@ impl<'src> Compiler<'src> {
         if count == u8::MAX {
             return Err("Too many closure variables in function.".to_string());
         }
-        self.upvalues[count as usize] = Upvalue { index, is_local };
+        self.upvalues.push(Upvalue { index, is_local });
         self.function.upvalue_count += 1;
         Ok(count as u8)
     }
@@ -259,8 +253,9 @@ pub struct Parser<'src, 'vm> {
     // targets
     compilers: Vec<Compiler<'src>>,
 
-    has_super: bool,
-    had_super: Vec<bool>,
+    has_super: u128,
+    class_depth: u8,
+
     // helper service
     heap: &'vm mut Heap,
 
@@ -273,8 +268,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Self {
             source,
             compilers: vec![Compiler::new(FunctionType::Script, heap)],
-            has_super: false,
-            had_super: Vec::new(),
+            has_super: 0,
+            class_depth: 0,
             heap,
             had_error: false,
         }
@@ -331,25 +326,28 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn end_scope(&mut self) {
+        let scope_depth = self.current_compiler().scope_depth;
         self.current_compiler().scope_depth -= 1;
         loop {
-            let local_count = self.current_compiler().local_count;
-            if local_count == 0 {
-                return;
-            };
-            let local = self.current_compiler().locals[local_count - 1];
-            if let Some(depth) = local.depth {
-                if depth > self.current_compiler().scope_depth {
-                    self.emit_bytes(&[if local.is_captured {
-                        Op::CloseUpvalue
-                    } else {
-                        Op::Pop
-                    } as u8]);
-                    self.current_compiler().local_count -= 1;
-                    continue;
+            match self.current_compiler().locals.last() {
+                None => return,
+                Some(local) => {
+                    if local.depth.is_none() || local.depth.unwrap() <= scope_depth {
+                        return;
+                    }
                 }
             }
-            return;
+            let local = self.current_compiler().locals.pop().unwrap();
+            let depth = local.depth.unwrap();
+            if depth > scope_depth {
+                self.emit_bytes(&[if local.is_captured {
+                    Op::CloseUpvalue
+                } else {
+                    Op::Pop
+                } as u8]);
+                self.current_compiler().locals.pop();
+                continue;
+            }
         }
     }
 
@@ -566,7 +564,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if self.compilers.is_empty() {
             return Err("Can't use 'super' outside of a class.".to_string());
         }
-        if !self.has_super {
+        if self.has_super & 1 == 0 {
             return Err("Can't use 'super' in a class with no superclass.".to_string());
         }
         self.source
@@ -709,7 +707,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.source
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
-        let function = self.compilers.pop().unwrap().function;
+        let function = self.compilers.pop().unwrap().function.clone();
         let count = function.upvalue_count;
         let value = Value::Object(function.downgrade());
         let index = self.current_compiler().make_constant(value)?;
@@ -746,8 +744,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.emit_bytes(&[Op::Class as u8, index]);
         self.define_variable(index);
 
-        self.had_super.push(self.has_super);
-        self.has_super = false;
+        if self.class_depth == 127 {
+            return Err("Cannot nest classes that deep".to_string());
+        }
+        self.has_super <<= 1;
+        self.class_depth += 1;
 
         // super decl
         if self.source.match_type(TokenType::Less) {
@@ -763,7 +764,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             self.define_variable(0);
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
-            self.has_super = true
+            self.has_super &= 1;
         }
 
         // why this again?
@@ -783,11 +784,12 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
         self.emit_op(Op::Pop);
 
-        if self.has_super {
+        if self.has_super & 1 == 1 {
             self.end_scope();
         }
 
-        self.has_super = self.had_super.pop().unwrap();
+        self.has_super >>= 1;
+        self.class_depth -= 1;
         Ok(())
     }
 

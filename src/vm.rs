@@ -1,12 +1,9 @@
-use std::{
-    collections::HashMap,
-    time::{self, Instant, UNIX_EPOCH},
-};
+use std::{collections::HashMap, time};
 
 use crate::{
     compiler::compile,
     memory::{Heap, Obj},
-    object::{Closure, Function, NativeFn, Upvalue, Value},
+    object::{Closure, Native, Upvalue, Value},
     stack::Stack,
 };
 
@@ -21,7 +18,7 @@ fn clock_native(_args: &[Value]) -> Value {
     }
 }
 
-const CLOCK_NATIVE: NativeFn = NativeFn(clock_native);
+const CLOCK_NATIVE: Native = Native(clock_native);
 
 #[derive(Copy, Clone)]
 struct CallFrame<'vm> {
@@ -34,8 +31,6 @@ struct CallFrame<'vm> {
 pub struct VM<'vm> {
     values: [Value; STACK_SIZE],
     count: usize,
-    // once we know what goes here,
-    // we can arrays here too.
     frames: Stack<CallFrame<'vm>>,
     open_upvalues: Stack<Obj<Upvalue>>,
     globals: HashMap<String, Value>,
@@ -45,7 +40,7 @@ pub struct VM<'vm> {
 
 impl<'vm> VM<'vm> {
     pub fn new() -> Self {
-        Self {
+        let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             count: 0,
             frames: Stack::new(MAX_FRAMES),
@@ -53,7 +48,9 @@ impl<'vm> VM<'vm> {
             globals: HashMap::new(),
             init_string: "init".to_string(),
             heap: Heap::new(),
-        }
+        };
+        s.define_native("clock", CLOCK_NATIVE);
+        s
     }
 
     fn push(&mut self, value: Value) {
@@ -67,7 +64,7 @@ impl<'vm> VM<'vm> {
     }
 
     fn peek(&self, distance: usize) -> Value {
-        self.values[self.count - 1 - distance]
+        self.values[self.values.len() - 1 - distance]
     }
 
     fn call(&mut self, closure: &'vm Closure, arg_count: u8) -> Result<(), String> {
@@ -83,7 +80,7 @@ impl<'vm> VM<'vm> {
         }
         self.frames.push(CallFrame {
             ip: 0,
-            slots: self.count,
+            slots: 10, // self.count,
             closure: Some(closure),
         });
         Ok(())
@@ -91,7 +88,7 @@ impl<'vm> VM<'vm> {
 
     // hiero
 
-    fn define_native(&mut self, name: &str, native_fn: NativeFn) {
+    fn define_native(&mut self, name: &str, native_fn: Native) {
         let value = Value::Object(self.heap.store(native_fn).downgrade());
         self.globals.insert(name.to_string(), value);
     }
@@ -100,5 +97,22 @@ impl<'vm> VM<'vm> {
         compile(source, &mut self.heap);
         println!("{source}");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_stack_overflow_on_init() {
+        VM::new();
+    }
+
+    #[test]
+    fn interpret_simply_string() {
+        let mut vm = VM::new();
+        // access violation
+        vm.interpret("").unwrap();
     }
 }

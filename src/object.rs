@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     chunk::Chunk,
-    memory::{Handle, Obj, Traceable},
+    memory::{Handle, Kind, Obj, Traceable},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -17,7 +17,7 @@ pub enum Value {
 }
 
 impl Traceable for String {
-    const KIND: u8 = 0;
+    const KIND: Kind = Kind::String;
     fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
 
@@ -40,7 +40,7 @@ impl Function {
 }
 
 impl Traceable for Function {
-    const KIND: u8 = 1;
+    const KIND: Kind = Kind::Function;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         if let Some(n) = &self.name {
@@ -69,7 +69,7 @@ impl Class {
 }
 
 impl Traceable for Class {
-    const KIND: u8 = 2;
+    const KIND: Kind = Kind::Class;
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(self.name.downgrade());
         for method in self.methods.values() {
@@ -84,7 +84,7 @@ pub struct Upvalue {
 }
 
 impl Traceable for Upvalue {
-    const KIND: u8 = 3;
+    const KIND: Kind = Kind::Upvalue;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         if let Some(Value::Object(handle)) = self.closed {
@@ -110,7 +110,7 @@ impl Closure {
 }
 
 impl Traceable for Closure {
-    const KIND: u8 = 4;
+    const KIND: Kind = Kind::Closure;
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(self.function.downgrade());
         for upvalue in self.upvalues.iter() {
@@ -125,7 +125,7 @@ pub struct Instance {
 }
 
 impl Traceable for Instance {
-    const KIND: u8 = 5;
+    const KIND: Kind = Kind::Instance;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         for value in self.properties.values() {
@@ -157,7 +157,7 @@ impl BoundMethod {
 }
 
 impl Traceable for BoundMethod {
-    const KIND: u8 = 6;
+    const KIND: Kind = Kind::BoundMethod;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(self.receiver.downgrade());
@@ -166,16 +166,16 @@ impl Traceable for BoundMethod {
 }
 
 #[derive(Copy, Clone)]
-pub struct NativeFn(pub fn(args: &[Value]) -> Value);
+pub struct Native(pub fn(args: &[Value]) -> Value);
 
-impl std::fmt::Debug for NativeFn {
+impl std::fmt::Debug for Native {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<native function>")
     }
 }
 
-impl Traceable for NativeFn {
-    const KIND: u8 = 7;
+impl Traceable for Native {
+    const KIND: Kind = Kind::Native;
 
     fn trace(&self, _collector: &mut Vec<Handle>) {}
 }

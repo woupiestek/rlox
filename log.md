@@ -2,6 +2,12 @@
 
 ## 2023-05-25
 
+### first serious debug
+
+Ran into stack overflow and status_heap_corruption, but got out of it.
+
+## 2023-05-25
+
 Main has stack overflow on 'hello world'. Big frames or endless loop?
 
 The rust version takes more time, but that is because I am trying to learn the

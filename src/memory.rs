@@ -5,12 +5,27 @@ use std::{
     ptr,
 };
 
+use crate::object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue};
+
 // note that usually 8 byte is allocated for this due to alignment, so plenty of space!
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Kind {
+    BoundMethod,
+    Class,
+    Closure,
+    Function,
+    Instance,
+    Native,
+    String,
+    Upvalue,
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Header {
     pub is_marked: bool,
-    kind: u8,
+    kind: Kind,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -19,7 +34,7 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn kind(&self) -> u8 {
+    pub fn kind(&self) -> Kind {
         unsafe { (*self.ptr).kind }
     }
     fn is_marked(&self) -> bool {
@@ -27,15 +42,6 @@ impl Handle {
     }
     fn mark(&mut self, value: bool) {
         unsafe { (*self.ptr).is_marked = value }
-    }
-    pub fn upgrade<T: Traceable>(&self) -> Option<Obj<T>> {
-        if T::KIND == self.kind() {
-            Some(Obj {
-                ptr: self.ptr as *mut (Header, T),
-            })
-        } else {
-            None
-        }
     }
 }
 
@@ -49,9 +55,16 @@ impl<T: Traceable> Obj<T> {
         unsafe {
             let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
             assert!(!ptr.is_null());
-            (*ptr).0.is_marked = false;
-            (*ptr).0.kind = T::KIND;
-            (*ptr).1 = t;
+            ptr::write(
+                ptr,
+                (
+                    Header {
+                        is_marked: false,
+                        kind: T::KIND,
+                    },
+                    t,
+                ),
+            );
             Obj { ptr }
         }
     }
@@ -59,9 +72,6 @@ impl<T: Traceable> Obj<T> {
         Handle {
             ptr: self.ptr as *mut Header,
         }
-    }
-    fn drop(self) {
-        unsafe { ptr::drop_in_place(self.ptr) }
     }
 }
 
@@ -91,7 +101,7 @@ pub trait Traceable
 where
     Self: Sized,
 {
-    const KIND: u8;
+    const KIND: Kind;
     fn trace(&self, collector: &mut Vec<Handle>);
     fn upgrade(handle: &Handle) -> Option<Obj<Self>> {
         if Self::KIND == handle.kind() {
@@ -102,54 +112,47 @@ where
             None
         }
     }
-}
-
-struct Handler {
-    drop: fn(Handle),
-    trace: fn(&mut Handle, &mut Vec<Handle>),
-}
-
-impl PartialEq for Handler {
-    fn eq(&self, other: &Self) -> bool {
-        self == other
+    fn drop_handle(handle: Handle) {
+        assert_eq!(handle.kind(), Self::KIND);
+        let ptr = handle.ptr as *mut (Header, Self);
+        unsafe { ptr::drop_in_place(ptr) }
     }
-}
-
-impl Handler {
-    pub fn of<T: Traceable>() -> Self {
-        Self {
-            drop: |handle| {
-                T::upgrade(&handle).unwrap().drop();
-            },
-            trace: |handle, collector| {
-                T::upgrade(handle).unwrap().trace(collector);
-            },
+    fn trace_handle(handle: &Handle, collector: &mut Vec<Handle>) {
+        assert_eq!(handle.kind(), Self::KIND);
+        let ptr = handle.ptr as *mut (Header, Self);
+        unsafe {
+            (*ptr).1.trace(collector);
         }
     }
 }
-const DEFAULT_HANDLER: Handler = Handler {
-    drop: |_handle| panic!(),
-    trace: |_handle, _collector| panic!(),
-};
+
+macro_rules! trace_handle {
+    ($handle:expr,$traceable:ty, $collector:expr) => {{
+        let ptr = $handle.ptr as *mut (Header, $traceable);
+        unsafe {
+            (*ptr).1.trace($collector);
+        }
+    }};
+}
+macro_rules! drop_handle {
+    ($handle:expr,$traceable:ty) => {{
+        let ptr = $handle.ptr as *mut (Header, Self);
+        unsafe { ptr::drop_in_place(ptr) }
+    }};
+}
 
 pub struct Heap {
     handles: Vec<Handle>,
-    // my answer to the big match statement...
-    handlers: [Handler; 8],
 }
 
 impl Heap {
     pub fn new() -> Self {
         Self {
             handles: Vec::with_capacity(1 << 12),
-            handlers: [DEFAULT_HANDLER; 8],
         }
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        if self.handlers[T::KIND as usize] == DEFAULT_HANDLER {
-            self.handlers[T::KIND as usize] = Handler::of::<T>();
-        }
         let typed = Obj::from(t);
         self.handles.push(typed.downgrade());
         typed
@@ -161,22 +164,38 @@ impl Heap {
         self.sweep();
     }
 
-    fn get_handler(&self, handle: &Handle) -> &Handler {
-        &self.handlers[handle.kind() as usize]
-    }
     fn drop_handle(&self, handle: Handle) {
-        (self.get_handler(&handle).drop)(handle)
+        match handle.kind() {
+            Kind::String => drop_handle!(handle, String),
+            Kind::Function => drop_handle!(handle, Function),
+            Kind::Upvalue => drop_handle!(handle, Upvalue),
+            Kind::BoundMethod => drop_handle!(handle, BoundMethod),
+            Kind::Class => drop_handle!(handle, Class),
+            Kind::Closure => drop_handle!(handle, Closure),
+            Kind::Instance => drop_handle!(handle, Instance),
+            Kind::Native => drop_handle!(handle, Native),
+        }
     }
 
+    fn trace_handle(&self, handle: Handle, collector: &mut Vec<Handle>) {
+        match handle.kind() {
+            Kind::String => trace_handle!(handle, String, collector),
+            Kind::Function => trace_handle!(handle, Function, collector),
+            Kind::Upvalue => trace_handle!(handle, Upvalue, collector),
+            Kind::BoundMethod => trace_handle!(handle, BoundMethod, collector),
+            Kind::Class => trace_handle!(handle, Class, collector),
+            Kind::Closure => trace_handle!(handle, Closure, collector),
+            Kind::Instance => trace_handle!(handle, Instance, collector),
+            Kind::Native => trace_handle!(handle, Native, collector),
+        }
+    }
     fn trace(&self, mut roots: Vec<Handle>) {
         while let Some(mut handle) = roots.pop() {
             if handle.is_marked() {
                 continue;
             }
             handle.mark(true);
-            let handle: &mut Handle = &mut handle;
-            let collector: &mut Vec<Handle> = &mut roots;
-            (self.get_handler(&handle).trace)(handle, collector);
+            self.trace_handle(handle, &mut roots);
         }
     }
     fn sweep(&mut self) {
@@ -212,5 +231,21 @@ impl Drop for Heap {
         while let Some(handle) = self.handles.pop() {
             self.drop_handle(handle)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_stack_overflow_on_init() {
+        Heap::new();
+    }
+
+    #[test]
+    fn store_simple_values() {
+        let mut heap = Heap::new();
+        heap.store("".to_string());
     }
 }

@@ -54,10 +54,6 @@ pub enum TokenType {
     End,
 }
 
-impl TokenType {
-    pub const COUNT: usize = TokenType::End as usize + 1;
-}
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Token<'src> {
     pub token_type: TokenType,
@@ -89,7 +85,7 @@ pub struct Scanner<'src> {
 impl<'src> Scanner<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
-            source, //.as_bytes(),
+            source,
             current: 0,
             line: 1,
             column: 1,
