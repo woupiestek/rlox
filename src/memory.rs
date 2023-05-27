@@ -51,13 +51,13 @@ pub struct Obj<Body: Traceable> {
 }
 
 impl<T: Traceable> Obj<T> {
-    pub fn downgrade(&self) -> Handle {
+    pub fn as_handle(&self) -> Handle {
         Handle {
             ptr: self.ptr as *mut Header,
         }
     }
     pub fn as_value(&self) -> Value {
-        Value::Object(self.downgrade())
+        Value::Object(self.as_handle())
     }
 }
 
@@ -97,8 +97,18 @@ where
 {
     const KIND: Kind;
     fn trace(&self, collector: &mut Vec<Handle>);
-    fn upgrade(handle: &Handle) -> Result<Obj<Self>, String> {
-        if Self::KIND == handle.kind() {
+    fn test_handle(handle: &Handle) -> bool {
+        handle.kind() == Self::KIND
+    }
+    fn test_value(value: &Value) -> bool {
+        if let Value::Object(handle) = value {
+            Self::test_handle(handle)
+        } else {
+            false
+        }
+    }
+    fn obj_from_handle(handle: &Handle) -> Result<Obj<Self>, String> {
+        if Self::test_handle(handle) {
             Ok(Obj {
                 ptr: handle.ptr as *mut (Header, Self),
             })
@@ -110,8 +120,16 @@ where
             ))
         }
     }
-    fn cast(handle: &Handle) -> Result<&Self, String> {
-        if Self::KIND == handle.kind() {
+    fn obj_from_value(value: &Value) -> Result<Obj<Self>, String> {
+        if let Value::Object(handle) = value {
+            Self::obj_from_handle(&handle)
+        } else {
+            Err(format!("Cannot cast {:?} to {:?}", value, Self::KIND))
+        }
+    }
+
+    fn from_handle(handle: &Handle) -> Result<&Self, String> {
+        if Self::test_handle(handle) {
             let ptr = handle.ptr as *mut (Header, Self);
             Ok(unsafe { &(*ptr).1 })
         } else {
@@ -120,6 +138,14 @@ where
                 handle.kind(),
                 Self::KIND
             ))
+        }
+    }
+
+    fn from_value(value: &Value) -> Result<&Self, String> {
+        if let Value::Object(handle) = value {
+            Self::from_handle(&handle)
+        } else {
+            Err(format!("Cannot cast {:?} to {:?}", value, Self::KIND))
         }
     }
 }
@@ -168,7 +194,7 @@ impl Heap {
             );
             Obj { ptr }
         };
-        self.handles.push(typed.downgrade());
+        self.handles.push(typed.as_handle());
         typed
     }
 

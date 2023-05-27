@@ -1,4 +1,4 @@
-use crate::{object::Value};
+use crate::object::Value;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

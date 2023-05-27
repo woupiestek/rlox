@@ -351,7 +351,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     fn string_value(&mut self, str: &str) -> Value {
-        let downgrade = self.heap.store(str.to_string()).downgrade();
+        let downgrade = self.heap.store(str.to_string()).as_handle();
         Value::Object(downgrade)
     }
 
@@ -708,7 +708,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.block()?;
         let function = self.compilers.pop().unwrap().function.clone();
         let count = function.upvalue_count;
-        let value = Value::Object(function.downgrade());
+        let value = Value::Object(function.as_handle());
         let index = self.current_compiler().make_constant(value)?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 

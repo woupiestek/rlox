@@ -6,6 +6,11 @@
 
 Ran into a seg fault, but fixed a forgotten change in a macro.
 
+### upvalue at runtime
+
+a collation where we can insert anywhere, but remove quickly form the end.
+so like a heap.
+
 ## 2023-05-26
 
 ### first serious debug

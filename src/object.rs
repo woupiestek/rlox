@@ -16,6 +16,15 @@ pub enum Value {
     Object(Handle),
 }
 
+impl Value {
+    pub fn is_falsey(&self) -> bool {
+        match self {
+            Value::Nil | Value::False => true,
+            _ => false,
+        }
+    }
+}
+
 impl Traceable for String {
     const KIND: Kind = Kind::String;
     fn trace(&self, _collector: &mut Vec<Handle>) {}
@@ -44,7 +53,7 @@ impl Traceable for Function {
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         if let Some(n) = &self.name {
-            collector.push(n.downgrade())
+            collector.push(n.as_handle())
         }
         for value in &self.chunk.constants {
             if let Value::Object(h) = value {
@@ -71,23 +80,34 @@ impl Class {
 impl Traceable for Class {
     const KIND: Kind = Kind::Class;
     fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.name.downgrade());
+        collector.push(self.name.as_handle());
         for method in self.methods.values() {
-            collector.push(method.downgrade());
+            collector.push(method.as_handle());
         }
     }
 }
 
 pub struct Upvalue {
-    location: usize, // don't know yet
-    closed: Option<Value>,
+    pub location: usize, // don't know yet
+    pub closed: Value,
+    pub next: Option<Obj<Upvalue>>,
+}
+
+impl Upvalue {
+    pub fn new(location: usize) -> Self {
+        Self {
+            location,
+            closed: Value::Nil,
+            next: None,
+        }
+    }
 }
 
 impl Traceable for Upvalue {
     const KIND: Kind = Kind::Upvalue;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        if let Some(Value::Object(handle)) = self.closed {
+        if let Value::Object(handle) = self.closed {
             collector.push(handle);
         }
     }
@@ -112,16 +132,16 @@ impl Closure {
 impl Traceable for Closure {
     const KIND: Kind = Kind::Closure;
     fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.function.downgrade());
+        collector.push(self.function.as_handle());
         for upvalue in self.upvalues.iter() {
-            collector.push(upvalue.downgrade());
+            collector.push(upvalue.as_handle());
         }
     }
 }
 
 pub struct Instance {
-    class: Obj<Class>,
-    properties: HashMap<String, Value>,
+    pub class: Obj<Class>,
+    pub properties: HashMap<String, Value>,
 }
 
 impl Traceable for Instance {
@@ -160,8 +180,8 @@ impl Traceable for BoundMethod {
     const KIND: Kind = Kind::BoundMethod;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.receiver.downgrade());
-        collector.push(self.method.downgrade());
+        collector.push(self.receiver.as_handle());
+        collector.push(self.method.as_handle());
     }
 }
 

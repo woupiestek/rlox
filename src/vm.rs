@@ -1,6 +1,7 @@
 use std::{collections::HashMap, time};
 
 use crate::{
+    chunk::Op,
     common::{error, U8_COUNT},
     compiler::compile,
     memory::{Heap, Kind, Obj, Traceable},
@@ -22,16 +23,59 @@ const CLOCK_NATIVE: Native = Native(clock_native);
 
 #[derive(Copy, Clone)]
 struct CallFrame {
-    ip: usize,
+    ip: isize,
     slots: usize,
     closure: Option<Obj<Closure>>,
 }
+
+impl CallFrame {
+    fn new(slots: usize) -> Self {
+        Self {
+            ip: -1,
+            slots,
+            closure: None,
+        }
+    }
+    fn code(&self, ip: isize) -> u8 {
+        self.closure.unwrap().function.chunk.code[ip as usize]
+    }
+    fn read_byte(&mut self) -> u8 {
+        self.ip += 1;
+        // this feels inefficient
+        self.code(self.ip)
+    }
+    fn read_short(&mut self) -> u16 {
+        self.ip += 2;
+        ((self.code(self.ip - 1) as u16) << 8) | (self.code(self.ip) as u16)
+    }
+
+    fn read_constant(&mut self) -> Value {
+        self.closure.unwrap().function.chunk.constants[self.read_byte() as usize]
+    }
+
+    fn read_string(&mut self) -> Result<Obj<String>, String> {
+        String::obj_from_value(&self.read_constant())
+    }
+}
+
+// #define BINARY_OP(valueType, op)                    \
+//   do                                                \
+//   {                                                 \
+//     if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) \
+//     {                                               \
+//       runtimeError("Operands must be numbers.");    \
+//       return INTERPRET_RUNTIME_ERROR;               \
+//     }                                               \
+//     double b = AS_NUMBER(pop());                    \
+//     double a = AS_NUMBER(pop());                    \
+//     push(valueType(a op b));                        \
+//   } while (false)
 
 pub struct VM {
     values: [Value; STACK_SIZE],
     count: usize,
     frames: Stack<CallFrame>,
-    open_upvalues: Stack<Obj<Upvalue>>,
+    open_upvalues: Option<Obj<Upvalue>>,
     globals: HashMap<String, Value>,
     init_string: String,
     heap: Heap,
@@ -43,13 +87,18 @@ impl VM {
             values: [Value::Nil; STACK_SIZE],
             count: 0,
             frames: Stack::new(MAX_FRAMES),
-            open_upvalues: Stack::new(U8_COUNT),
+            open_upvalues: None,
             globals: HashMap::new(),
             init_string: "init".to_string(),
             heap: Heap::new(),
         };
         s.define_native("clock", CLOCK_NATIVE);
         s
+    }
+
+    fn define_native(&mut self, name: &str, native_fn: Native) {
+        let value = Value::Object(self.heap.store(native_fn).as_handle());
+        self.globals.insert(name.to_string(), value);
     }
 
     fn push(&mut self, value: Value) {
@@ -90,24 +139,24 @@ impl VM {
             if let Value::Object(handle) = callee {
                 match handle.kind() {
                     Kind::BoundMethod => {
-                        let bm = BoundMethod::cast(&handle)?;
+                        let bm = BoundMethod::from_handle(&handle)?;
                         self.values[self.count - arity as usize - 1] = bm.receiver.as_value();
                         return self.call(bm.method, arity);
                     }
                     Kind::Class => {
-                        let class = Class::upgrade(&handle)?;
+                        let class = Class::obj_from_handle(&handle)?;
                         let instance = self.heap.store(Instance::new(class));
                         self.values[self.count - arity as usize - 1] =
-                            Value::Object(instance.downgrade());
+                            Value::Object(instance.as_handle());
                         if let Some(&init) = class.methods.get("init") {
                             return self.call(init, arity);
                         }
                     }
                     Kind::Closure => {
-                        return self.call(Closure::upgrade(&handle)?, arity);
+                        return self.call(Closure::obj_from_handle(&handle)?, arity);
                     }
                     Kind::Native => {
-                        let native = Native::cast(&handle)?;
+                        let native = Native::from_handle(&handle)?;
                         let result = native.0(&self.values[self.count - arity as usize..]);
                         self.count -= arity as usize + 1;
                         self.push(result);
@@ -122,12 +171,110 @@ impl VM {
         error("Can only call functions and classes.")
     }
 
-    // hiero
-
-    fn define_native(&mut self, name: &str, native_fn: Native) {
-        let value = Value::Object(self.heap.store(native_fn).downgrade());
-        self.globals.insert(name.to_string(), value);
+    fn invoke_from_class(&mut self, class: &Class, name: String, arity: u8) -> Result<(), String> {
+        match class.methods.get(&name) {
+            None => return Err(format!("Undefined property '{}'", name)),
+            Some(method) => self.call(*method, arity),
+        }
     }
+
+    fn invoke(&mut self, name: String, arity: u8) -> Result<(), String> {
+        match Instance::from_value(&self.peek(arity as usize)) {
+            Err(_) => error("Only instances have methods."),
+            Ok(instance) => {
+                if let Some(property) = instance.properties.get(&name) {
+                    self.values[self.count - arity as usize - 1] = *property;
+                    self.call_value(*property, arity)
+                } else {
+                    self.invoke_from_class(&*instance.class, name, arity)
+                }
+            }
+        }
+    }
+
+    fn bind_method(&mut self, class: Obj<Class>, name: String) -> Result<(), String> {
+        match class.methods.get(&name) {
+            None => Err(format!("Undefined property '{}'.", name)),
+            Some(method) => {
+                let instance = Instance::obj_from_value(&self.peek(0))?;
+                let bm = self.heap.store(BoundMethod::new(instance, *method));
+                self.pop();
+                self.push(bm.as_value());
+                Ok(())
+            }
+        }
+    }
+
+    // this in difficult, because I don't fully understand upvalues
+    // use location of value instead of pointer to value
+    fn capture_upvalue(&mut self, location: usize) -> Obj<Upvalue> {
+        let mut previous: Option<Obj<Upvalue>> = None;
+        let mut current: Option<Obj<Upvalue>> = self.open_upvalues;
+        while let Some(upvalue) = current {
+            if upvalue.location == location {
+                return upvalue;
+            }
+            if upvalue.location < location {
+                break;
+            }
+            previous = current;
+            current = upvalue.next;
+        }
+        let mut created = self.heap.store(Upvalue::new(location));
+        (*created).next = current;
+        match previous {
+            None => {
+                self.open_upvalues = Some(created);
+            }
+            Some(mut before) => {
+                (*before).next = Some(created);
+            }
+        }
+        return created;
+    }
+
+    fn close_upvalues(&mut self, location: usize) {
+        while let Some(mut upvalue) = self.open_upvalues {
+            if upvalue.location < location {
+                return;
+            }
+            (*upvalue).closed = self.values[upvalue.location];
+            (*upvalue).location = usize::MAX;
+            self.open_upvalues = upvalue.next;
+        }
+    }
+
+    fn define_method(&mut self, name: Obj<String>) -> Result<(), String> {
+        let method = self.peek(0);
+        let mut class = Class::obj_from_value(&method)?;
+        (*class)
+            .methods
+            .insert((*name).clone(), Closure::obj_from_value(&method)?);
+        self.pop();
+        Ok(())
+    }
+
+    fn concatenate(&mut self) -> Result<(), String> {
+        let mut c = String::new();
+        c.push_str(String::from_value(&self.peek(1))?);
+        c.push_str(String::from_value(&self.peek(0))?);
+        let d = self.heap.store(c).as_value();
+        self.pop();
+        self.pop();
+        self.push(d);
+        Ok(())
+    }
+
+    fn run(&mut self) -> Result<(), String> {
+        let mut frame = self.frames.peek(0).unwrap();
+        loop {
+            match Op::decode(frame.read_byte())? {
+                _ => todo!(),
+            }
+        }
+    }
+
+    // hiero
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
         println!("{}", source);
