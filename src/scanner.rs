@@ -197,7 +197,6 @@ impl<'src> Scanner<'src> {
 
     fn identifier_type(&self) -> TokenType {
         let start = self.get_byte(self.token_start);
-        println!("{}", start as char);
         match start {
             b'a' => self.check_keyword("nd", TokenType::And),
             b'c' => self.check_keyword("lass", TokenType::Class),

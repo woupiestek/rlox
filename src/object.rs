@@ -165,6 +165,7 @@ impl Traceable for BoundMethod {
     }
 }
 
+// perhaps Native should
 #[derive(Copy, Clone)]
 pub struct Native(pub fn(args: &[Value]) -> Value);
 

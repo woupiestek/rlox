@@ -1,11 +1,10 @@
 use crate::{
     chunk::Op,
+    common::{error, U8_COUNT},
     memory::{Heap, Obj},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
 };
-
-const U8_COUNT: usize = 0x100;
 
 #[derive(PartialEq, PartialOrd)]
 pub enum Prec {
@@ -102,7 +101,7 @@ impl<'src> Compiler<'src> {
             let local = &self.locals[i];
             if local.name == name {
                 return if local.depth.is_none() {
-                    Err("Can't read local variable in its own initializer.".to_string())
+                    error("Can't read local variable in its own initializer.")
                 } else {
                     Ok(Some(i as u8))
                 };
@@ -112,7 +111,7 @@ impl<'src> Compiler<'src> {
 
     fn add_local(&mut self, name: &'src str) -> Result<(), String> {
         if self.locals.len() == U8_COUNT {
-            return Err("Too many local variables in function.".to_string());
+            return error("Too many local variables in function.");
         }
         self.locals.push(Local::new(name));
         return Ok(());
@@ -136,7 +135,7 @@ impl<'src> Compiler<'src> {
             }
         }
         if count == u8::MAX {
-            return Err("Too many closure variables in function.".to_string());
+            return error("Too many closure variables in function.");
         }
         self.upvalues.push(Upvalue { index, is_local });
         self.function.upvalue_count += 1;
@@ -154,7 +153,7 @@ impl<'src> Compiler<'src> {
     fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
         let jump = self.count() - offset - 2;
         if jump > u16::MAX as usize {
-            Err("jump too large".to_string())
+            error("jump too large")
         } else {
             self.function
                 .chunk
@@ -169,7 +168,7 @@ impl<'src> Compiler<'src> {
         }
         for local in &self.locals {
             if local.name == name {
-                return Err("Already a variable with this name in this scope.".to_string());
+                return error("Already a variable with this name in this scope.");
             }
         }
         self.add_local(name)
@@ -260,7 +259,7 @@ pub struct Parser<'src, 'vm> {
     heap: &'vm mut Heap,
 
     // status
-    had_error: bool,
+    had_error: Option<String>,
 }
 
 impl<'src, 'vm> Parser<'src, 'vm> {
@@ -271,7 +270,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             has_super: 0,
             class_depth: 0,
             heap,
-            had_error: false,
+            had_error: None,
         }
     }
 
@@ -296,7 +295,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
         let offset = self.current_compiler().count() - start + 2;
         if offset > u16::MAX as usize {
-            Err("loop size to large".to_string())
+            error("loop size to large")
         } else {
             self.emit_bytes(&[Op::Loop as u8, (offset >> 8) as u8, offset as u8]);
             Ok(())
@@ -399,7 +398,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             arity += 1;
             if self.source.match_type(TokenType::Comma) {
                 if arity == u8::MAX {
-                    return Err("Can't have more than 255 arguments.".to_string());
+                    return error("Can't have more than 255 arguments.");
                 }
                 continue;
             } else {
@@ -562,10 +561,10 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn super_(&mut self) -> Result<(), String> {
         if self.compilers.is_empty() {
-            return Err("Can't use 'super' outside of a class.".to_string());
+            return error("Can't use 'super' outside of a class.");
         }
         if self.has_super & 1 == 0 {
-            return Err("Can't use 'super' in a class with no superclass.".to_string());
+            return error("Can't use 'super' in a class with no superclass.");
         }
         self.source
             .consume(TokenType::Dot, "Expect '.' after 'super'.")?;
@@ -584,7 +583,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn this(&mut self, can_assign: bool) -> Result<(), String> {
         if self.compilers.is_empty() {
-            return Err("Can't use 'this' outside of a class.".to_string());
+            return error("Can't use 'this' outside of a class.");
         }
         self.variable("this", can_assign)
     }
@@ -631,7 +630,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             TokenType::True => Ok(self.emit_op(Op::True)),
             TokenType::Super => self.super_(),
             TokenType::This => self.this(can_assign),
-            _ => Err("Expect expression.".to_string()),
+            _ => error("Expect expression."),
         }
     }
 
@@ -646,7 +645,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
 
         if can_assign && self.source.match_type(TokenType::Equal) {
-            Err("Invalid assignment target.".to_string())
+            error("Invalid assignment target.")
         } else {
             Ok(())
         }
@@ -692,7 +691,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         if !self.source.check(TokenType::RightParen) {
             loop {
                 if self.current_compiler().function.arity == u8::MAX {
-                    return Err("Can't have more than 255 parameters.".to_string());
+                    return error("Can't have more than 255 parameters.");
                 }
                 self.current_compiler().function.arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
@@ -745,7 +744,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         self.define_variable(index);
 
         if self.class_depth == 127 {
-            return Err("Cannot nest classes that deep".to_string());
+            return error("Cannot nest classes that deep");
         }
         self.has_super <<= 1;
         self.class_depth += 1;
@@ -757,7 +756,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             let super_name = self.lexeme();
             self.variable(super_name, false)?;
             if class_name == super_name {
-                return Err("A class can't inherit from itself.".to_string());
+                return error("A class can't inherit from itself.");
             }
             self.begin_scope();
             self.current_compiler().add_local("super")?;
@@ -778,7 +777,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
                 break;
             }
             if self.source.check(TokenType::End) {
-                return Err("Expect '}' after class body.".to_string());
+                return error("Expect '}' after class body.");
             }
             self.method()?;
         }
@@ -901,7 +900,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
 
     fn return_statement(&mut self) -> Result<(), String> {
         if self.current_compiler().function_type == FunctionType::Script {
-            return Err("Can't return from top-level code.".to_string());
+            return error("Can't return from top-level code.");
         }
 
         if self.source.match_type(TokenType::Semicolon) {
@@ -909,7 +908,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
             Ok(())
         } else {
             if self.current_compiler().function_type == FunctionType::Initializer {
-                return Err("Can't return a value from an initializer.".to_string());
+                return error("Can't return a value from an initializer.");
             }
 
             self.expression()?;
@@ -950,8 +949,11 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         };
 
         if let Err(msg) = result {
+            // I know, don't log & throw
+            // also: what about an actual logger?
             println!("{msg}");
-            self.had_error = true;
+            // maybe collect errors in a vec?
+            self.had_error = Some(msg);
             self.source.synchronize();
         }
     }
@@ -978,15 +980,39 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 }
 
-pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Option<Obj<Function>> {
+pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<Function>, String> {
     let mut parser: Parser<'src, 'hp> = Parser::new(Source::new(source), heap);
     while !parser.source.match_type(TokenType::End) {
         parser.declaration();
     }
     let obj = parser.current_compiler().function.clone();
-    if parser.had_error {
-        None
+    if let Some(msg) = parser.had_error {
+        Err(msg)
     } else {
-        Some(obj)
+        Ok(obj)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn construct_parser() {
+        Parser::new(Source::new(""), &mut Heap::new());
+    }
+
+    #[test]
+    fn clone_function() {
+        let heap = &mut Heap::new();
+        let mut parser = Parser::new(Source::new(""), heap);
+        assert!(parser.source.match_type(TokenType::End));
+        // parser.current_compiler().function.clone();
+    }
+
+    #[test]
+    fn compile_empty_string() {
+        let result = compile("", &mut Heap::new());
+        assert!(result.is_ok());
     }
 }

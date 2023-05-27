@@ -1,6 +1,12 @@
 # Rlox
 
-## 2023-05-25
+## 2023-05-27
+
+### second serious debug
+
+Ran into a seg fault, but fixed a forgotten change in a macro.
+
+## 2023-05-26
 
 ### first serious debug
 

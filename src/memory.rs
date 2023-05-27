@@ -1,6 +1,7 @@
 use std::{
     alloc::alloc,
     alloc::Layout,
+    mem,
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -45,29 +46,11 @@ impl Handle {
     }
 }
 
-pub struct Obj<Body> {
+pub struct Obj<Body: Traceable> {
     ptr: *mut (Header, Body),
 }
 
 impl<T: Traceable> Obj<T> {
-    // heap argument? method on heap?
-    fn from(t: T) -> Self {
-        unsafe {
-            let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
-            assert!(!ptr.is_null());
-            ptr::write(
-                ptr,
-                (
-                    Header {
-                        is_marked: false,
-                        kind: T::KIND,
-                    },
-                    t,
-                ),
-            );
-            Obj { ptr }
-        }
-    }
     pub fn downgrade(&self) -> Handle {
         Handle {
             ptr: self.ptr as *mut Header,
@@ -75,7 +58,7 @@ impl<T: Traceable> Obj<T> {
     }
 }
 
-impl<T> Clone for Obj<T> {
+impl<T: Traceable> Clone for Obj<T> {
     fn clone(&self) -> Self {
         Self {
             ptr: self.ptr.clone(),
@@ -83,7 +66,13 @@ impl<T> Clone for Obj<T> {
     }
 }
 
-impl<T> Deref for Obj<T> {
+impl<T: Traceable> std::fmt::Debug for Obj<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Obj").field("ptr", &self.ptr).finish()
+    }
+}
+
+impl<T: Traceable> Deref for Obj<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -91,7 +80,7 @@ impl<T> Deref for Obj<T> {
     }
 }
 
-impl<T> DerefMut for Obj<T> {
+impl<T: Traceable> DerefMut for Obj<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.ptr).1 }
     }
@@ -103,25 +92,17 @@ where
 {
     const KIND: Kind;
     fn trace(&self, collector: &mut Vec<Handle>);
-    fn upgrade(handle: &Handle) -> Option<Obj<Self>> {
+    fn upgrade(handle: &Handle) -> Result<Obj<Self>, String> {
         if Self::KIND == handle.kind() {
-            Some(Obj {
+            Ok(Obj {
                 ptr: handle.ptr as *mut (Header, Self),
             })
         } else {
-            None
-        }
-    }
-    fn drop_handle(handle: Handle) {
-        assert_eq!(handle.kind(), Self::KIND);
-        let ptr = handle.ptr as *mut (Header, Self);
-        unsafe { ptr::drop_in_place(ptr) }
-    }
-    fn trace_handle(handle: &Handle, collector: &mut Vec<Handle>) {
-        assert_eq!(handle.kind(), Self::KIND);
-        let ptr = handle.ptr as *mut (Header, Self);
-        unsafe {
-            (*ptr).1.trace(collector);
+            Err(format!(
+                "Cannot upgrade {:?} to {:?}",
+                handle.kind(),
+                Self::KIND
+            ))
         }
     }
 }
@@ -136,8 +117,10 @@ macro_rules! trace_handle {
 }
 macro_rules! drop_handle {
     ($handle:expr,$traceable:ty) => {{
-        let ptr = $handle.ptr as *mut (Header, Self);
-        unsafe { ptr::drop_in_place(ptr) }
+        let ptr = $handle.ptr as *mut (Header, $traceable);
+        unsafe {
+            ptr::drop_in_place(ptr);
+        }
     }};
 }
 
@@ -153,7 +136,21 @@ impl Heap {
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        let typed = Obj::from(t);
+        let typed = unsafe {
+            let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
+            assert!(!ptr.is_null());
+            ptr::write(
+                ptr,
+                (
+                    Header {
+                        is_marked: false,
+                        kind: T::KIND,
+                    },
+                    t,
+                ),
+            );
+            Obj { ptr }
+        };
         self.handles.push(typed.downgrade());
         typed
     }
@@ -236,6 +233,8 @@ impl Drop for Heap {
 
 #[cfg(test)]
 mod tests {
+    use crate::object::Value;
+
     use super::*;
 
     #[test]
@@ -244,8 +243,22 @@ mod tests {
     }
 
     #[test]
-    fn store_simple_values() {
+    fn store_empty_string() {
         let mut heap = Heap::new();
         heap.store("".to_string());
+    }
+
+    fn first(_args: &[Value]) -> Value {
+        if _args.len() > 0 {
+            _args[0]
+        } else {
+            Value::Nil
+        }
+    }
+
+    #[test]
+    fn store_native_function() {
+        let mut heap = Heap::new();
+        heap.store(Native(first));
     }
 }
