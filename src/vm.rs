@@ -1,10 +1,10 @@
 use std::{collections::HashMap, time};
 
 use crate::{
-    common::U8_COUNT,
+    common::{error, U8_COUNT},
     compiler::compile,
-    memory::{Heap, Obj},
-    object::{Closure, Native, Upvalue, Value},
+    memory::{Heap, Kind, Obj, Traceable},
+    object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
     stack::Stack,
 };
 
@@ -21,24 +21,23 @@ fn clock_native(_args: &[Value]) -> Value {
 const CLOCK_NATIVE: Native = Native(clock_native);
 
 #[derive(Copy, Clone)]
-struct CallFrame<'vm> {
+struct CallFrame {
     ip: usize,
     slots: usize,
-    // we seem to need a nullpointer, but isn't that a bit much?
-    closure: Option<&'vm Closure>,
+    closure: Option<Obj<Closure>>,
 }
 
-pub struct VM<'vm> {
+pub struct VM {
     values: [Value; STACK_SIZE],
     count: usize,
-    frames: Stack<CallFrame<'vm>>,
+    frames: Stack<CallFrame>,
     open_upvalues: Stack<Obj<Upvalue>>,
     globals: HashMap<String, Value>,
     init_string: String,
     heap: Heap,
 }
 
-impl<'vm> VM<'vm> {
+impl VM {
     pub fn new() -> Self {
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
@@ -67,7 +66,7 @@ impl<'vm> VM<'vm> {
         self.values[self.values.len() - 1 - distance]
     }
 
-    fn call(&mut self, closure: &'vm Closure, arg_count: u8) -> Result<(), String> {
+    fn call(&mut self, closure: Obj<Closure>, arg_count: u8) -> Result<(), String> {
         if arg_count != closure.function.arity {
             return Err(format!(
                 "Expected {} arguments but got {}.",
@@ -84,6 +83,43 @@ impl<'vm> VM<'vm> {
             closure: Some(closure),
         });
         Ok(())
+    }
+
+    fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
+        {
+            if let Value::Object(handle) = callee {
+                match handle.kind() {
+                    Kind::BoundMethod => {
+                        let bm = BoundMethod::cast(&handle)?;
+                        self.values[self.count - arity as usize - 1] = bm.receiver.as_value();
+                        return self.call(bm.method, arity);
+                    }
+                    Kind::Class => {
+                        let class = Class::upgrade(&handle)?;
+                        let instance = self.heap.store(Instance::new(class));
+                        self.values[self.count - arity as usize - 1] =
+                            Value::Object(instance.downgrade());
+                        if let Some(&init) = class.methods.get("init") {
+                            return self.call(init, arity);
+                        }
+                    }
+                    Kind::Closure => {
+                        return self.call(Closure::upgrade(&handle)?, arity);
+                    }
+                    Kind::Native => {
+                        let native = Native::cast(&handle)?;
+                        let result = native.0(&self.values[self.count - arity as usize..]);
+                        self.count -= arity as usize + 1;
+                        self.push(result);
+                        return Ok(());
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        error("Can only call functions and classes.")
     }
 
     // hiero

@@ -6,7 +6,7 @@ use std::{
     ptr,
 };
 
-use crate::object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue};
+use crate::object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value};
 
 // note that usually 8 byte is allocated for this due to alignment, so plenty of space!
 
@@ -56,7 +56,12 @@ impl<T: Traceable> Obj<T> {
             ptr: self.ptr as *mut Header,
         }
     }
+    pub fn as_value(&self) -> Value {
+        Value::Object(self.downgrade())
+    }
 }
+
+impl<T: Traceable> Copy for Obj<T> {}
 
 impl<T: Traceable> Clone for Obj<T> {
     fn clone(&self) -> Self {
@@ -100,6 +105,18 @@ where
         } else {
             Err(format!(
                 "Cannot upgrade {:?} to {:?}",
+                handle.kind(),
+                Self::KIND
+            ))
+        }
+    }
+    fn cast(handle: &Handle) -> Result<&Self, String> {
+        if Self::KIND == handle.kind() {
+            let ptr = handle.ptr as *mut (Header, Self);
+            Ok(unsafe { &(*ptr).1 })
+        } else {
+            Err(format!(
+                "Cannot cast {:?} to {:?}",
                 handle.kind(),
                 Self::KIND
             ))

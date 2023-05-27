@@ -823,7 +823,6 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
-    // hiero
     fn for_statement(&mut self) -> Result<(), String> {
         self.begin_scope();
         self.source

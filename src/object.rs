@@ -146,8 +146,8 @@ impl Instance {
 }
 
 pub struct BoundMethod {
-    receiver: Obj<Instance>,
-    method: Obj<Closure>,
+    pub receiver: Obj<Instance>,
+    pub method: Obj<Closure>,
 }
 
 impl BoundMethod {

@@ -1,4 +1,4 @@
-use crate::object::Value;
+use crate::{object::Value};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,6 +40,59 @@ pub enum Op {
     Class,
     Inherit,
     Method,
+}
+
+const OP_COUNT: usize = Op::Method as usize + 1;
+const OP_CODES: [Op; OP_COUNT] = [
+    Op::Constant,
+    Op::Nil,
+    Op::True,
+    Op::False,
+    Op::Pop,
+    Op::GetLocal,
+    Op::SetLocal,
+    Op::GetGlobal,
+    Op::SetGlobal,
+    Op::DefineGlobal,
+    Op::GetUpvalue,
+    Op::SetUpvalue,
+    Op::GetProperty,
+    Op::SetProperty,
+    Op::GetSuper,
+    Op::Equal,
+    Op::Greater,
+    Op::Less,
+    Op::Add,
+    Op::Subtract,
+    Op::Multiply,
+    Op::Divide,
+    Op::Not,
+    Op::Negative,
+    Op::Print,
+    Op::Jump,
+    Op::JumpIfFalse,
+    Op::Loop,
+    Op::Call,
+    Op::Invoke,
+    Op::SuperInvoke,
+    Op::Closure,
+    Op::CloseUpvalue,
+    Op::Return,
+    Op::Class,
+    Op::Inherit,
+    Op::Method,
+];
+
+impl Op {
+    pub fn encode(&self) -> u8 {
+        *self as u8
+    }
+    pub fn decode(op: u8) -> Result<Op, String> {
+        if op > Op::Method.encode() {
+            return Err(format!("{op} is not a valid opcode"));
+        }
+        Ok(OP_CODES[op as usize])
+    }
 }
 
 pub struct Chunk {
