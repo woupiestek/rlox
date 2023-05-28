@@ -213,6 +213,10 @@ impl Heap {
         }
     }
 
+    pub fn count(&mut self) -> usize {
+        self.handles.len()
+    }
+
     pub fn intern(&mut self, name: &str) -> Obj<String> {
         match self.string_pool.get(name) {
             Some(obj) => *obj,

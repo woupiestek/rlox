@@ -682,6 +682,11 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         Ok(())
     }
 
+    fn end_compiler(&mut self) -> Obj<Function> {
+        self.emit_return();
+        self.compilers.pop().unwrap().function
+    }
+
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         self.compilers
             .push(Compiler::new(function_type, &mut self.heap));
@@ -706,10 +711,10 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.source
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
-        let function = self.compilers.pop().unwrap().function.clone();
+
+        let function = self.end_compiler();
         let count = function.upvalue_count;
-        let value = Value::Object(function.as_handle());
-        let index = self.current_compiler().make_constant(value)?;
+        let index = self.current_compiler().make_constant(function.as_value())?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 
         // I don't get this yet
@@ -950,7 +955,10 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         if let Err(msg) = result {
             // I know, don't log & throw
             // also: what about an actual logger?
-            println!("{msg}");
+            println!(
+                "[lint:{},column:{}] {}",
+                self.source.previous_token.line, self.source.previous_token.column, msg
+            );
             // maybe collect errors in a vec?
             self.had_error = Some(msg);
             self.source.synchronize();
@@ -984,7 +992,7 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
     while !parser.source.match_type(TokenType::End) {
         parser.declaration();
     }
-    let obj = parser.current_compiler().function.clone();
+    let obj = parser.end_compiler();
     if let Some(msg) = parser.had_error {
         Err(msg)
     } else {

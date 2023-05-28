@@ -6,7 +6,6 @@ mod compiler;
 mod memory;
 mod object;
 mod scanner;
-mod stack;
 mod vm;
 
 fn main() {

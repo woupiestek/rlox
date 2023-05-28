@@ -6,7 +6,6 @@ use crate::{
     compiler::compile,
     memory::{Heap, Kind, Obj, Traceable},
     object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
-    stack::Stack,
 };
 
 const MAX_FRAMES: usize = 1 << 6;
@@ -25,19 +24,19 @@ const CLOCK_NATIVE: Native = Native(clock_native);
 struct CallFrame {
     ip: isize,
     slots: usize,
-    closure: Option<Obj<Closure>>,
+    closure: Obj<Closure>,
 }
 
 impl CallFrame {
-    fn new(slots: usize) -> Self {
+    fn new(slots: usize, closure: Obj<Closure>) -> Self {
         Self {
             ip: -1,
             slots,
-            closure: None,
+            closure,
         }
     }
     fn code(&self, ip: isize) -> u8 {
-        self.closure.unwrap().function.chunk.code[ip as usize]
+        self.closure.function.chunk.code[ip as usize]
     }
     fn read_byte(&mut self) -> u8 {
         self.ip += 1;
@@ -50,15 +49,17 @@ impl CallFrame {
     }
 
     fn read_constant(&mut self) -> Value {
-        self.closure.unwrap().function.chunk.constants[self.read_byte() as usize]
+        let read_byte = self.read_byte() as usize;
+        self.closure.function.chunk.constants[read_byte]
     }
 
     fn read_string(&mut self) -> Result<Obj<String>, String> {
         String::obj_from_value(self.read_constant())
     }
 
-    fn read_upvalue(&mut self) -> Value {
-        self.closure.unwrap().upvalues[self.read_byte() as usize].as_value()
+    fn read_upvalue(&mut self) -> Obj<Upvalue> {
+        let read_byte = self.read_byte() as usize;
+        self.closure.upvalues[read_byte]
     }
 }
 
@@ -73,27 +74,15 @@ macro_rules! binary_op {
     }};
 }
 
-// #define BINARY_OP(valueType, op)                    \
-//   do                                                \
-//   {                                                 \
-//     if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) \
-//     {                                               \
-//       runtimeError("Operands must be numbers.");    \
-//       return INTERPRET_RUNTIME_ERROR;               \
-//     }                                               \
-//     double b = AS_NUMBER(pop());                    \
-//     double a = AS_NUMBER(pop());                    \
-//     push(valueType(a op b));                        \
-//   } while (false)
-
 pub struct VM {
     values: [Value; STACK_SIZE],
     count: usize,
-    frames: Stack<CallFrame>,
+    frames: Vec<CallFrame>,
     open_upvalues: Option<Obj<Upvalue>>,
     globals: HashMap<Obj<String>, Value>,
     init_string: Obj<String>,
     heap: Heap,
+    next_gc: usize,
 }
 
 impl VM {
@@ -104,14 +93,86 @@ impl VM {
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             count: 0,
-            frames: Stack::new(MAX_FRAMES),
+            frames: Vec::with_capacity(MAX_FRAMES),
             open_upvalues: None,
             globals: HashMap::new(),
             init_string,
             heap,
+            next_gc: 0x8000,
         };
         s.define_native(clock_string, CLOCK_NATIVE);
         s
+    }
+    pub fn capture_upvalue(&mut self, location: usize) -> Obj<Upvalue> {
+        let mut previous = None;
+        let mut current = self.open_upvalues;
+        while let Some(link) = current {
+            if let Upvalue::Open(index, next) = *link {
+                if location == index {
+                    return link;
+                }
+                if location < index {
+                    break;
+                }
+                previous = current;
+                current = next
+            } else {
+                break;
+            }
+        }
+        let created = self.new_obj(Upvalue::Open(location, current));
+        match previous {
+            None => {
+                self.open_upvalues = Some(created);
+            }
+            Some(mut obj) => {
+                if let Upvalue::Open(x, _) = *obj {
+                    *obj = Upvalue::Open(x, Some(created))
+                }
+            }
+        }
+        created
+    }
+
+    fn close_upvalues(&mut self, location: usize) {
+        while let Some(mut link) = self.open_upvalues {
+            if let Upvalue::Open(l, y) = *link {
+                if l < location {
+                    return;
+                }
+                *link = Upvalue::Closed(self.values[l]);
+                self.open_upvalues = y;
+            } else {
+                self.open_upvalues = None;
+            }
+        }
+    }
+
+    fn new_obj<T: Traceable>(&mut self, t: T) -> Obj<T> {
+        if self.heap.count() > self.next_gc {
+            let roots = self.roots();
+            self.heap.collect_garbage(roots);
+            self.next_gc *= 2;
+        }
+        self.heap.store(t)
+    }
+
+    fn roots(&mut self) -> Vec<crate::memory::Handle> {
+        let mut collector = Vec::new();
+        for value in self.values {
+            if let Value::Object(handle) = value {
+                collector.push(handle);
+            }
+        }
+        for frame in &self.frames {
+            collector.push(frame.closure.as_handle())
+        }
+        if let Some(upvalue) = self.open_upvalues {
+            collector.push(upvalue.as_handle());
+        }
+        // no compiler roots
+        collector.push(self.init_string.as_handle());
+        collector
     }
 
     fn define_native(&mut self, name: Obj<String>, native_fn: Native) {
@@ -144,11 +205,7 @@ impl VM {
         if self.frames.len() == MAX_FRAMES {
             return Err("Stack overflow.".to_string());
         }
-        self.frames.push(CallFrame {
-            ip: 0,
-            slots: 10, // self.count,
-            closure: Some(closure),
-        });
+        self.frames.push(CallFrame::new(self.count, closure));
         Ok(())
     }
 
@@ -191,7 +248,7 @@ impl VM {
 
     fn invoke_from_class(
         &mut self,
-        class: &Class,
+        class: Obj<Class>,
         name: Obj<String>,
         arity: u8,
     ) -> Result<(), String> {
@@ -209,7 +266,7 @@ impl VM {
                     self.values[self.count - arity as usize - 1] = *property;
                     self.call_value(*property, arity)
                 } else {
-                    self.invoke_from_class(&*instance.class, name, arity)
+                    self.invoke_from_class(instance.class, name, arity)
                 }
             }
         }
@@ -225,45 +282,6 @@ impl VM {
                 self.push(bm.as_value());
                 Ok(())
             }
-        }
-    }
-
-    // this in difficult, because I don't fully understand upvalues
-    // use location of value instead of pointer to value
-    fn capture_upvalue(&mut self, location: usize) -> Obj<Upvalue> {
-        let mut previous: Option<Obj<Upvalue>> = None;
-        let mut current: Option<Obj<Upvalue>> = self.open_upvalues;
-        while let Some(upvalue) = current {
-            if upvalue.location == location {
-                return upvalue;
-            }
-            if upvalue.location < location {
-                break;
-            }
-            previous = current;
-            current = upvalue.next;
-        }
-        let mut created = self.heap.store(Upvalue::new(location));
-        (*created).next = current;
-        match previous {
-            None => {
-                self.open_upvalues = Some(created);
-            }
-            Some(mut before) => {
-                (*before).next = Some(created);
-            }
-        }
-        return created;
-    }
-
-    fn close_upvalues(&mut self, location: usize) {
-        while let Some(mut upvalue) = self.open_upvalues {
-            if upvalue.location < location {
-                return;
-            }
-            (*upvalue).closed = self.values[upvalue.location];
-            (*upvalue).location = usize::MAX;
-            self.open_upvalues = upvalue.next;
         }
     }
 
@@ -292,13 +310,15 @@ impl VM {
     }
 
     fn run(&mut self) -> Result<(), String> {
-        let mut frame = *self.frames.peek(0).unwrap();
+        // todo: this is wrong.
+        let mut frame = *self.frames.last().unwrap();
         loop {
             match Op::try_from(frame.read_byte())? {
                 Op::Add => {
+                    let pair = self.tail(2);
                     if let (Ok(a), Ok(b)) = (
-                        String::obj_from_value(self.peek(1)),
-                        String::obj_from_value(self.peek(0)),
+                        String::obj_from_value(pair[0]),
+                        String::obj_from_value(pair[1]),
                     ) {
                         let c = self.concatenate(&*a, &*b);
                         self.count -= 2;
@@ -306,7 +326,7 @@ impl VM {
                         continue;
                     }
 
-                    if let &[Value::Number(a), Value::Number(b)] = self.tail(2) {
+                    if let &[Value::Number(a), Value::Number(b)] = pair {
                         self.count -= 2;
                         self.push(Value::Number(a + b));
                         continue;
@@ -318,7 +338,7 @@ impl VM {
                     let arity = frame.read_byte();
                     self.call_value(self.peek(arity as usize), arity)?;
                     // sometimes a new frame is pushed.
-                    frame = *self.frames.peek(0).unwrap();
+                    frame = *self.frames.last().unwrap();
                 }
                 Op::Class => {
                     self.push_traceable(Class::new(frame.read_string()?));
@@ -336,14 +356,13 @@ impl VM {
                         closure.upvalues.push(if is_local == 1 {
                             self.capture_upvalue(frame.slots + index as usize)
                         } else {
-                            (*frame.closure.unwrap()).upvalues[i]
+                            frame.closure.upvalues[i]
                         })
                     }
                 }
                 Op::Constant => self.push(frame.read_constant()),
                 Op::DefineGlobal => {
-                    let key = frame.read_string()?;
-                    self.globals.insert(key, self.peek(0));
+                    self.globals.insert(frame.read_string()?, self.peek(0));
                     self.pop();
                 }
                 Op::Divide => binary_op!(self, a, b, Value::Number(a / b)),
@@ -378,7 +397,7 @@ impl VM {
                     let super_class = Class::obj_from_value(self.pop())?;
                     self.bind_method(super_class, name)?;
                 }
-                Op::GetUpvalue => self.push(frame.read_upvalue()),
+                Op::GetUpvalue => self.push(frame.read_upvalue().as_value()),
                 Op::Greater => {
                     binary_op!(self, a, b, if a > b { Value::True } else { Value::False })
                 }
@@ -386,7 +405,7 @@ impl VM {
                     let super_class = Class::get(self.peek(1))
                         .ok_or("Super class must be a class.".to_string())?;
                     let mut sub_class =
-                        Class::get(self.peek(1)).ok_or("Sub class must be a class.".to_string())?;
+                        Class::get(self.peek(0)).ok_or("Sub class must be a class.".to_string())?;
                     for (&k, &v) in &super_class.methods {
                         sub_class.methods.insert(k, v);
                     }
@@ -396,7 +415,7 @@ impl VM {
                     let name = frame.read_string()?;
                     let arity = frame.read_byte();
                     self.invoke(name, arity)?;
-                    frame = *self.frames.peek(0).unwrap();
+                    frame = *self.frames.last().unwrap();
                 }
                 Op::Jump => frame.ip += frame.read_short() as isize,
                 Op::JumpIfFalse => {
@@ -428,7 +447,53 @@ impl VM {
                     self.pop();
                 }
                 Op::Print => self.pop().println(),
-                _ => todo!(),
+                Op::Return => {
+                    let result = self.pop();
+                    self.close_upvalues(frame.slots);
+                    self.frames.pop();
+                    if self.frames.len() == 0 {
+                        self.pop();
+                        return Ok(());
+                    }
+                    self.count = frame.slots;
+                    self.push(result);
+                    frame = *self.frames.last().unwrap();
+                }
+                Op::SetGlobal => {
+                    let name = frame.read_string()?;
+                    if self.globals.insert(name, self.peek(0)).is_none() {
+                        self.globals.remove(&name);
+                        return Err(format!("Undefined variable '{}'.", *name));
+                    }
+                }
+                Op::SetLocal => {
+                    let index = frame.read_byte() as usize;
+                    self.values[frame.slots + index] = self.peek(0);
+                }
+                Op::SetProperty => {
+                    let pair = self.tail(2);
+                    let mut instance =
+                        Instance::get(pair[0]).ok_or("Only instances have fields.".to_string())?;
+                    let value = pair[1];
+                    instance.properties.insert(frame.read_string()?, value);
+                    self.count -= 2;
+                    self.push(value);
+                }
+                Op::SetUpvalue => {
+                    let mut upvalue = frame.read_upvalue();
+                    match *upvalue {
+                        Upvalue::Closed(_) => *upvalue = Upvalue::Closed(self.peek(0)),
+                        Upvalue::Open(index, _) => self.values[index] = self.peek(0),
+                    }
+                }
+                Op::Subtract => binary_op!(self, a, b, Value::Number(a - b)),
+                Op::SuperInvoke => {
+                    let name = frame.read_string()?;
+                    let arity = frame.read_byte();
+                    let super_class = Class::obj_from_value(self.pop())?;
+                    self.invoke_from_class(super_class, name, arity)?;
+                }
+                Op::True => self.push(Value::True),
             }
         }
     }
@@ -437,12 +502,14 @@ impl VM {
         &self.values[self.count - n..self.count]
     }
 
-    // hiero
-
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
-        println!("{}", source);
-        compile(source, &mut self.heap)?;
-        Ok(())
+        let function = compile(source, &mut self.heap)?;
+        self.push(function.as_value());
+        let closure = self.heap.store(Closure::new(function));
+        self.pop();
+        self.push(closure.as_value());
+        self.call(closure, 0)?;
+        self.run()
     }
 }
 

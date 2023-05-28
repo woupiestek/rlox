@@ -23,19 +23,6 @@ impl Value {
             _ => false,
         }
     }
-    pub fn is_bool(&self) -> bool {
-        match self {
-            Value::False | Value::True => true,
-            _ => false,
-        }
-    }
-    pub fn as_number(&self) -> Option<f64> {
-        if let Value::Number(n) = self {
-            Some(*n)
-        } else {
-            None
-        }
-    }
     pub fn println(&self) {
         match self {
             Value::False => println!("false"),
@@ -117,28 +104,19 @@ impl Traceable for Class {
     }
 }
 
-pub struct Upvalue {
-    pub location: usize, // don't know yet
-    pub closed: Value,
-    pub next: Option<Obj<Upvalue>>,
-}
-
-impl Upvalue {
-    pub fn new(location: usize) -> Self {
-        Self {
-            location,
-            closed: Value::Nil,
-            next: None,
-        }
-    }
+pub enum Upvalue {
+    Open(usize, Option<Obj<Upvalue>>),
+    Closed(Value),
 }
 
 impl Traceable for Upvalue {
     const KIND: Kind = Kind::Upvalue;
 
     fn trace(&self, collector: &mut Vec<Handle>) {
-        if let Value::Object(handle) = self.closed {
-            collector.push(handle);
+        match self {
+            Upvalue::Open(_, Some(next)) => collector.push(next.as_handle()),
+            Upvalue::Closed(Value::Object(handle)) => collector.push(*handle),
+            _ => (),
         }
     }
 }

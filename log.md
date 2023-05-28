@@ -32,15 +32,20 @@ I am adding a simple implementation to the heap.
 I don't see a way to pass operators, but maybe all required operators exist as
 methods. Nope, doesn't work.
 
-Rust simply does what I'd've always wanted Scala and Java to do: every
-method is an extension method. Doing so also show the limits of that approach:
-extensions methods are not dymanically dispatched.
+Rust simply does what I'd've always wanted Scala and Java to do: every method is
+an extension method. Doing so also show the limits of that approach: extensions
+methods are not dymanically dispatched.
 
 ### also...
 
 Do some type checking the the compiler, to emit better opcodes? Difficulty:
 variables can change type! Seems especially useful to separate string
 concatenation from
+
+### sholder pain
+
+I probabaly put the keyboard too far away, to better see the keys I guess,
+causing me to reach all day. This is what is hurting me.
 
 ## 2023-05-27
 
