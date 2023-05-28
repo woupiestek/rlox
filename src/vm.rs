@@ -56,6 +56,21 @@ impl CallFrame {
     fn read_string(&mut self) -> Result<Obj<String>, String> {
         String::obj_from_value(self.read_constant())
     }
+
+    fn read_upvalue(&mut self) -> Value {
+        self.closure.unwrap().upvalues[self.read_byte() as usize].as_value()
+    }
+}
+
+macro_rules! binary_op {
+    ($self:ident, $a:ident, $b:ident, $value:expr) => {{
+        if let &[Value::Number($a), Value::Number($b)] = $self.tail(2) {
+            $self.count -= 2;
+            $self.push($value);
+        } else {
+            return error("Operands must be numbers.");
+        }
+    }};
 }
 
 // #define BINARY_OP(valueType, op)                    \
@@ -151,7 +166,7 @@ impl VM {
                         let instance = self.heap.store(Instance::new(class));
                         self.values[self.count - arity as usize - 1] =
                             Value::Object(instance.as_handle());
-                        if let Some(&init) = class.methods.get("init") {
+                        if let Some(&init) = class.methods.get(&self.init_string) {
                             return self.call(init, arity);
                         }
                     }
@@ -160,7 +175,7 @@ impl VM {
                     }
                     Kind::Native => {
                         let native = Native::from_handle(&handle)?;
-                        let result = native.0(&self.values[self.count - arity as usize..]);
+                        let result = native.0(self.tail(arity as usize));
                         self.count -= arity as usize + 1;
                         self.push(result);
                         return Ok(());
@@ -174,14 +189,19 @@ impl VM {
         error("Can only call functions and classes.")
     }
 
-    fn invoke_from_class(&mut self, class: &Class, name: String, arity: u8) -> Result<(), String> {
+    fn invoke_from_class(
+        &mut self,
+        class: &Class,
+        name: Obj<String>,
+        arity: u8,
+    ) -> Result<(), String> {
         match class.methods.get(&name) {
-            None => return Err(format!("Undefined property '{}'", name)),
+            None => return Err(format!("Undefined property '{}'", *name)),
             Some(method) => self.call(*method, arity),
         }
     }
 
-    fn invoke(&mut self, name: String, arity: u8) -> Result<(), String> {
+    fn invoke(&mut self, name: Obj<String>, arity: u8) -> Result<(), String> {
         match Instance::from_value(&self.peek(arity as usize)) {
             Err(_) => error("Only instances have methods."),
             Ok(instance) => {
@@ -195,9 +215,9 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: Obj<Class>, name: String) -> Result<(), String> {
+    fn bind_method(&mut self, class: Obj<Class>, name: Obj<String>) -> Result<(), String> {
         match class.methods.get(&name) {
-            None => Err(format!("Undefined property '{}'.", name)),
+            None => Err(format!("Undefined property '{}'.", *name)),
             Some(method) => {
                 let instance = Instance::obj_from_value(self.peek(0))?;
                 let bm = self.heap.store(BoundMethod::new(instance, *method));
@@ -252,7 +272,7 @@ impl VM {
         let mut class = Class::obj_from_value(method)?;
         (*class)
             .methods
-            .insert((*name).clone(), Closure::obj_from_value(method)?);
+            .insert(name, Closure::obj_from_value(method)?);
         self.pop();
         Ok(())
     }
@@ -286,7 +306,7 @@ impl VM {
                         continue;
                     }
 
-                    if let (Value::Number(a), Value::Number(b)) = (self.peek(1), self.peek(0)) {
+                    if let &[Value::Number(a), Value::Number(b)] = self.tail(2) {
                         self.count -= 2;
                         self.push(Value::Number(a + b));
                         continue;
@@ -323,15 +343,98 @@ impl VM {
                 Op::Constant => self.push(frame.read_constant()),
                 Op::DefineGlobal => {
                     let key = frame.read_string()?;
-                    let value = self.peek(0);
-                    todo!();
-                    //self.globals.insert(&*key, value);
+                    self.globals.insert(key, self.peek(0));
                     self.pop();
                 }
-
+                Op::Divide => binary_op!(self, a, b, Value::Number(a / b)),
+                Op::Equal => {
+                    let a = self.pop();
+                    let b = self.pop();
+                    self.push(if a == b { Value::True } else { Value::False });
+                }
+                Op::False => self.push(Value::False),
+                Op::GetGlobal => {
+                    let name = frame.read_string()?;
+                    if let Some(value) = self.globals.get(&name) {
+                        self.push(*value);
+                    } else {
+                        return Err(format!("Undefined variable '{}'.", *name));
+                    }
+                }
+                Op::GetLocal => self.push(self.values[frame.slots + frame.read_byte() as usize]),
+                Op::GetProperty => {
+                    let instance = Instance::get(self.peek(0))
+                        .ok_or("Only instances have properties.".to_string())?;
+                    let name = frame.read_string()?;
+                    if let Some(&value) = instance.properties.get(&name) {
+                        // replace instance
+                        self.values[self.count - 1] = value;
+                    } else {
+                        self.bind_method(instance.class, name)?;
+                    }
+                }
+                Op::GetSuper => {
+                    let name = frame.read_string()?;
+                    let super_class = Class::obj_from_value(self.pop())?;
+                    self.bind_method(super_class, name)?;
+                }
+                Op::GetUpvalue => self.push(frame.read_upvalue()),
+                Op::Greater => {
+                    binary_op!(self, a, b, if a > b { Value::True } else { Value::False })
+                }
+                Op::Inherit => {
+                    let super_class = Class::get(self.peek(1))
+                        .ok_or("Super class must be a class.".to_string())?;
+                    let mut sub_class =
+                        Class::get(self.peek(1)).ok_or("Sub class must be a class.".to_string())?;
+                    for (&k, &v) in &super_class.methods {
+                        sub_class.methods.insert(k, v);
+                    }
+                    self.pop();
+                }
+                Op::Invoke => {
+                    let name = frame.read_string()?;
+                    let arity = frame.read_byte();
+                    self.invoke(name, arity)?;
+                    frame = *self.frames.peek(0).unwrap();
+                }
+                Op::Jump => frame.ip += frame.read_short() as isize,
+                Op::JumpIfFalse => {
+                    if self.peek(0).is_falsey() {
+                        frame.ip += frame.read_short() as isize;
+                    }
+                }
+                Op::Less => binary_op!(self, a, b, if a < b { Value::True } else { Value::False }),
+                Op::Loop => frame.ip -= frame.read_short() as isize,
+                Op::Method => self.define_method(frame.read_string()?)?,
+                Op::Multiply => binary_op!(self, a, b, Value::Number(a * b)),
+                Op::Negative => {
+                    if let Value::Number(a) = self.peek(0) {
+                        self.values[self.count - 1] = Value::Number(-a);
+                    } else {
+                        return error("Operand must be a number.");
+                    }
+                }
+                Op::Nil => self.push(Value::Nil),
+                Op::Not => {
+                    let pop = &self.pop();
+                    self.push(if pop.is_falsey() {
+                        Value::False
+                    } else {
+                        Value::True
+                    })
+                }
+                Op::Pop => {
+                    self.pop();
+                }
+                Op::Print => self.pop().println(),
                 _ => todo!(),
             }
         }
+    }
+
+    fn tail(&self, n: usize) -> &[Value] {
+        &self.values[self.count - n..self.count]
     }
 
     // hiero

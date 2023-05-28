@@ -27,6 +27,15 @@ although... clox bahaves differenly if these internments don't happen.
 
 I am adding a simple implementation to the heap.
 
+### binary_op macro
+
+I don't see a way to pass operators, but maybe all required operators exist as
+methods. Nope, doesn't work.
+
+Rust simply does what I'd've always wanted Scala and Java to do: every
+method is an extension method. Doing so also show the limits of that approach:
+extensions methods are not dymanically dispatched.
+
 ### also...
 
 Do some type checking the the compiler, to emit better opcodes? Difficulty:

@@ -29,14 +29,20 @@ impl Value {
             _ => false,
         }
     }
-    pub fn as_bool(&self) -> bool {
-        *self == Value::True
-    }
     pub fn as_number(&self) -> Option<f64> {
         if let Value::Number(n) = self {
             Some(*n)
         } else {
             None
+        }
+    }
+    pub fn println(&self) {
+        match self {
+            Value::False => println!("false"),
+            Value::Nil => println!("nil"),
+            Value::Number(a) => println!("{}", a),
+            Value::Object(a) => a.println(),
+            Value::True => println!("true"),
         }
     }
 }
@@ -62,6 +68,13 @@ impl Function {
             chunk: Chunk::new(),
         }
     }
+    pub fn println(&self) {
+        if let Some(str) = self.name {
+            println!("<fn {}>", *str)
+        } else {
+            println!("<script>")
+        }
+    }
 }
 
 impl Traceable for Function {
@@ -81,7 +94,7 @@ impl Traceable for Function {
 
 pub struct Class {
     pub name: Obj<String>,
-    pub methods: HashMap<String, Obj<Closure>>,
+    pub methods: HashMap<Obj<String>, Obj<Closure>>,
 }
 
 impl Class {
@@ -97,7 +110,8 @@ impl Traceable for Class {
     const KIND: Kind = Kind::Class;
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(self.name.as_handle());
-        for method in self.methods.values() {
+        for (name, method) in &self.methods {
+            collector.push(name.as_handle());
             collector.push(method.as_handle());
         }
     }
@@ -157,7 +171,7 @@ impl Traceable for Closure {
 
 pub struct Instance {
     pub class: Obj<Class>,
-    pub properties: HashMap<String, Value>,
+    pub properties: HashMap<Obj<String>, Value>,
 }
 
 impl Traceable for Instance {

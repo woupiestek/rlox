@@ -44,6 +44,22 @@ impl Handle {
     fn mark(&mut self, value: bool) {
         unsafe { (*self.ptr).is_marked = value }
     }
+    pub fn println(&self) {
+        match self.kind() {
+            Kind::BoundMethod => BoundMethod::obj_from_handle(self)
+                .unwrap()
+                .method
+                .function
+                .println(),
+            Kind::Class => println!("{}", *Class::obj_from_handle(self).unwrap().name),
+            Kind::Function => Function::obj_from_handle(self).unwrap().println(),
+            Kind::Closure => Closure::obj_from_handle(self).unwrap().function.println(),
+            Kind::Instance => println!("{} instance", *Class::obj_from_handle(self).unwrap().name),
+            Kind::Native => println!("<native fn>"),
+            Kind::String => println!("{}", String::from_handle(self).unwrap()),
+            Kind::Upvalue => println!("upvalue"),
+        }
+    }
 }
 
 #[derive(Eq, Hash, PartialEq)]
@@ -125,6 +141,18 @@ where
             ))
         }
     }
+
+    fn get(value: Value) -> Option<Obj<Self>> {
+        if let Value::Object(handle) = value {
+            if Self::test_handle(&handle) {
+                return Some(Obj {
+                    ptr: handle.ptr as *mut (Header, Self),
+                });
+            }
+        }
+        return None;
+    }
+
     fn obj_from_value(value: Value) -> Result<Obj<Self>, String> {
         if let Value::Object(handle) = value {
             Self::obj_from_handle(&handle)
