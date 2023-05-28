@@ -83,12 +83,11 @@ const OP_CODES: [Op; OP_COUNT] = [
     Op::Method,
 ];
 
-impl Op {
-    pub fn encode(&self) -> u8 {
-        *self as u8
-    }
-    pub fn decode(op: u8) -> Result<Op, String> {
-        if op > Op::Method.encode() {
+impl TryFrom<u8> for Op {
+    type Error = String;
+
+    fn try_from(op: u8) -> Result<Self, Self::Error> {
+        if op > Op::Method as u8 {
             return Err(format!("{op} is not a valid opcode"));
         }
         Ok(OP_CODES[op as usize])

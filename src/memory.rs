@@ -1,7 +1,7 @@
 use std::{
     alloc::alloc,
     alloc::Layout,
-    mem,
+    collections::HashMap,
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -46,11 +46,16 @@ impl Handle {
     }
 }
 
+#[derive(Eq, Hash, PartialEq)]
 pub struct Obj<Body: Traceable> {
     ptr: *mut (Header, Body),
 }
 
 impl<T: Traceable> Obj<T> {
+    fn is_marked(&self) -> bool {
+        unsafe { (*self.ptr).0.is_marked }
+    }
+
     pub fn as_handle(&self) -> Handle {
         Handle {
             ptr: self.ptr as *mut Header,
@@ -120,7 +125,7 @@ where
             ))
         }
     }
-    fn obj_from_value(value: &Value) -> Result<Obj<Self>, String> {
+    fn obj_from_value(value: Value) -> Result<Obj<Self>, String> {
         if let Value::Object(handle) = value {
             Self::obj_from_handle(&handle)
         } else {
@@ -169,12 +174,27 @@ macro_rules! drop_handle {
 
 pub struct Heap {
     handles: Vec<Handle>,
+    string_pool: HashMap<String, Obj<String>>,
 }
 
 impl Heap {
     pub fn new() -> Self {
         Self {
             handles: Vec::with_capacity(1 << 12),
+            string_pool: HashMap::new(),
+        }
+    }
+
+    pub fn intern(&mut self, name: &str) -> Obj<String> {
+        match self.string_pool.get(name) {
+            Some(obj) => *obj,
+            None => {
+                // note: two copies of name are stored now.
+                // that can be avoided, for example by moving closer to the clox solution.
+                let obj = self.store(name.to_string());
+                self.string_pool.insert(name.to_string(), obj);
+                obj
+            }
         }
     }
 
@@ -239,6 +259,9 @@ impl Heap {
         }
     }
     fn sweep(&mut self) {
+        // clean up the string pool
+        self.string_pool.retain(|_, v| v.is_marked());
+
         let mut index: usize = 0;
         while index < self.handles.len() {
             // look for dead object
@@ -288,7 +311,7 @@ mod tests {
     #[test]
     fn store_empty_string() {
         let mut heap = Heap::new();
-        heap.store("".to_string());
+        heap.intern("");
     }
 
     fn first(_args: &[Value]) -> Value {

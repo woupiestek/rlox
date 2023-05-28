@@ -23,6 +23,22 @@ impl Value {
             _ => false,
         }
     }
+    pub fn is_bool(&self) -> bool {
+        match self {
+            Value::False | Value::True => true,
+            _ => false,
+        }
+    }
+    pub fn as_bool(&self) -> bool {
+        *self == Value::True
+    }
+    pub fn as_number(&self) -> Option<f64> {
+        if let Value::Number(n) = self {
+            Some(*n)
+        } else {
+            None
+        }
+    }
 }
 
 impl Traceable for String {

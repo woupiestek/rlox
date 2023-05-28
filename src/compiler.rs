@@ -245,7 +245,7 @@ impl<'src> Source<'src> {
     }
 }
 
-pub struct Parser<'src, 'vm> {
+pub struct Parser<'src, 'hp> {
     // source
     source: Source<'src>,
 
@@ -256,14 +256,14 @@ pub struct Parser<'src, 'vm> {
     class_depth: u8,
 
     // helper service
-    heap: &'vm mut Heap,
+    heap: &'hp mut Heap,
 
     // status
     had_error: Option<String>,
 }
 
-impl<'src, 'vm> Parser<'src, 'vm> {
-    pub fn new(source: Source<'src>, heap: &'vm mut Heap) -> Self {
+impl<'src, 'hp> Parser<'src, 'hp> {
+    pub fn new(source: Source<'src>, heap: &'hp mut Heap) -> Self {
         Self {
             source,
             compilers: vec![Compiler::new(FunctionType::Script, heap)],
@@ -350,8 +350,8 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         }
     }
 
-    fn string_value(&mut self, str: &str) -> Value {
-        let downgrade = self.heap.store(str.to_string()).as_handle();
+    fn string_value(&mut self, str: &'src str) -> Value {
+        let downgrade = self.heap.intern(str).as_handle();
         Value::Object(downgrade)
     }
 
@@ -482,7 +482,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         Ok(())
     }
 
-    fn intern(&mut self, name: &str) -> Result<u8, String> {
+    fn intern(&mut self, name: &'src str) -> Result<u8, String> {
         let value = self.string_value(name);
         let index = self.current_compiler().make_constant(value)?;
         Ok(index)
@@ -537,7 +537,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
     }
 
     // admit code for variable access
-    fn variable(&mut self, name: &str, can_assign: bool) -> Result<(), String> {
+    fn variable(&mut self, name: &'src str, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
             if let Some(arg) = self.current_compiler().resolve_local(name)? {
                 (arg, Op::GetLocal as u8, Op::SetLocal as u8)
@@ -715,7 +715,7 @@ impl<'src, 'vm> Parser<'src, 'vm> {
         // I don't get this yet
         for i in 0..count {
             let upvalue = self.current_compiler().upvalues[i as usize];
-            self.emit_bytes(&[if upvalue.is_local { 1 } else { 0 }, upvalue.index]);
+            self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
         Ok(())
     }
@@ -997,16 +997,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn construct_parser() {
-        Parser::new(Source::new(""), &mut Heap::new());
+    fn construct_parser<'src>() {
+        let source = Source::new("");
+        Parser::new(source, &mut Heap::new());
     }
 
     #[test]
-    fn clone_function() {
-        let heap = &mut Heap::new();
-        let mut parser = Parser::new(Source::new(""), heap);
+    fn parse_empty_string() {
+        let mut heap = Heap::new();
+        let mut parser = Parser::new(Source::new(""), &mut heap);
         assert!(parser.source.match_type(TokenType::End));
-        // parser.current_compiler().function.clone();
     }
 
     #[test]

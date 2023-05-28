@@ -1,5 +1,38 @@
 # Rlox
 
+## 2023-05-28
+
+Shoulder pain is slowing me down, but I am making much progress now.
+
+### rooted elements
+
+Just a thought: keep track of which objects are rooted and which aren't using
+the header. Risky? Maybe: callers have to carefully root and unroot elements.
+Perhaps the borrow checker can help there... Why this might be a bad idea: if it
+is in the header, the garbage collector has traverse all objects twice, at least
+once for mark and once for sweep. If rooting and unrooting is done by collecting
+objects, however, unrooting becomes more expensive.
+
+### NaN boxing again
+
+Assuming 48 bits pointers, we could have 7 different pointer types. In
+particular differences between compile time constants run time variables still
+seems valid.
+
+### the necessity for the string pool.
+
+It is important for efficiently comparing names of properties and variables.
+This is what clox is build around. Not all strings have to be interned,
+although... clox bahaves differenly if these internments don't happen.
+
+I am adding a simple implementation to the heap.
+
+### also...
+
+Do some type checking the the compiler, to emit better opcodes? Difficulty:
+variables can change type! Seems especially useful to separate string
+concatenation from
+
 ## 2023-05-27
 
 ### second serious debug
@@ -8,8 +41,8 @@ Ran into a seg fault, but fixed a forgotten change in a macro.
 
 ### upvalue at runtime
 
-a collation where we can insert anywhere, but remove quickly form the end.
-so like a heap.
+a collation where we can insert anywhere, but remove quickly form the end. so
+like a heap.
 
 ## 2023-05-26
 

@@ -5,7 +5,7 @@ use crate::{
     common::{error, U8_COUNT},
     compiler::compile,
     memory::{Heap, Kind, Obj, Traceable},
-    object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
+    object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
     stack::Stack,
 };
 
@@ -54,7 +54,7 @@ impl CallFrame {
     }
 
     fn read_string(&mut self) -> Result<Obj<String>, String> {
-        String::obj_from_value(&self.read_constant())
+        String::obj_from_value(self.read_constant())
     }
 }
 
@@ -76,29 +76,32 @@ pub struct VM {
     count: usize,
     frames: Stack<CallFrame>,
     open_upvalues: Option<Obj<Upvalue>>,
-    globals: HashMap<String, Value>,
-    init_string: String,
+    globals: HashMap<Obj<String>, Value>,
+    init_string: Obj<String>,
     heap: Heap,
 }
 
 impl VM {
     pub fn new() -> Self {
+        let mut heap = Heap::new();
+        let init_string = heap.intern("init");
+        let clock_string = heap.intern("clock");
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             count: 0,
             frames: Stack::new(MAX_FRAMES),
             open_upvalues: None,
             globals: HashMap::new(),
-            init_string: "init".to_string(),
-            heap: Heap::new(),
+            init_string,
+            heap,
         };
-        s.define_native("clock", CLOCK_NATIVE);
+        s.define_native(clock_string, CLOCK_NATIVE);
         s
     }
 
-    fn define_native(&mut self, name: &str, native_fn: Native) {
+    fn define_native(&mut self, name: Obj<String>, native_fn: Native) {
         let value = Value::Object(self.heap.store(native_fn).as_handle());
-        self.globals.insert(name.to_string(), value);
+        self.globals.insert(name, value);
     }
 
     fn push(&mut self, value: Value) {
@@ -196,7 +199,7 @@ impl VM {
         match class.methods.get(&name) {
             None => Err(format!("Undefined property '{}'.", name)),
             Some(method) => {
-                let instance = Instance::obj_from_value(&self.peek(0))?;
+                let instance = Instance::obj_from_value(self.peek(0))?;
                 let bm = self.heap.store(BoundMethod::new(instance, *method));
                 self.pop();
                 self.push(bm.as_value());
@@ -246,29 +249,86 @@ impl VM {
 
     fn define_method(&mut self, name: Obj<String>) -> Result<(), String> {
         let method = self.peek(0);
-        let mut class = Class::obj_from_value(&method)?;
+        let mut class = Class::obj_from_value(method)?;
         (*class)
             .methods
-            .insert((*name).clone(), Closure::obj_from_value(&method)?);
+            .insert((*name).clone(), Closure::obj_from_value(method)?);
         self.pop();
         Ok(())
     }
 
-    fn concatenate(&mut self) -> Result<(), String> {
+    fn concatenate(&mut self, a: &str, b: &str) -> Value {
         let mut c = String::new();
-        c.push_str(String::from_value(&self.peek(1))?);
-        c.push_str(String::from_value(&self.peek(0))?);
-        let d = self.heap.store(c).as_value();
-        self.pop();
-        self.pop();
-        self.push(d);
-        Ok(())
+        c.push_str(a);
+        c.push_str(b);
+        self.heap.intern(&c).as_value()
+    }
+
+    // combined to avoid gc errors
+    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> Obj<T> {
+        let obj = self.heap.store(traceable);
+        self.push(obj.as_value());
+        obj
     }
 
     fn run(&mut self) -> Result<(), String> {
-        let mut frame = self.frames.peek(0).unwrap();
+        let mut frame = *self.frames.peek(0).unwrap();
         loop {
-            match Op::decode(frame.read_byte())? {
+            match Op::try_from(frame.read_byte())? {
+                Op::Add => {
+                    if let (Ok(a), Ok(b)) = (
+                        String::obj_from_value(self.peek(1)),
+                        String::obj_from_value(self.peek(0)),
+                    ) {
+                        let c = self.concatenate(&*a, &*b);
+                        self.count -= 2;
+                        self.push(c);
+                        continue;
+                    }
+
+                    if let (Value::Number(a), Value::Number(b)) = (self.peek(1), self.peek(0)) {
+                        self.count -= 2;
+                        self.push(Value::Number(a + b));
+                        continue;
+                    }
+
+                    return error("Operands must be either numbers or strings");
+                }
+                Op::Call => {
+                    let arity = frame.read_byte();
+                    self.call_value(self.peek(arity as usize), arity)?;
+                    // sometimes a new frame is pushed.
+                    frame = *self.frames.peek(0).unwrap();
+                }
+                Op::Class => {
+                    self.push_traceable(Class::new(frame.read_string()?));
+                }
+                Op::CloseUpvalue => {
+                    self.close_upvalues(self.count - 1);
+                    self.pop();
+                }
+                Op::Closure => {
+                    let function = Function::obj_from_value(frame.read_constant())?;
+                    let mut closure = self.push_traceable(Closure::new(function));
+                    for i in 0..function.upvalue_count as usize {
+                        let is_local = frame.read_byte();
+                        let index = frame.read_byte();
+                        closure.upvalues.push(if is_local == 1 {
+                            self.capture_upvalue(frame.slots + index as usize)
+                        } else {
+                            (*frame.closure.unwrap()).upvalues[i]
+                        })
+                    }
+                }
+                Op::Constant => self.push(frame.read_constant()),
+                Op::DefineGlobal => {
+                    let key = frame.read_string()?;
+                    let value = self.peek(0);
+                    todo!();
+                    //self.globals.insert(&*key, value);
+                    self.pop();
+                }
+
                 _ => todo!(),
             }
         }
@@ -289,11 +349,10 @@ mod tests {
 
     #[test]
     fn no_error_on_init() {
-        // access violation
         VM::new();
     }
 
-    // #[test]
+    #[test]
     fn interpret_empty_string() {
         let mut vm = VM::new();
         assert!(vm.interpret("").is_ok())
