@@ -42,9 +42,13 @@ impl CallFrame {
         self.ip += 1;
         self.chunk().read_byte(self.ip as usize)
     }
-    fn read_short(&mut self) -> u16 {
-        self.ip += 2;
-        self.chunk().read_short((self.ip - 1) as usize)
+
+    fn jump_forward(&mut self) {
+        self.ip += self.chunk().read_short(self.ip as usize + 1) as isize;
+    }
+
+    fn jump_back(&mut self) {
+        self.ip -= self.chunk().read_short(self.ip as usize + 1) as isize;
     }
 
     fn read_constant(&mut self) -> Value {
@@ -337,10 +341,11 @@ impl VM {
 
                 print!("globals: ");
                 for (k, v) in &self.globals {
-                    print!("{}:{}, ", **k, v)
+                    print!("{}:{};", **k, v)
                 }
                 println!("");
 
+                println!("ip: {}", self.top_frame().ip);
                 println!("op code: {:?}", instruction);
             }
             match instruction {
@@ -462,14 +467,16 @@ impl VM {
                     let arity = self.top_frame().read_byte();
                     self.invoke(name, arity)?;
                 }
-                Op::Jump => self.top_frame().ip += self.top_frame().read_short() as isize,
+                Op::Jump => self.top_frame().jump_forward(),
                 Op::JumpIfFalse => {
                     if self.peek(0).is_falsey() {
-                        self.top_frame().ip += self.top_frame().read_short() as isize;
+                        self.top_frame().jump_forward();
+                    } else {
+                        self.top_frame().ip += 2;
                     }
                 }
                 Op::Less => binary_op!(self, a, b, if a < b { Value::True } else { Value::False }),
-                Op::Loop => self.top_frame().ip -= self.top_frame().read_short() as isize,
+                Op::Loop => self.top_frame().jump_back(),
                 Op::Method => {
                     let name = self.top_frame().read_string()?;
                     self.define_method(name)?
@@ -591,6 +598,40 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn boolean_logic() {
+        let test = "print \"hi\" or 2; // \"hi\".";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn for_loop_long() {
+        let test = "
+        var a = 0;
+        var temp;
+        for (var b = 1; a < 10000; b = temp + b) {
+            print a;
+            temp = a;
+            a = b;
+        }";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn for_loop_short() {
+        let test = "
+        for (var b = 0; b < 10; b = b + 1) {
+            print \"test\";
+        }";
         let mut vm = VM::new(Heap::new());
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());

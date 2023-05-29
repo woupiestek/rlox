@@ -1,5 +1,5 @@
 use crate::{
-    chunk::Op,
+    chunk::{Chunk, Op},
     common::U8_COUNT,
     memory::{Heap, Obj},
     object::{Function, Value},
@@ -142,18 +142,6 @@ impl<'src> Compiler<'src> {
         Ok(count as u8)
     }
 
-    fn count(&mut self) -> usize {
-        self.function.chunk.count()
-    }
-
-    fn make_constant(&mut self, value: Value) -> Result<u8, String> {
-        self.function.chunk.add_constant(value)
-    }
-
-    fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
-        self.function.chunk.patch_jump(offset)
-    }
-
     fn declare_variable(&mut self, name: Token<'src>) -> Result<(), String> {
         if self.scope_depth == 0 {
             return Ok(());
@@ -284,19 +272,16 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn emit_bytes(&mut self, bytes: &[u8]) {
         let line = self.source.previous_token.line;
-        self.current_compiler().function.chunk.write(bytes, line);
+        self.current_chunk().write(bytes, line);
     }
 
     fn emit_op(&mut self, op: Op) {
         let line = self.source.previous_token.line;
-        self.current_compiler()
-            .function
-            .chunk
-            .write(&[op as u8], line);
+        self.current_chunk().write(&[op as u8], line);
     }
 
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
-        let offset = self.current_compiler().count() - start + 2;
+        let offset = self.current_chunk().count() - start + 1;
         if offset > u16::MAX as usize {
             err!("loop size to large")
         } else {
@@ -307,7 +292,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn emit_jump(&mut self, instruction: Op) -> usize {
         self.emit_bytes(&[instruction as u8, 0xff, 0xff]);
-        self.current_compiler().count() - 2
+        self.current_chunk().count() - 2
     }
 
     fn emit_return(&mut self) {
@@ -319,7 +304,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn emit_constant(&mut self, value: Value) -> Result<(), String> {
-        let make_constant = self.current_compiler().make_constant(value)?;
+        let make_constant = self.current_chunk().add_constant(value)?;
         Ok(self.emit_bytes(&[Op::Constant as u8, make_constant]))
     }
 
@@ -416,11 +401,12 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         let end_jump = self.emit_jump(Op::JumpIfFalse);
         self.emit_op(Op::Pop);
         self.parse_precedence(Prec::And)?;
-        self.current_compiler().patch_jump(end_jump)
+
+        self.current_chunk().patch_jump(end_jump)
     }
 
     fn binary(&mut self) -> Result<(), String> {
-        match self.source.previous_token.token_type {
+        match self.previous_token_type() {
             TokenType::BangEqual => {
                 self.parse_precedence(Prec::Equality)?;
                 self.emit_bytes(&[Op::Equal as u8, Op::Not as u8])
@@ -487,7 +473,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn intern(&mut self, name: &'src str) -> Result<u8, String> {
         let value = self.string_value(name);
-        let index = self.current_compiler().make_constant(value)?;
+        let index = self.current_chunk().add_constant(value)?;
         Ok(index)
     }
 
@@ -523,11 +509,12 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         let else_jump = self.emit_jump(Op::JumpIfFalse);
         let end_jump = self.emit_jump(Op::Jump);
 
-        self.current_compiler().patch_jump(else_jump)?;
+        self.current_chunk().patch_jump(else_jump)?;
         self.emit_op(Op::Pop);
 
         self.parse_precedence(Prec::Or)?;
-        self.current_compiler().patch_jump(end_jump)?;
+
+        self.current_chunk().patch_jump(end_jump)?;
         Ok(())
     }
 
@@ -546,7 +533,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
                 (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
             } else {
                 let value = self.string_value(name);
-                let arg = self.current_compiler().make_constant(value)?;
+                let arg = self.current_chunk().add_constant(value)?;
                 (arg, Op::GetGlobal as u8, Op::SetGlobal as u8)
             }
         };
@@ -638,11 +625,11 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     fn parse_precedence(&mut self, precedence: Prec) -> Result<(), String> {
         self.source.advance();
         let can_assign = precedence <= Prec::Assignment;
-        self.parse_prefix(self.source.previous_token.token_type, can_assign)?;
+        self.parse_prefix(self.previous_token_type(), can_assign)?;
 
         while precedence <= self.source.current_token.token_type.precedence() {
             self.source.advance();
-            self.parse_infix(self.source.previous_token.token_type, can_assign)?;
+            self.parse_infix(self.previous_token_type(), can_assign)?;
         }
 
         if can_assign && self.source.match_type(TokenType::Equal) {
@@ -650,6 +637,10 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         } else {
             Ok(())
         }
+    }
+
+    fn previous_token_type(&self) -> TokenType {
+        self.source.previous_token.token_type
     }
 
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
@@ -660,7 +651,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             0
         } else {
             let value = self.string_value(name.lexeme);
-            self.current_compiler().make_constant(value)?
+            self.current_chunk().add_constant(value)?
         })
     }
 
@@ -716,7 +707,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         let compiler = self.end_compiler();
         let function = compiler.function;
         let upvalues = compiler.upvalues;
-        let index = self.current_compiler().make_constant(function.as_value())?;
+        let index = self.current_chunk().add_constant(function.as_value())?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 
         // I don't get this yet
@@ -725,6 +716,10 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
         Ok(())
+    }
+
+    fn current_chunk(&mut self) -> &mut Chunk {
+        &mut self.current_compiler().function.chunk
     }
 
     fn method(&mut self) -> Result<(), String> {
@@ -842,7 +837,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
                 self.expression_statement()
             }?;
         }
-        let mut loop_start = self.current_compiler().count();
+        let mut loop_start = self.current_chunk().count();
         let mut exit_jump: Option<usize> = None;
         if !self.source.match_type(TokenType::Semicolon) {
             self.expression()?;
@@ -856,7 +851,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
         if !self.source.match_type(TokenType::RightParen) {
             let body_jump = self.emit_jump(Op::Jump);
-            let increment_start = self.current_compiler().count();
+            let increment_start = self.current_chunk().count();
             self.expression()?;
             self.emit_op(Op::Pop);
             self.source
@@ -864,13 +859,14 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
             self.emit_loop(loop_start)?;
             loop_start = increment_start;
-            self.current_compiler().patch_jump(body_jump)?;
+
+            self.current_chunk().patch_jump(body_jump)?;
         }
 
         self.statement()?;
         self.emit_loop(loop_start)?;
         if let Some(i) = exit_jump {
-            self.current_compiler().patch_jump(i)?;
+            self.current_chunk().patch_jump(i)?;
             self.emit_op(Op::Pop);
         }
         self.end_scope();
@@ -888,12 +884,14 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.emit_op(Op::Pop);
         self.statement()?;
         let else_jump = self.emit_jump(Op::Jump);
-        self.current_compiler().patch_jump(then_jump)?;
+
+        self.current_chunk().patch_jump(then_jump)?;
         self.emit_op(Op::Pop);
         if self.source.match_type(TokenType::Else) {
             self.statement()?;
         }
-        self.current_compiler().patch_jump(else_jump)?;
+
+        self.current_chunk().patch_jump(else_jump)?;
         Ok(())
     }
 
@@ -927,7 +925,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn while_statement(&mut self) -> Result<(), String> {
-        let loop_start = self.current_compiler().count();
+        let loop_start = self.current_chunk().count();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
         self.expression()?;
@@ -939,7 +937,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.statement()?;
         self.emit_loop(loop_start)?;
 
-        self.current_compiler().patch_jump(exit_jump)?;
+        self.current_chunk().patch_jump(exit_jump)?;
         self.emit_op(Op::Pop);
         Ok(())
     }
@@ -1049,19 +1047,6 @@ mod tests {
     }
 
     #[test]
-    fn for_loop() {
-        let test = "
-        for (var b = 1; a < 10000; b = temp + b) {
-          print a;
-          temp = a;
-          a = b;
-        }
-        ";
-        let result = compile(test, &mut Heap::new());
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn scoping_2() {
         let test = "fun add(a, b, c) {
             print a + b + c;
@@ -1120,6 +1105,34 @@ mod tests {
     #[test]
     fn boolean_logic() {
         let test = "print \"hi\" or 2; // \"hi\".";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        Disassembler::disassemble(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn for_loop_long() {
+        let test = "
+        var a = 0;
+        var temp;
+        for (var b = 1; a < 10000; b = temp + b) {
+            print a;
+            temp = a;
+            a = b;
+          }";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        Disassembler::disassemble(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn for_loop_short() {
+        let test = "
+        for (var b = 0; b < 10; b = b + 1) {
+            print \"test\";
+        }";
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());

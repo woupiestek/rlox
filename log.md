@@ -17,6 +17,13 @@ it confuses the borrow checker.
 Why jump a distance, if we know the absolute coordinates of the code? I guess
 the relative numbers are just smaller.
 
+This is giving me a lot of trouble now.
+
+### same size instructions
+
+Rlox would probably work with all instruction 24 bits. with 32 bits, it could be
+a register machine.
+
 ## 2023-05-28
 
 Shoulder pain is slowing me down, but I am making much progress now.

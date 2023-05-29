@@ -19,6 +19,7 @@ impl<'src> Disassembler<'src> {
             if self.ip >= self.chunk.count() {
                 return;
             }
+            print!("{}:", self.ip);
             let op_code = match Op::try_from(self.chunk.read_byte(self.ip)) {
                 Err(_) => {
                     println!("error: {}", self.chunk.read_byte(self.ip));
@@ -46,7 +47,8 @@ impl<'src> Disassembler<'src> {
                 | Op::SetGlobal
                 | Op::SetProperty => self.constant(),
                 Op::Invoke | Op::SuperInvoke => self.invoke(),
-                Op::Jump | Op::JumpIfFalse | Op::Loop => self.jump(),
+                Op::Jump | Op::JumpIfFalse => self.jump_forward(),
+                Op::Loop => self.jump_back(),
                 _ => (),
             }
             println!(";")
@@ -68,8 +70,12 @@ impl<'src> Disassembler<'src> {
         );
         self.ip += 2;
     }
-    fn jump(&mut self) {
-        print!(" {}", self.chunk.read_byte(self.ip));
+    fn jump_forward(&mut self) {
+        print!(" {}", self.ip + self.chunk.read_short(self.ip) as usize);
+        self.ip += 2;
+    }
+    fn jump_back(&mut self) {
+        print!(" {}", self.ip - self.chunk.read_short(self.ip) as usize);
         self.ip += 2;
     }
 }

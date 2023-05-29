@@ -119,9 +119,12 @@ impl Chunk {
             let op = self.code[offset - 1];
             op == (Op::Jump as u8) || op == (Op::JumpIfFalse as u8) || op == (Op::Loop as u8)
         });
-        let jump = self.code.len() - offset - 2;
+        let jump = self.code.len() - offset;
         if jump > u16::MAX as usize {
             return err!("Jump too large");
+        }
+        if jump == 0 {
+            return err!("Not a jump");
         }
         self.code[offset] = (jump >> 8) as u8;
         self.code[offset + 1] = jump as u8;
@@ -140,10 +143,11 @@ impl Chunk {
         }
     }
     pub fn read_byte(&self, index: usize) -> u8 {
+        assert!(index < self.code.len());
         self.code[index]
     }
     pub fn read_short(&self, index: usize) -> u16 {
-        (self.read_byte(index) as u16) << 8 | self.read_byte(index + 1) as u16
+        (self.read_byte(index) as u16) << 8 | (self.read_byte(index + 1) as u16)
     }
     pub fn read_constant(&self, index: usize) -> Value {
         self.constants[self.read_byte(index) as usize]
