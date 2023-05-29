@@ -151,15 +151,7 @@ impl<'src> Compiler<'src> {
     }
 
     fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
-        let jump = self.count() - offset - 2;
-        if jump > u16::MAX as usize {
-            err!("jump too large")
-        } else {
-            self.function
-                .chunk
-                .over_write(&[(jump >> 8) as u8, jump as u8], offset);
-            Ok(())
-        }
+        self.function.chunk.patch_jump(offset)
     }
 
     fn declare_variable(&mut self, name: Token<'src>) -> Result<(), String> {
@@ -527,9 +519,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         }
     }
 
-    // I want different logic...
     fn or(&mut self) -> Result<(), String> {
-        // no negate top of stack, jump_if, etc.
         let else_jump = self.emit_jump(Op::JumpIfFalse);
         let end_jump = self.emit_jump(Op::Jump);
 
@@ -1112,6 +1102,24 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        Disassembler::disassemble(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn printing() {
+        let test = "print \"hi\"; // \"hi\".";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        Disassembler::disassemble(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn boolean_logic() {
+        let test = "print \"hi\" or 2; // \"hi\".";
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());

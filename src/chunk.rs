@@ -114,12 +114,18 @@ impl Chunk {
             self.lines.push(line);
         }
     }
-    pub fn over_write(&mut self, bytes: &[u8], offset: usize) {
-        let end = bytes.len() + offset;
-        assert!(end < self.code.len());
-        for i in 0..bytes.len() {
-            self.code[i] = bytes[i]
+    pub fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
+        assert!({
+            let op = self.code[offset - 1];
+            op == (Op::Jump as u8) || op == (Op::JumpIfFalse as u8) || op == (Op::Loop as u8)
+        });
+        let jump = self.code.len() - offset - 2;
+        if jump > u16::MAX as usize {
+            return err!("Jump too large");
         }
+        self.code[offset] = (jump >> 8) as u8;
+        self.code[offset + 1] = jump as u8;
+        Ok(())
     }
     pub fn count(&self) -> usize {
         self.code.len()
@@ -137,9 +143,9 @@ impl Chunk {
         self.code[index]
     }
     pub fn read_short(&self, index: usize) -> u16 {
-        (self.code[index] as u16) << 8 | self.code[index + 1] as u16
+        (self.read_byte(index) as u16) << 8 | self.read_byte(index + 1) as u16
     }
     pub fn read_constant(&self, index: usize) -> Value {
-        self.constants[self.code[index] as usize]
+        self.constants[self.read_byte(index) as usize]
     }
 }

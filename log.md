@@ -8,8 +8,14 @@ first time.
 
 ### frames issue
 
-Copying the top frame into the run method means that the changing instruction pointer is not 
-stored. Which cannot wokr well. So a reference would be good, but it confuses the borrow checker.
+Copying the top frame into the run method means that the changing instruction
+pointer is not stored. Which cannot wokr well. So a reference would be good, but
+it confuses the borrow checker.
+
+### jumping around
+
+Why jump a distance, if we know the absolute coordinates of the code? I guess
+the relative numbers are just smaller.
 
 ## 2023-05-28
 

@@ -4,9 +4,9 @@ use memory::Heap;
 
 use crate::vm::VM;
 
-mod chunk;
 #[macro_use]
 mod common;
+mod chunk;
 mod compiler;
 
 mod memory;
