@@ -16,12 +16,12 @@ impl<'src> Disassembler<'src> {
 
     fn run(&mut self) {
         loop {
-            if self.ip >= self.chunk.code.len() {
+            if self.ip >= self.chunk.count() {
                 return;
             }
-            let op_code = match Op::try_from(self.chunk.code[self.ip]) {
+            let op_code = match Op::try_from(self.chunk.read_byte(self.ip)) {
                 Err(_) => {
-                    println!("error: {}", self.chunk.code[self.ip]);
+                    println!("error: {}", self.chunk.read_byte(self.ip));
                     self.ip += 1;
                     continue;
                 }
@@ -53,26 +53,23 @@ impl<'src> Disassembler<'src> {
         }
     }
     fn byte(&mut self) {
-        print!(" {}", self.chunk.code[self.ip]);
+        print!(" {}", self.chunk.read_byte(self.ip));
         self.ip += 1;
     }
     fn constant(&mut self) {
-        let index = self.chunk.code[self.ip];
-        let constant = self.chunk.constants[index as usize];
-        print!(" {}", constant);
+        print!(" {}", self.chunk.read_constant(self.ip));
         self.ip += 1;
     }
     fn invoke(&mut self) {
-        let constant = self.chunk.code[self.ip];
-        let arity = self.chunk.code[self.ip + 1];
-        print!(" {} ({})", self.chunk.constants[constant as usize], arity);
-        self.ip += 1;
-        self.ip += 2
+        print!(
+            " {} ({})",
+            self.chunk.read_constant(self.ip),
+            self.chunk.read_byte(self.ip + 1)
+        );
+        self.ip += 2;
     }
     fn jump(&mut self) {
+        print!(" {}", self.chunk.read_byte(self.ip));
         self.ip += 2;
-        let short =
-            ((self.chunk.code[self.ip - 1] as u16) << 8) | (self.chunk.code[self.ip] as u16);
-        print!(" {}", short)
     }
 }

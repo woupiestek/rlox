@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time};
 
 use crate::{
-    chunk::Op,
+    chunk::{Chunk, Op},
     common::U8_COUNT,
     compiler::compile,
     memory::{Heap, Kind, Obj, Traceable},
@@ -35,22 +35,21 @@ impl CallFrame {
             closure,
         }
     }
-    fn code(&self, ip: isize) -> u8 {
-        self.closure.function.chunk.code[ip as usize]
+    fn chunk(&self) -> &Chunk {
+        &self.closure.function.chunk
     }
     fn read_byte(&mut self) -> u8 {
         self.ip += 1;
-        // this feels inefficient
-        self.code(self.ip)
+        self.chunk().read_byte(self.ip as usize)
     }
     fn read_short(&mut self) -> u16 {
         self.ip += 2;
-        ((self.code(self.ip - 1) as u16) << 8) | (self.code(self.ip) as u16)
+        self.chunk().read_short((self.ip - 1) as usize)
     }
 
     fn read_constant(&mut self) -> Value {
-        let read_byte = self.read_byte() as usize;
-        self.closure.function.chunk.constants[read_byte]
+        self.ip += 1;
+        self.chunk().read_constant(self.ip as usize)
     }
 
     fn read_string(&mut self) -> Result<Obj<String>, String> {
@@ -67,7 +66,7 @@ impl CallFrame {
         } else {
             (self.ip - 1) as usize
         };
-        let last_line = self.closure.function.chunk.lines[last_ip];
+        let last_line = self.chunk().lines[last_ip];
         Err(format!("Error at line {}: {}", last_line, msg))
     }
 }
@@ -199,7 +198,7 @@ impl VM {
     }
 
     fn peek(&self, distance: usize) -> Value {
-        self.values[self.values.len() - 1 - distance]
+        self.values[self.count - 1 - distance]
     }
 
     fn call(&mut self, closure: Obj<Closure>, arg_count: u8) -> Result<(), String> {
@@ -331,7 +330,24 @@ impl VM {
 
     fn run(&mut self) -> Result<(), String> {
         loop {
-            match Op::try_from(self.top_frame().read_byte())? {
+            let instruction = Op::try_from(self.top_frame().read_byte())?;
+            #[cfg(feature = "trace")]
+            {
+                print!("stack: ");
+                for i in 0..self.count {
+                    print!("{};", &self.values[i]);
+                }
+                println!("");
+
+                print!("globals: ");
+                for (k, v) in &self.globals {
+                    print!("{}:{}, ", **k, v)
+                }
+                println!("");
+
+                println!("op code: {:?}", instruction);
+            }
+            match instruction {
                 Op::Add => {
                     if let &[a, b] = self.tail(2)? {
                         if let (Ok(a), Ok(b)) =
@@ -583,6 +599,6 @@ mod tests {
         print a + b;";
         let mut vm = VM::new(Heap::new());
         let result = vm.interpret(test);
-        assert!(vm.interpret(test).is_ok(), "{}", result.unwrap_err());
+        assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 }

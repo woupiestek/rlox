@@ -95,7 +95,7 @@ impl TryFrom<u8> for Op {
 }
 
 pub struct Chunk {
-    pub code: Vec<u8>,
+    code: Vec<u8>,
     pub lines: Vec<u16>,
     pub constants: Vec<Value>,
 }
@@ -132,5 +132,14 @@ impl Chunk {
             self.constants.push(value);
             Ok(len as u8)
         }
+    }
+    pub fn read_byte(&self, index: usize) -> u8 {
+        self.code[index]
+    }
+    pub fn read_short(&self, index: usize) -> u16 {
+        (self.code[index] as u16) << 8 | self.code[index + 1] as u16
+    }
+    pub fn read_constant(&self, index: usize) -> Value {
+        self.constants[self.code[index] as usize]
     }
 }
