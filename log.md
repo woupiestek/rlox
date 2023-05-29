@@ -24,6 +24,17 @@ This is giving me a lot of trouble now.
 Rlox would probably work with all instruction 24 bits. with 32 bits, it could be
 a register machine.
 
+### latest bug
+
+Running `cargo run -- test.lox` when evualating `b = temp + b`, `b` equals
+`"outer a"`, a value set to another local variable by another compiler. Why is
+this value still on the stack? why is `b` resolved this way? Unit tests won't
+reproduce this effect.
+
+Double pop: fighting with the borrow checker combined with copying code...
+
+Next one: weird things with function calls.
+
 ## 2023-05-28
 
 Shoulder pain is slowing me down, but I am making much progress now.

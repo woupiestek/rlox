@@ -345,7 +345,9 @@ impl VM {
                 }
                 println!("");
 
-                println!("ip: {}", self.top_frame().ip);
+                let ip = self.top_frame().ip;
+                println!("ip: {}", ip);
+                println!("line: {}", self.top_frame().chunk().lines[ip as usize]);
                 println!("op code: {:?}", instruction);
             }
             match instruction {
@@ -367,9 +369,11 @@ impl VM {
                         }
 
                         return err!(
-                            "Operands must be either numbers or strings, found {} and {}",
+                            "Operands must be either numbers or strings, found {} '{}' and {} '{}'",
                             a.type_name(),
-                            b.type_name()
+                            a,
+                            b.type_name(),
+                            b
                         );
                     }
                 }
@@ -634,6 +638,20 @@ mod tests {
         }";
         let mut vm = VM::new(Heap::new());
         let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn for_loop_3() {
+        let test_2 = "
+        { var a = \"outer a\"; }
+        var temp;
+        for (var b = 1; b < 10000; b = temp + b) {
+            print b;
+            temp = b;
+        }";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test_2);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 }

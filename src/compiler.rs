@@ -316,31 +316,27 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.current_compiler().scope_depth -= 1;
         let scope_depth = self.current_compiler().scope_depth;
         loop {
-            match self.current_compiler().locals.last() {
+            let is_captured = match self.current_compiler().locals.last() {
                 None => return,
                 Some(local) => {
                     if local.depth.is_none() || local.depth.unwrap() <= scope_depth {
                         return;
+                    } else {
+                        local.is_captured
                     }
                 }
-            }
-            let local = self.current_compiler().locals.pop().unwrap();
-            let depth = local.depth.unwrap();
-            if depth > scope_depth {
-                self.emit_bytes(&[if local.is_captured {
-                    Op::CloseUpvalue
-                } else {
-                    Op::Pop
-                } as u8]);
-                self.current_compiler().locals.pop();
-                continue;
-            }
+            };
+            self.emit_bytes(&[if is_captured {
+                Op::CloseUpvalue
+            } else {
+                Op::Pop
+            } as u8]);
+            self.current_compiler().locals.pop();
         }
     }
 
     fn string_value(&mut self, str: &'src str) -> Value {
-        let downgrade = self.heap.intern(str).as_handle();
-        Value::Object(downgrade)
+        Value::Object(self.heap.intern(str).as_handle())
     }
 
     fn resolve_upvalue(&mut self, name: &str) -> Result<Option<u8>, String> {
@@ -473,8 +469,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn intern(&mut self, name: &'src str) -> Result<u8, String> {
         let value = self.string_value(name);
-        let index = self.current_chunk().add_constant(value)?;
-        Ok(index)
+        Ok(self.current_chunk().add_constant(value)?)
     }
 
     fn lexeme(&self) -> &'src str {
@@ -647,12 +642,11 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name = self.source.previous_token;
         self.current_compiler().declare_variable(name)?;
-        Ok(if self.current_compiler().scope_depth > 0 {
-            0
+        if self.current_compiler().scope_depth > 0 {
+            Ok(0)
         } else {
-            let value = self.string_value(name.lexeme);
-            self.current_chunk().add_constant(value)?
-        })
+            self.intern(name.lexeme)
+        }
     }
 
     fn define_variable(&mut self, global: u8) {
@@ -1120,7 +1114,7 @@ mod tests {
             print a;
             temp = a;
             a = b;
-          }";
+        }";
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
