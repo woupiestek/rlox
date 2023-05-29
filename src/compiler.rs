@@ -1,6 +1,6 @@
 use crate::{
     chunk::Op,
-    common::{error, U8_COUNT},
+    common::U8_COUNT,
     memory::{Heap, Obj},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
@@ -101,7 +101,7 @@ impl<'src> Compiler<'src> {
             let local = &self.locals[i];
             if local.name.lexeme == name {
                 return if local.depth.is_none() {
-                    error("Can't read local variable in its own initializer.")
+                    err!("Can't read local variable in its own initializer.")
                 } else {
                     Ok(Some(i as u8))
                 };
@@ -111,7 +111,7 @@ impl<'src> Compiler<'src> {
 
     fn add_local(&mut self, name: Token<'src>) -> Result<(), String> {
         if self.locals.len() == U8_COUNT {
-            return error("Too many local variables in function.");
+            return err!("Too many local variables in function.");
         }
         self.locals.push(Local::new(name));
         return Ok(());
@@ -135,7 +135,7 @@ impl<'src> Compiler<'src> {
             }
         }
         if count == u8::MAX as usize {
-            return error("Too many closure variables in function.");
+            return err!("Too many closure variables in function.");
         }
         self.upvalues.push(Upvalue { index, is_local });
         self.function.upvalue_count = self.upvalues.len() as u8;
@@ -153,7 +153,7 @@ impl<'src> Compiler<'src> {
     fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
         let jump = self.count() - offset - 2;
         if jump > u16::MAX as usize {
-            error("jump too large")
+            err!("jump too large")
         } else {
             self.function
                 .chunk
@@ -306,7 +306,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
         let offset = self.current_compiler().count() - start + 2;
         if offset > u16::MAX as usize {
-            error("loop size to large")
+            err!("loop size to large")
         } else {
             self.emit_bytes(&[Op::Loop as u8, (offset >> 8) as u8, offset as u8]);
             Ok(())
@@ -409,7 +409,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             arity += 1;
             if self.source.match_type(TokenType::Comma) {
                 if arity == u8::MAX {
-                    return error("Can't have more than 255 arguments.");
+                    return err!("Can't have more than 255 arguments.");
                 }
                 continue;
             } else {
@@ -572,10 +572,10 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn super_(&mut self) -> Result<(), String> {
         if self.compilers.is_empty() {
-            return error("Can't use 'super' outside of a class.");
+            return err!("Can't use 'super' outside of a class.");
         }
         if self.has_super & 1 == 0 {
-            return error("Can't use 'super' in a class with no superclass.");
+            return err!("Can't use 'super' in a class with no superclass.");
         }
         self.source
             .consume(TokenType::Dot, "Expect '.' after 'super'.")?;
@@ -594,7 +594,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn this(&mut self, can_assign: bool) -> Result<(), String> {
         if self.compilers.is_empty() {
-            return error("Can't use 'this' outside of a class.");
+            return err!("Can't use 'this' outside of a class.");
         }
         self.variable("this", can_assign)
     }
@@ -641,7 +641,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             TokenType::True => Ok(self.emit_op(Op::True)),
             TokenType::Super => self.super_(),
             TokenType::This => self.this(can_assign),
-            _ => error("Expect expression."),
+            _ => err!("Expect expression."),
         }
     }
 
@@ -656,7 +656,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         }
 
         if can_assign && self.source.match_type(TokenType::Equal) {
-            error("Invalid assignment target.")
+            err!("Invalid assignment target.")
         } else {
             Ok(())
         }
@@ -707,7 +707,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         if !self.source.check(TokenType::RightParen) {
             loop {
                 if self.current_compiler().function.arity == u8::MAX {
-                    return error("Can't have more than 255 parameters.");
+                    return err!("Can't have more than 255 parameters.");
                 }
                 self.current_compiler().function.arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
@@ -761,7 +761,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.define_variable(index);
 
         if self.class_depth == 127 {
-            return error("Cannot nest classes that deep");
+            return err!("Cannot nest classes that deep");
         }
         self.has_super <<= 1;
         self.class_depth += 1;
@@ -773,7 +773,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             let super_name = self.lexeme();
             self.variable(super_name, false)?;
             if class_name.lexeme == super_name {
-                return error("A class can't inherit from itself.");
+                return err!("A class can't inherit from itself.");
             }
             self.begin_scope();
             self.current_compiler()
@@ -795,7 +795,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
                 break;
             }
             if self.source.check(TokenType::End) {
-                return error("Expect '}' after class body.");
+                return err!("Expect '}}' after class body.");
             }
             self.method()?;
         }
@@ -917,7 +917,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn return_statement(&mut self) -> Result<(), String> {
         if self.current_compiler().function_type == FunctionType::Script {
-            return error("Can't return from top-level code.");
+            return err!("Can't return from top-level code.");
         }
 
         if self.source.match_type(TokenType::Semicolon) {
@@ -925,7 +925,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             Ok(())
         } else {
             if self.current_compiler().function_type == FunctionType::Initializer {
-                return error("Can't return a value from an initializer.");
+                return err!("Can't return a value from an initializer.");
             }
 
             self.expression()?;
