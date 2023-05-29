@@ -1,5 +1,7 @@
 use std::{env, fs, io, process::exit};
 
+use memory::Heap;
+
 use crate::vm::VM;
 
 mod chunk;
@@ -38,7 +40,7 @@ fn run_file(file_path: &str, vm: &mut VM) {
 }
 
 fn main() {
-    let mut vm = VM::new();
+    let mut vm = VM::new(Heap::new());
     let args: Vec<String> = env::args().collect();
     match args.len() {
         1 => repl(&mut vm),

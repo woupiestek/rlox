@@ -40,13 +40,13 @@ impl TokenType {
 // make this smaller later
 #[derive(Clone, Copy)]
 struct Local<'src> {
-    name: &'src str,
+    name: Token<'src>,
     depth: Option<u16>,
     is_captured: bool,
 }
 
 impl<'src> Local<'src> {
-    fn new(name: &'src str) -> Self {
+    fn new(name: Token<'src>) -> Self {
         Self {
             name,
             depth: None,
@@ -99,7 +99,7 @@ impl<'src> Compiler<'src> {
                 i -= 1;
             }
             let local = &self.locals[i];
-            if local.name == name {
+            if local.name.lexeme == name {
                 return if local.depth.is_none() {
                     error("Can't read local variable in its own initializer.")
                 } else {
@@ -109,7 +109,7 @@ impl<'src> Compiler<'src> {
         }
     }
 
-    fn add_local(&mut self, name: &'src str) -> Result<(), String> {
+    fn add_local(&mut self, name: Token<'src>) -> Result<(), String> {
         if self.locals.len() == U8_COUNT {
             return error("Too many local variables in function.");
         }
@@ -127,18 +127,18 @@ impl<'src> Compiler<'src> {
     }
 
     fn add_upvalue(&mut self, index: u8, is_local: bool) -> Result<u8, String> {
-        let count = self.function.upvalue_count;
+        let count = self.upvalues.len();
         for i in 0..count {
             let upvalue = &self.upvalues[i as usize];
             if upvalue.is_local == is_local && upvalue.index == index {
                 return Ok(i as u8);
             }
         }
-        if count == u8::MAX {
+        if count == u8::MAX as usize {
             return error("Too many closure variables in function.");
         }
         self.upvalues.push(Upvalue { index, is_local });
-        self.function.upvalue_count += 1;
+        self.function.upvalue_count = self.upvalues.len() as u8;
         Ok(count as u8)
     }
 
@@ -162,13 +162,24 @@ impl<'src> Compiler<'src> {
         }
     }
 
-    fn declare_variable(&mut self, name: &'src str) -> Result<(), String> {
+    fn declare_variable(&mut self, name: Token<'src>) -> Result<(), String> {
         if self.scope_depth == 0 {
             return Ok(());
         }
-        for local in &self.locals {
-            if local.name == name {
-                return error("Already a variable with this name in this scope.");
+        let mut i = self.locals.len();
+        while i > 0 {
+            i -= 1;
+            let local = self.locals[i];
+            if let Some(depth) = local.depth {
+                if depth < self.scope_depth {
+                    break;
+                }
+            }
+            if local.name.lexeme == name.lexeme {
+                return Err(format!(
+                    "Already a variable with this name in this scope. See line {}, column {}",
+                    local.name.line, local.name.column
+                ));
             }
         }
         self.add_local(name)
@@ -325,8 +336,8 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn end_scope(&mut self) {
-        let scope_depth = self.current_compiler().scope_depth;
         self.current_compiler().scope_depth -= 1;
+        let scope_depth = self.current_compiler().scope_depth;
         loop {
             match self.current_compiler().locals.last() {
                 None => return,
@@ -492,9 +503,9 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         &self.source.previous_token.lexeme
     }
 
-    fn identifier_name(&mut self, error_msg: &str) -> Result<&'src str, String> {
+    fn identifier_name(&mut self, error_msg: &str) -> Result<Token<'src>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        Ok(self.lexeme())
+        Ok(self.source.previous_token)
     }
 
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
@@ -653,12 +664,12 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        let name = self.lexeme();
+        let name = self.source.previous_token;
         self.current_compiler().declare_variable(name)?;
         Ok(if self.current_compiler().scope_depth > 0 {
             0
         } else {
-            let value = self.string_value(name);
+            let value = self.string_value(name.lexeme);
             self.current_compiler().make_constant(value)?
         })
     }
@@ -682,9 +693,9 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         Ok(())
     }
 
-    fn end_compiler(&mut self) -> Obj<Function> {
+    fn end_compiler(&mut self) -> Compiler {
         self.emit_return();
-        self.compilers.pop().unwrap().function
+        self.compilers.pop().unwrap()
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
@@ -712,14 +723,15 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
 
-        let function = self.end_compiler();
-        let count = function.upvalue_count;
+        let compiler = self.end_compiler();
+        let function = compiler.function;
+        let upvalues = compiler.upvalues;
         let index = self.current_compiler().make_constant(function.as_value())?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 
         // I don't get this yet
-        for i in 0..count {
-            let upvalue = self.current_compiler().upvalues[i as usize];
+        for i in 0..function.upvalue_count {
+            let upvalue = upvalues[i as usize];
             self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
         Ok(())
@@ -744,7 +756,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     fn class(&mut self) -> Result<(), String> {
         let class_name = self.identifier_name("Expect class name.")?;
         self.current_compiler().declare_variable(class_name)?;
-        let index = self.intern(class_name)?;
+        let index = self.intern(class_name.lexeme)?;
         self.emit_bytes(&[Op::Class as u8, index]);
         self.define_variable(index);
 
@@ -760,19 +772,20 @@ impl<'src, 'hp> Parser<'src, 'hp> {
                 .consume(TokenType::Identifier, "Expect superclass name.")?;
             let super_name = self.lexeme();
             self.variable(super_name, false)?;
-            if class_name == super_name {
+            if class_name.lexeme == super_name {
                 return error("A class can't inherit from itself.");
             }
             self.begin_scope();
-            self.current_compiler().add_local("super")?;
+            self.current_compiler()
+                .add_local(Token::synthetic("super"))?;
             self.define_variable(0);
-            self.variable(class_name, false)?;
+            self.variable(class_name.lexeme, false)?;
             self.emit_op(Op::Inherit);
             self.has_super &= 1;
         }
 
         // why this again?
-        self.variable(class_name, false)?;
+        self.variable(class_name.lexeme, false)?;
 
         // class body
         self.source
@@ -992,7 +1005,7 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
     while !parser.source.match_type(TokenType::End) {
         parser.declaration();
     }
-    let obj = parser.end_compiler();
+    let obj = parser.end_compiler().function;
     if let Some(msg) = parser.had_error {
         Err(msg)
     } else {
@@ -1020,6 +1033,74 @@ mod tests {
     #[test]
     fn compile_empty_string() {
         let result = compile("", &mut Heap::new());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn scoping() {
+        let test = "{
+            var a = \"outer a\";
+            var b = \"outer b\";
+            {
+              var a = \"inner a\";
+              print a;
+              print b;
+              print c;
+            }
+            print a;
+            print b;
+            print c;
+          }";
+        let result = compile(test, &mut Heap::new());
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn for_loop() {
+        let test = "
+        for (var b = 1; a < 10000; b = temp + b) {
+          print a;
+          temp = a;
+          a = b;
+        }
+        ";
+        let result = compile(test, &mut Heap::new());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn scoping_2() {
+        let test = "fun add(a, b, c) {
+            print a + b + c;
+          }
+          
+          add(1, 2, 3);
+          
+          fun add(a, b) {
+            print a + b;
+          }
+          
+          print add; // \"<fn add>\".
+          ";
+        let result = compile(test, &mut Heap::new());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn scoping_3() {
+        let test = "var a = \"global\";
+        {
+          fun showA() {
+            print a;
+          }
+        
+          showA();
+          var a = \"block\";
+          showA();
+        }
+        var a = 1;
+        ";
+        let result = compile(test, &mut Heap::new());
         assert!(result.is_ok());
     }
 }

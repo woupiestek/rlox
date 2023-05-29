@@ -64,9 +64,12 @@ pub struct Token<'src> {
 
 impl<'src> Token<'src> {
     pub fn nil() -> Self {
+        Self::synthetic("")
+    }
+    pub fn synthetic(lexeme: &'src str) -> Self {
         Self {
             token_type: TokenType::Error,
-            lexeme: "",
+            lexeme,
             line: 0,
             column: 0,
         }

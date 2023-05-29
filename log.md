@@ -1,5 +1,16 @@
 # Rlox
 
+## 2023-05-29
+
+Another thing to note: I don't have to hunt for unused code. Rust tooling just
+tells Vscode. I feel like a communist visiting a capitalist supermarket for the
+first time.
+
+### frames issue
+
+Copying the top frame into the run method means that the changing instruction pointer is not 
+stored. Which cannot wokr well. So a reference would be good, but it confuses the borrow checker.
+
 ## 2023-05-28
 
 Shoulder pain is slowing me down, but I am making much progress now.
