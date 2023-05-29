@@ -1,6 +1,6 @@
 // run time data structures
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
     chunk::Chunk,
@@ -23,13 +23,34 @@ impl Value {
             _ => false,
         }
     }
-    pub fn println(&self) {
+    pub fn type_name(&self) -> &str {
         match self {
-            Value::False => println!("false"),
-            Value::Nil => println!("nil"),
-            Value::Number(a) => println!("{}", a),
-            Value::Object(a) => a.println(),
-            Value::True => println!("true"),
+            Value::False => "boolean",
+            Value::Nil => "nil",
+            Value::Number(_) => "number",
+            Value::Object(a) => match a.kind() {
+                Kind::BoundMethod => "bound_method",
+                Kind::Class => "class",
+                Kind::Closure => "closure",
+                Kind::Function => "function",
+                Kind::Instance => "instance",
+                Kind::Native => "native",
+                Kind::String => "string",
+                Kind::Upvalue => "upvalue",
+            },
+            Value::True => "boolean",
+        }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::False => write!(f, "false"),
+            Value::Nil => write!(f, "nil"),
+            Value::Number(a) => write!(f, "{}", a),
+            Value::Object(a) => write!(f, "{}", a),
+            Value::True => write!(f, "true"),
         }
     }
 }
@@ -55,11 +76,14 @@ impl Function {
             chunk: Chunk::new(),
         }
     }
-    pub fn println(&self) {
+}
+
+impl Display for Function {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(str) = self.name {
-            println!("<fn {}>", *str)
+            write!(f, "<fn {}>", *str)
         } else {
-            println!("<script>")
+            write!(f, "<script>")
         }
     }
 }

@@ -2,6 +2,7 @@ use std::{
     alloc::alloc,
     alloc::Layout,
     collections::HashMap,
+    fmt::Display,
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -44,20 +45,27 @@ impl Handle {
     fn mark(&mut self, value: bool) {
         unsafe { (*self.ptr).is_marked = value }
     }
-    pub fn println(&self) {
+}
+
+impl Display for Handle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind() {
-            Kind::BoundMethod => BoundMethod::obj_from_handle(self)
-                .unwrap()
-                .method
-                .function
-                .println(),
-            Kind::Class => println!("{}", *Class::obj_from_handle(self).unwrap().name),
-            Kind::Function => Function::obj_from_handle(self).unwrap().println(),
-            Kind::Closure => Closure::obj_from_handle(self).unwrap().function.println(),
-            Kind::Instance => println!("{} instance", *Class::obj_from_handle(self).unwrap().name),
-            Kind::Native => println!("<native fn>"),
-            Kind::String => println!("{}", String::from_handle(self).unwrap()),
-            Kind::Upvalue => println!("upvalue"),
+            Kind::BoundMethod => write!(
+                f,
+                "{}",
+                *BoundMethod::obj_from_handle(self).unwrap().method.function
+            ),
+            Kind::Class => write!(f, "{}", *Class::obj_from_handle(self).unwrap().name),
+            Kind::Function => write!(f, "{}", *Function::obj_from_handle(self).unwrap()),
+            Kind::Closure => write!(f, "{}", *Closure::obj_from_handle(self).unwrap().function),
+            Kind::Instance => write!(
+                f,
+                "{} instance",
+                *Class::obj_from_handle(self).unwrap().name
+            ),
+            Kind::Native => write!(f, "<native fn>"),
+            Kind::String => write!(f, "{}", String::from_handle(self).unwrap()),
+            Kind::Upvalue => write!(f, "<upvalue>"),
         }
     }
 }

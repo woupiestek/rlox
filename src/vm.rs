@@ -2,7 +2,7 @@ use std::{collections::HashMap, time};
 
 use crate::{
     chunk::Op,
-    common::{error, U8_COUNT},
+    common::U8_COUNT,
     compiler::compile,
     memory::{Heap, Kind, Obj, Traceable},
     object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
@@ -11,6 +11,7 @@ use crate::{
 const MAX_FRAMES: usize = 1 << 6;
 const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 
+// todo: maybe support native functions that Err
 fn clock_native(_args: &[Value]) -> Value {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
         Ok(duration) => Value::Number(duration.as_millis() as f64),
@@ -60,15 +61,24 @@ impl CallFrame {
         let read_byte = self.read_byte() as usize;
         self.closure.upvalues[read_byte]
     }
+    fn error<T>(&mut self, msg: &str) -> Result<T, String> {
+        let last_ip = if self.ip < 1 {
+            0
+        } else {
+            (self.ip - 1) as usize
+        };
+        let last_line = self.closure.function.chunk.lines[last_ip];
+        Err(format!("Error at line {}: {}", last_line, msg))
+    }
 }
 
 macro_rules! binary_op {
     ($self:ident, $a:ident, $b:ident, $value:expr) => {{
-        if let &[Value::Number($a), Value::Number($b)] = $self.tail(2) {
+        if let &[Value::Number($a), Value::Number($b)] = $self.tail(2)? {
             $self.count -= 2;
             $self.push($value);
         } else {
-            return error("Operands must be numbers.");
+            return $self.top_frame().error("Operands must be numbers.");
         }
     }};
 }
@@ -194,14 +204,14 @@ impl VM {
 
     fn call(&mut self, closure: Obj<Closure>, arg_count: u8) -> Result<(), String> {
         if arg_count != closure.function.arity {
-            return Err(format!(
+            return self.top_frame().error(&format!(
                 "Expected {} arguments but got {}.",
                 closure.function.arity, arg_count
             ));
         }
 
         if self.frames.len() == MAX_FRAMES {
-            return Err("Stack overflow.".to_string());
+            return self.top_frame().error("Stack overflow.");
         }
         self.frames.push(CallFrame::new(self.count, closure));
         Ok(())
@@ -230,7 +240,7 @@ impl VM {
                     }
                     Kind::Native => {
                         let native = Native::from_handle(&handle)?;
-                        let result = native.0(self.tail(arity as usize));
+                        let result = native.0(self.tail(arity as usize)?);
                         self.count -= arity as usize + 1;
                         self.push(result);
                         return Ok(());
@@ -241,7 +251,8 @@ impl VM {
             }
         }
 
-        error("Can only call functions and classes.")
+        self.top_frame()
+            .error("Can only call functions and classes.")
     }
 
     fn invoke_from_class(
@@ -251,14 +262,18 @@ impl VM {
         arity: u8,
     ) -> Result<(), String> {
         match class.methods.get(&name) {
-            None => return Err(format!("Undefined property '{}'", *name)),
+            None => {
+                return self
+                    .top_frame()
+                    .error(&format!("Undefined property '{}'", *name))
+            }
             Some(method) => self.call(*method, arity),
         }
     }
 
     fn invoke(&mut self, name: Obj<String>, arity: u8) -> Result<(), String> {
         match Instance::from_value(&self.peek(arity as usize)) {
-            Err(_) => error("Only instances have methods."),
+            Err(_) => self.top_frame().error("Only instances have methods."),
             Ok(instance) => {
                 if let Some(property) = instance.properties.get(&name) {
                     self.values[self.count - arity as usize - 1] = *property;
@@ -272,7 +287,9 @@ impl VM {
 
     fn bind_method(&mut self, class: Obj<Class>, name: Obj<String>) -> Result<(), String> {
         match class.methods.get(&name) {
-            None => Err(format!("Undefined property '{}'.", *name)),
+            None => self
+                .top_frame()
+                .error(&format!("Undefined property '{}'.", *name)),
             Some(method) => {
                 let instance = Instance::obj_from_value(self.peek(0))?;
                 let bm = self.heap.store(BoundMethod::new(instance, *method));
@@ -316,24 +333,30 @@ impl VM {
         loop {
             match Op::try_from(self.top_frame().read_byte())? {
                 Op::Add => {
-                    let pair = self.tail(2);
-                    if let (Ok(a), Ok(b)) = (
-                        String::obj_from_value(pair[0]),
-                        String::obj_from_value(pair[1]),
-                    ) {
-                        let c = self.concatenate(&*a, &*b);
-                        self.count -= 2;
-                        self.push(c);
-                        continue;
-                    }
+                    if let &[a, b] = self.tail(2)? {
+                        if let (Ok(a), Ok(b)) =
+                            (String::obj_from_value(a), String::obj_from_value(b))
+                        {
+                            let c = self.concatenate(&*a, &*b);
+                            self.count -= 2;
+                            self.push(c);
+                            continue;
+                        }
 
-                    if let &[Value::Number(a), Value::Number(b)] = pair {
-                        self.count -= 2;
-                        self.push(Value::Number(a + b));
-                        continue;
-                    }
+                        if let (Value::Number(a), Value::Number(b)) = (a, b) {
+                            self.count -= 2;
+                            self.push(Value::Number(a + b));
+                            continue;
+                        }
 
-                    return error("Operands must be either numbers or strings");
+                        return self.top_frame().error(
+                            &(format!(
+                                "Operands must be either numbers or strings, found {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )),
+                        );
+                    }
                 }
                 Op::Call => {
                     let arity = self.top_frame().read_byte();
@@ -382,7 +405,9 @@ impl VM {
                     if let Some(value) = self.globals.get(&name) {
                         self.push(*value);
                     } else {
-                        return Err(format!("Undefined variable '{}'.", *name));
+                        return self
+                            .top_frame()
+                            .error(&format!("Undefined variable '{}'.", *name));
                     }
                 }
                 Op::GetLocal => {
@@ -413,14 +438,16 @@ impl VM {
                     binary_op!(self, a, b, if a > b { Value::True } else { Value::False })
                 }
                 Op::Inherit => {
-                    let super_class = Class::get(self.peek(1))
-                        .ok_or("Super class must be a class.".to_string())?;
-                    let mut sub_class =
-                        Class::get(self.peek(0)).ok_or("Sub class must be a class.".to_string())?;
-                    for (&k, &v) in &super_class.methods {
-                        sub_class.methods.insert(k, v);
+                    if let &[a, b] = self.tail(2)? {
+                        let super_class =
+                            Class::get(a).ok_or("Super class must be a class.".to_string())?;
+                        let mut sub_class =
+                            Class::get(b).ok_or("Sub class must be a class.".to_string())?;
+                        for (&k, &v) in &super_class.methods {
+                            sub_class.methods.insert(k, v);
+                        }
+                        self.pop();
                     }
-                    self.pop();
                 }
                 Op::Invoke => {
                     let name = self.top_frame().read_string()?;
@@ -444,7 +471,7 @@ impl VM {
                     if let Value::Number(a) = self.peek(0) {
                         self.values[self.count - 1] = Value::Number(-a);
                     } else {
-                        return error("Operand must be a number.");
+                        return self.top_frame().error("Operand must be a number.");
                     }
                 }
                 Op::Nil => self.push(Value::Nil),
@@ -459,7 +486,7 @@ impl VM {
                 Op::Pop => {
                     self.pop();
                 }
-                Op::Print => self.pop().println(),
+                Op::Print => println!("{}", self.pop()),
                 Op::Return => {
                     let result = self.pop();
                     let location = self.top_frame().slots;
@@ -476,7 +503,9 @@ impl VM {
                     let name = self.top_frame().read_string()?;
                     if self.globals.insert(name, self.peek(0)).is_none() {
                         self.globals.remove(&name);
-                        return Err(format!("Undefined variable '{}'.", *name));
+                        return self
+                            .top_frame()
+                            .error(&format!("Undefined variable '{}'.", *name));
                     }
                 }
                 Op::SetLocal => {
@@ -484,15 +513,15 @@ impl VM {
                     self.values[self.top_frame().slots + index] = self.peek(0);
                 }
                 Op::SetProperty => {
-                    let pair = self.tail(2);
-                    let mut instance =
-                        Instance::get(pair[0]).ok_or("Only instances have fields.".to_string())?;
-                    let value = pair[1];
-                    instance
-                        .properties
-                        .insert(self.top_frame().read_string()?, value);
-                    self.count -= 2;
-                    self.push(value);
+                    if let &[a, b] = self.tail(2)? {
+                        let mut instance =
+                            Instance::get(a).ok_or("Only instances have fields.".to_string())?;
+                        instance
+                            .properties
+                            .insert(self.top_frame().read_string()?, b);
+                        self.count -= 2;
+                        self.push(b);
+                    }
                 }
                 Op::SetUpvalue => {
                     let mut upvalue = self.top_frame().read_upvalue();
@@ -513,11 +542,14 @@ impl VM {
         }
     }
 
-    fn tail(&self, n: usize) -> &[Value] {
-        &self.values[self.count - n..self.count]
+    fn tail(&mut self, n: usize) -> Result<&[Value], String> {
+        if n <= self.count {
+            Ok(&self.values[self.count - n..self.count])
+        } else {
+            self.top_frame().error("Stack underflow")
+        }
     }
 
-    // essentailly the vm starts off in a invalid state...
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
         let function = compile(source, &mut self.heap)?;
         self.push(function.as_value());
@@ -542,5 +574,15 @@ mod tests {
     fn interpret_empty_string() {
         let mut vm = VM::new(Heap::new());
         assert!(vm.interpret("").is_ok())
+    }
+
+    #[test]
+    fn stack_types() {
+        let test = "var a = 1;
+        var b = 2;
+        print a + b;";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(vm.interpret(test).is_ok(), "{}", result.unwrap_err());
     }
 }

@@ -1015,6 +1015,9 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
 
 #[cfg(test)]
 mod tests {
+
+    use crate::debug::Disassembler;
+
     use super::*;
 
     #[test]
@@ -1102,5 +1105,16 @@ mod tests {
         ";
         let result = compile(test, &mut Heap::new());
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn disassemble() {
+        let test = "var a = 1;
+        var b = 2;
+        print a + b;";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        Disassembler::disassemble(&result.unwrap().chunk);
     }
 }

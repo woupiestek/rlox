@@ -7,10 +7,14 @@ use crate::vm::VM;
 mod chunk;
 mod common;
 mod compiler;
+
 mod memory;
 mod object;
 mod scanner;
 mod vm;
+
+#[cfg(test)]
+mod debug;
 
 fn repl(vm: &mut VM) {
     loop {
