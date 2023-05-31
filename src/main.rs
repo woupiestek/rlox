@@ -4,6 +4,9 @@ use memory::Heap;
 
 use crate::vm::VM;
 
+#[cfg(feature = "trace")]
+mod debug;
+
 #[macro_use]
 mod common;
 mod chunk;
@@ -13,9 +16,6 @@ mod memory;
 mod object;
 mod scanner;
 mod vm;
-
-#[cfg(test)]
-mod debug;
 
 fn repl(vm: &mut VM) {
     loop {

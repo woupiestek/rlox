@@ -64,7 +64,7 @@ impl Display for Handle {
                 *Class::obj_from_handle(self).unwrap().name
             ),
             Kind::Native => write!(f, "<native fn>"),
-            Kind::String => write!(f, "{}", String::from_handle(self).unwrap()),
+            Kind::String => write!(f, "{}", *String::obj_from_handle(self).unwrap()),
             Kind::Upvalue => write!(f, "<upvalue>"),
         }
     }
@@ -84,9 +84,6 @@ impl<T: Traceable> Obj<T> {
         Handle {
             ptr: self.ptr as *mut Header,
         }
-    }
-    pub fn as_value(&self) -> Value {
-        Value::Object(self.as_handle())
     }
 }
 
@@ -129,24 +126,13 @@ where
     fn test_handle(handle: &Handle) -> bool {
         handle.kind() == Self::KIND
     }
-    fn test_value(value: &Value) -> bool {
-        if let Value::Object(handle) = value {
-            Self::test_handle(handle)
-        } else {
-            false
-        }
-    }
     fn obj_from_handle(handle: &Handle) -> Result<Obj<Self>, String> {
         if Self::test_handle(handle) {
             Ok(Obj {
                 ptr: handle.ptr as *mut (Header, Self),
             })
         } else {
-            Err(format!(
-                "Cannot upgrade {:?} to {:?}",
-                handle.kind(),
-                Self::KIND
-            ))
+            err!("'{:?}' is no '{:?}'", handle.kind(), Self::KIND)
         }
     }
 
@@ -165,28 +151,7 @@ where
         if let Value::Object(handle) = value {
             Self::obj_from_handle(&handle)
         } else {
-            Err(format!("Cannot cast {:?} to {:?}", value, Self::KIND))
-        }
-    }
-
-    fn from_handle(handle: &Handle) -> Result<&Self, String> {
-        if Self::test_handle(handle) {
-            let ptr = handle.ptr as *mut (Header, Self);
-            Ok(unsafe { &(*ptr).1 })
-        } else {
-            Err(format!(
-                "Cannot cast {:?} to {:?}",
-                handle.kind(),
-                Self::KIND
-            ))
-        }
-    }
-
-    fn from_value(value: &Value) -> Result<&Self, String> {
-        if let Value::Object(handle) = value {
-            Self::from_handle(&handle)
-        } else {
-            Err(format!("Cannot cast {:?} to {:?}", value, Self::KIND))
+            err!("'{:?}' is no '{:?}'", value, Self::KIND)
         }
     }
 }

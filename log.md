@@ -1,5 +1,16 @@
 # Rlox
 
+## 2023-05-31
+
+### upvalues
+
+Take up an additional byte to distinguish 'locals' and 'non locals'
+
+### 
+
+We could make it more clox like by wrapping uszie in a struct and defining
+Deref... How to do the implicit dependency on the stack?
+
 ## 2023-05-29
 
 Another thing to note: I don't have to hunt for unused code. Rust tooling just

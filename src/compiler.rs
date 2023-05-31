@@ -80,13 +80,21 @@ struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    fn new(function_type: FunctionType, heap: &mut Heap) -> Self {
+    fn new(function_type: FunctionType, function: Obj<Function>) -> Self {
+        let mut first_local = Local::new(Token::synthetic(
+            if function_type == FunctionType::Function {
+                ""
+            } else {
+                "this"
+            },
+        ));
+        first_local.depth = Some(0);
         Self {
-            function: heap.store(Function::new()),
+            function,
             upvalues: Vec::new(),
             function_type,
             scope_depth: 0,
-            locals: Vec::new(),
+            locals: vec![first_local],
         }
     }
 
@@ -101,7 +109,10 @@ impl<'src> Compiler<'src> {
             let local = &self.locals[i];
             if local.name.lexeme == name {
                 return if local.depth.is_none() {
-                    err!("Can't read local variable in its own initializer.")
+                    err!(
+                        "Can't read local variable '{}' in its own initializer.",
+                        local.name.lexeme
+                    )
                 } else {
                     Ok(Some(i as u8))
                 };
@@ -138,7 +149,6 @@ impl<'src> Compiler<'src> {
             return err!("Too many closure variables in function.");
         }
         self.upvalues.push(Upvalue { index, is_local });
-        self.function.upvalue_count = self.upvalues.len() as u8;
         Ok(count as u8)
     }
 
@@ -250,18 +260,21 @@ pub struct Parser<'src, 'hp> {
     heap: &'hp mut Heap,
 
     // status
-    had_error: Option<String>,
+    error_count: u8,
 }
 
 impl<'src, 'hp> Parser<'src, 'hp> {
     pub fn new(source: Source<'src>, heap: &'hp mut Heap) -> Self {
         Self {
             source,
-            compilers: vec![Compiler::new(FunctionType::Script, heap)],
+            compilers: vec![Compiler::new(
+                FunctionType::Script,
+                heap.store(Function::new(None)),
+            )],
             has_super: 0,
             class_depth: 0,
             heap,
-            had_error: None,
+            error_count: 0,
         }
     }
 
@@ -333,10 +346,6 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             } as u8]);
             self.current_compiler().locals.pop();
         }
-    }
-
-    fn string_value(&mut self, str: &'src str) -> Value {
-        Value::Object(self.heap.intern(str).as_handle())
     }
 
     fn resolve_upvalue(&mut self, name: &str) -> Result<Option<u8>, String> {
@@ -468,7 +477,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn intern(&mut self, name: &'src str) -> Result<u8, String> {
-        let value = self.string_value(name);
+        let value = Value::from(self.heap.intern(name));
         Ok(self.current_chunk().add_constant(value)?)
     }
 
@@ -495,7 +504,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn number(&mut self) -> Result<(), String> {
         match self.lexeme().parse::<f64>() {
-            Ok(number) => self.emit_constant(Value::Number(number)),
+            Ok(number) => self.emit_constant(Value::from(number)),
             Err(err) => Err(err.to_string()),
         }
     }
@@ -515,7 +524,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn string(&mut self) -> Result<(), String> {
         let lexeme = self.lexeme();
-        let value = self.string_value(&lexeme[1..lexeme.len() - 1]);
+        let value = Value::from(self.heap.intern(&lexeme[1..lexeme.len() - 1]));
         self.emit_constant(value)
     }
 
@@ -527,7 +536,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             } else if let Some(arg) = self.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
             } else {
-                let value = self.string_value(name);
+                let value = Value::from(self.heap.intern(name));
                 let arg = self.current_chunk().add_constant(value)?;
                 (arg, Op::GetGlobal as u8, Op::SetGlobal as u8)
             }
@@ -670,21 +679,27 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn end_compiler(&mut self) -> Compiler {
         self.emit_return();
-        self.compilers.pop().unwrap()
+        let compiler = self.compilers.pop().unwrap();
+        // disassemble!(&compiler.function.chunk);
+        compiler
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
+        let name = self
+            .heap
+            .store(self.source.previous_token.lexeme.to_string());
+        let mut obj_function = self.heap.store(Function::new(Some(name)));
         self.compilers
-            .push(Compiler::new(function_type, &mut self.heap));
+            .push(Compiler::new(function_type, obj_function));
         self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                if self.current_compiler().function.arity == u8::MAX {
+                if obj_function.arity == u8::MAX {
                     return err!("Can't have more than 255 parameters.");
                 }
-                self.current_compiler().function.arity += 1;
+                (*obj_function).arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index);
                 if !self.source.match_type(TokenType::Comma) {
@@ -699,13 +714,16 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.block()?;
 
         let compiler = self.end_compiler();
-        let function = compiler.function;
+        //let function = compiler.function;
         let upvalues = compiler.upvalues;
-        let index = self.current_chunk().add_constant(function.as_value())?;
+        (*obj_function).upvalue_count = upvalues.len() as u8;
+        let index = self
+            .current_chunk()
+            .add_constant(Value::from(obj_function))?;
         self.emit_bytes(&[Op::Closure as u8, index]);
 
         // I don't get this yet
-        for i in 0..function.upvalue_count {
+        for i in 0..obj_function.upvalue_count {
             let upvalue = upvalues[i as usize];
             self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
@@ -951,11 +969,10 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             // I know, don't log & throw
             // also: what about an actual logger?
             println!(
-                "[lint:{},column:{}] {}",
+                "[line:{},column:{}] {}",
                 self.source.previous_token.line, self.source.previous_token.column, msg
             );
-            // maybe collect errors in a vec?
-            self.had_error = Some(msg);
+            self.error_count += 1;
             self.source.synchronize();
         }
     }
@@ -988,8 +1005,8 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
         parser.declaration();
     }
     let obj = parser.end_compiler().function;
-    if let Some(msg) = parser.had_error {
-        Err(msg)
+    if parser.error_count > 0 {
+        err!("There were {} compile time errors", parser.error_count)
     } else {
         Ok(obj)
     }
@@ -997,10 +1014,17 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
 
 #[cfg(test)]
 mod tests {
-
-    use crate::debug::Disassembler;
-
     use super::*;
+
+    macro_rules! disassemble {
+        ($chunk:expr) => {
+            #[cfg(feature = "trace")]
+            {
+                use crate::debug::Disassembler;
+                Disassembler::disassemble($chunk);
+            }
+        };
+    }
 
     #[test]
     fn construct_parser<'src>() {
@@ -1084,7 +1108,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        Disassembler::disassemble(&result.unwrap().chunk);
+        disassemble!(&result.unwrap().chunk);
     }
 
     #[test]
@@ -1093,7 +1117,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        Disassembler::disassemble(&result.unwrap().chunk);
+        disassemble!(&result.unwrap().chunk);
     }
 
     #[test]
@@ -1102,7 +1126,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        Disassembler::disassemble(&result.unwrap().chunk);
+        disassemble!(&result.unwrap().chunk);
     }
 
     #[test]
@@ -1118,7 +1142,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        Disassembler::disassemble(&result.unwrap().chunk);
+        disassemble!(&result.unwrap().chunk);
     }
 
     #[test]
@@ -1130,6 +1154,52 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        Disassembler::disassemble(&result.unwrap().chunk);
+        disassemble!(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn identity_function() {
+        let test = "fun id(x) { return x; }";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        disassemble!(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn function_calls() {
+        let test = "
+        fun sayHi(first, last) {
+            print \"Hi, \" + first + \" \" + last + \"!\";
+          }
+          
+          sayHi(\"Dear\", \"Reader\");
+          
+          fun add(a, b, c) {
+            print a + b + c;
+          }
+          
+          add(1, 2, 3);
+        ";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        disassemble!(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn local_variable_initializer() {
+        let test = "
+        class Cake {
+            taste() {
+              var adjective = \"delicious\";
+              print \"The \" + this.flavor + \" cake is \" + adjective + \"!\";
+            }
+          }
+                  ";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        disassemble!(&result.unwrap().chunk);
     }
 }

@@ -16,6 +16,28 @@ pub enum Value {
     Object(Handle),
 }
 
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        if value {
+            Value::True
+        } else {
+            Value::False
+        }
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Value::Number(value)
+    }
+}
+
+impl<T: Traceable> From<Obj<T>> for Value {
+    fn from(value: Obj<T>) -> Self {
+        Value::Object(value.as_handle())
+    }
+}
+
 impl Value {
     pub fn is_falsey(&self) -> bool {
         match self {
@@ -68,9 +90,9 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn new() -> Self {
+    pub fn new(name: Option<Obj<String>>) -> Self {
         Self {
-            name: None,
+            name,
             arity: 0,
             upvalue_count: 0,
             chunk: Chunk::new(),
@@ -81,7 +103,7 @@ impl Function {
 impl Display for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(str) = self.name {
-            write!(f, "<fn {}>", *str)
+            write!(f, "<fn {}({}/{})>", *str, self.arity, self.upvalue_count)
         } else {
             write!(f, "<script>")
         }

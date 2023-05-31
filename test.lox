@@ -73,10 +73,6 @@ fun procedure() {
 var result = procedure();
 print result; // ?
 
-fun fib(n) {
-  if (n <= 1) return n;
-  return fib(n - 2) + fib(n - 1);
-}
 fun bad() {
   var a = "first";
   // var a = "second";
@@ -95,6 +91,10 @@ var a = 1;
 {
   // var a = a + 2;
   print a;
+}
+fun fib(n) {
+  if (n <= 1) return n;
+  return fib(n - 2) + fib(n - 1);
 }
 for (var i = 0; i < 20; i = i + 1) { print fib(i); }
 fun makeCounter() {

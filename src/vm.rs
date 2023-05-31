@@ -14,7 +14,7 @@ const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 // todo: maybe support native functions that Err
 fn clock_native(_args: &[Value]) -> Value {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
-        Ok(duration) => Value::Number(duration.as_millis() as f64),
+        Ok(duration) => Value::from(duration.as_millis() as f64),
         Err(_) => Value::Nil, // just like how js would solve it
     }
 }
@@ -64,22 +64,13 @@ impl CallFrame {
         let read_byte = self.read_byte() as usize;
         self.closure.upvalues[read_byte]
     }
-    fn error<T>(&mut self, msg: String) -> Result<T, String> {
-        let last_ip = if self.ip < 1 {
-            0
-        } else {
-            (self.ip - 1) as usize
-        };
-        let last_line = self.chunk().lines[last_ip];
-        Err(format!("Error at line {}: {}", last_line, msg))
-    }
 }
 
 macro_rules! binary_op {
     ($self:ident, $a:ident, $b:ident, $value:expr) => {{
         if let &[Value::Number($a), Value::Number($b)] = $self.tail(2)? {
-            $self.count -= 2;
-            $self.push($value);
+            $self.stack_top -= 2;
+            $self.push(Value::from($value));
         } else {
             return err!("Operands must be numbers.");
         }
@@ -88,7 +79,7 @@ macro_rules! binary_op {
 
 pub struct VM {
     values: [Value; STACK_SIZE],
-    count: usize,
+    stack_top: usize,
     frames: Vec<CallFrame>,
     open_upvalues: Option<Obj<Upvalue>>,
     globals: HashMap<Obj<String>, Value>,
@@ -103,7 +94,7 @@ impl VM {
         let clock_string = heap.intern("clock");
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
-            count: 0,
+            stack_top: 0,
             frames: Vec::with_capacity(MAX_FRAMES),
             open_upvalues: None,
             globals: HashMap::new(),
@@ -147,12 +138,12 @@ impl VM {
 
     fn close_upvalues(&mut self, location: usize) {
         while let Some(mut link) = self.open_upvalues {
-            if let Upvalue::Open(l, y) = *link {
+            if let Upvalue::Open(l, next) = *link {
                 if l < location {
                     return;
                 }
                 *link = Upvalue::Closed(self.values[l]);
-                self.open_upvalues = y;
+                self.open_upvalues = next;
             } else {
                 self.open_upvalues = None;
             }
@@ -187,37 +178,38 @@ impl VM {
     }
 
     fn define_native(&mut self, name: Obj<String>, native_fn: Native) {
-        let value = Value::Object(self.heap.store(native_fn).as_handle());
+        let value = Value::from(self.heap.store(native_fn));
         self.globals.insert(name, value);
     }
 
     fn push(&mut self, value: Value) {
-        self.values[self.count] = value;
-        self.count += 1;
+        self.values[self.stack_top] = value;
+        self.stack_top += 1;
     }
 
     fn pop(&mut self) -> Value {
-        self.count -= 1;
-        self.values[self.count]
+        self.stack_top -= 1;
+        self.values[self.stack_top]
     }
 
     fn peek(&self, distance: usize) -> Value {
-        self.values[self.count - 1 - distance]
+        self.values[self.stack_top - 1 - distance]
     }
 
-    fn call(&mut self, closure: Obj<Closure>, arg_count: u8) -> Result<(), String> {
-        if arg_count != closure.function.arity {
+    fn call(&mut self, closure: Obj<Closure>, arity: u8) -> Result<(), String> {
+        if arity != closure.function.arity {
             return err!(
                 "Expected {} arguments but got {}.",
                 closure.function.arity,
-                arg_count
+                arity
             );
         }
 
         if self.frames.len() == MAX_FRAMES {
             return err!("Stack overflow.");
         }
-        self.frames.push(CallFrame::new(self.count, closure));
+        self.frames
+            .push(CallFrame::new(self.stack_top - arity as usize - 1, closure));
         Ok(())
     }
 
@@ -226,15 +218,14 @@ impl VM {
             if let Value::Object(handle) = callee {
                 match handle.kind() {
                     Kind::BoundMethod => {
-                        let bm = BoundMethod::from_handle(&handle)?;
-                        self.values[self.count - arity as usize - 1] = bm.receiver.as_value();
+                        let bm = BoundMethod::obj_from_handle(&handle)?;
+                        self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
                         return self.call(bm.method, arity);
                     }
                     Kind::Class => {
                         let class = Class::obj_from_handle(&handle)?;
                         let instance = self.heap.store(Instance::new(class));
-                        self.values[self.count - arity as usize - 1] =
-                            Value::Object(instance.as_handle());
+                        self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
                         if let Some(&init) = class.methods.get(&self.init_string) {
                             return self.call(init, arity);
                         }
@@ -243,9 +234,9 @@ impl VM {
                         return self.call(Closure::obj_from_handle(&handle)?, arity);
                     }
                     Kind::Native => {
-                        let native = Native::from_handle(&handle)?;
+                        let native = Native::obj_from_handle(&handle)?;
                         let result = native.0(self.tail(arity as usize)?);
-                        self.count -= arity as usize + 1;
+                        self.stack_top -= arity as usize + 1;
                         self.push(result);
                         return Ok(());
                     }
@@ -273,16 +264,13 @@ impl VM {
     }
 
     fn invoke(&mut self, name: Obj<String>, arity: u8) -> Result<(), String> {
-        match Instance::from_value(&self.peek(arity as usize)) {
-            Err(_) => err!("Only instances have methods."),
-            Ok(instance) => {
-                if let Some(property) = instance.properties.get(&name) {
-                    self.values[self.count - arity as usize - 1] = *property;
-                    self.call_value(*property, arity)
-                } else {
-                    self.invoke_from_class(instance.class, name, arity)
-                }
-            }
+        let instance =
+            Instance::get(self.peek(arity as usize)).ok_or("Only instances have methods.")?;
+        if let Some(property) = instance.properties.get(&name) {
+            self.values[self.stack_top - arity as usize - 1] = *property;
+            self.call_value(*property, arity)
+        } else {
+            self.invoke_from_class(instance.class, name, arity)
         }
     }
 
@@ -293,7 +281,7 @@ impl VM {
                 let instance = Instance::obj_from_value(self.peek(0))?;
                 let bm = self.heap.store(BoundMethod::new(instance, *method));
                 self.pop();
-                self.push(bm.as_value());
+                self.push(Value::from(bm));
                 Ok(())
             }
         }
@@ -313,13 +301,13 @@ impl VM {
         let mut c = String::new();
         c.push_str(a);
         c.push_str(b);
-        self.heap.intern(&c).as_value()
+        Value::from(self.heap.intern(&c))
     }
 
     // combined to avoid gc errors
     fn push_traceable<T: Traceable>(&mut self, traceable: T) -> Obj<T> {
         let obj = self.heap.store(traceable);
-        self.push(obj.as_value());
+        self.push(Value::from(obj));
         obj
     }
 
@@ -334,7 +322,7 @@ impl VM {
             #[cfg(feature = "trace")]
             {
                 print!("stack: ");
-                for i in 0..self.count {
+                for i in 0..self.stack_top {
                     print!("{};", &self.values[i]);
                 }
                 println!("");
@@ -349,6 +337,7 @@ impl VM {
                 println!("ip: {}", ip);
                 println!("line: {}", self.top_frame().chunk().lines[ip as usize]);
                 println!("op code: {:?}", instruction);
+                println!();
             }
             match instruction {
                 Op::Add => {
@@ -357,14 +346,14 @@ impl VM {
                             (String::obj_from_value(a), String::obj_from_value(b))
                         {
                             let c = self.concatenate(&*a, &*b);
-                            self.count -= 2;
+                            self.stack_top -= 2;
                             self.push(c);
                             continue;
                         }
 
                         if let (Value::Number(a), Value::Number(b)) = (a, b) {
-                            self.count -= 2;
-                            self.push(Value::Number(a + b));
+                            self.stack_top -= 2;
+                            self.push(Value::from(a + b));
                             continue;
                         }
 
@@ -386,20 +375,25 @@ impl VM {
                     self.push_traceable(Class::new(name));
                 }
                 Op::CloseUpvalue => {
-                    self.close_upvalues(self.count - 1);
+                    self.close_upvalues(self.stack_top - 1);
                     self.pop();
                 }
                 Op::Closure => {
                     let function = Function::obj_from_value(self.top_frame().read_constant())?;
                     let mut closure = self.push_traceable(Closure::new(function));
-                    for i in 0..function.upvalue_count as usize {
+                    self.push(Value::from(closure));
+                    for _ in 0..function.upvalue_count {
                         let is_local = self.top_frame().read_byte();
-                        let index = self.top_frame().read_byte();
-                        closure.upvalues.push(if is_local == 1 {
-                            let location = self.top_frame().slots + index as usize;
+                        let index = self.top_frame().read_byte() as usize;
+                        closure.upvalues.push(if is_local > 0 {
+                            let location = self.top_frame().slots + index;
                             self.capture_upvalue(location)
                         } else {
-                            self.top_frame().closure.upvalues[i]
+                            // todo: fix bug & remove
+                            if self.top_frame().closure.upvalues.len() <= index {
+                                return err!("Missing upvalue {}", index);
+                            }
+                            self.top_frame().closure.upvalues[index]
                         })
                     }
                 }
@@ -412,11 +406,11 @@ impl VM {
                     self.globals.insert(name, self.peek(0));
                     self.pop();
                 }
-                Op::Divide => binary_op!(self, a, b, Value::Number(a / b)),
+                Op::Divide => binary_op!(self, a, b, a / b),
                 Op::Equal => {
                     let a = self.pop();
                     let b = self.pop();
-                    self.push(if a == b { Value::True } else { Value::False });
+                    self.push(Value::from(a == b));
                 }
                 Op::False => self.push(Value::False),
                 Op::GetGlobal => {
@@ -437,7 +431,7 @@ impl VM {
                     let name = self.top_frame().read_string()?;
                     if let Some(&value) = instance.properties.get(&name) {
                         // replace instance
-                        self.values[self.count - 1] = value;
+                        self.values[self.stack_top - 1] = value;
                     } else {
                         self.bind_method(instance.class, name)?;
                     }
@@ -448,11 +442,11 @@ impl VM {
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
-                    let value = self.top_frame().read_upvalue().as_value();
+                    let value = Value::from(self.top_frame().read_upvalue());
                     self.push(value)
                 }
                 Op::Greater => {
-                    binary_op!(self, a, b, if a > b { Value::True } else { Value::False })
+                    binary_op!(self, a, b, a > b)
                 }
                 Op::Inherit => {
                     if let &[a, b] = self.tail(2)? {
@@ -479,16 +473,16 @@ impl VM {
                         self.top_frame().ip += 2;
                     }
                 }
-                Op::Less => binary_op!(self, a, b, if a < b { Value::True } else { Value::False }),
+                Op::Less => binary_op!(self, a, b, a < b),
                 Op::Loop => self.top_frame().jump_back(),
                 Op::Method => {
                     let name = self.top_frame().read_string()?;
                     self.define_method(name)?
                 }
-                Op::Multiply => binary_op!(self, a, b, Value::Number(a * b)),
+                Op::Multiply => binary_op!(self, a, b, a * b),
                 Op::Negative => {
                     if let Value::Number(a) = self.peek(0) {
-                        self.values[self.count - 1] = Value::Number(-a);
+                        self.values[self.stack_top - 1] = Value::from(-a);
                     } else {
                         return err!("Operand must be a number.");
                     }
@@ -496,11 +490,7 @@ impl VM {
                 Op::Nil => self.push(Value::Nil),
                 Op::Not => {
                     let pop = &self.pop();
-                    self.push(if pop.is_falsey() {
-                        Value::False
-                    } else {
-                        Value::True
-                    })
+                    self.push(Value::from(pop.is_falsey()));
                 }
                 Op::Pop => {
                     self.pop();
@@ -515,7 +505,7 @@ impl VM {
                         self.pop();
                         return Ok(());
                     }
-                    self.count = self.top_frame().slots;
+                    self.stack_top = location;
                     self.push(result);
                 }
                 Op::SetGlobal => {
@@ -536,7 +526,7 @@ impl VM {
                         instance
                             .properties
                             .insert(self.top_frame().read_string()?, b);
-                        self.count -= 2;
+                        self.stack_top -= 2;
                         self.push(b);
                     }
                 }
@@ -547,7 +537,7 @@ impl VM {
                         Upvalue::Open(index, _) => self.values[index] = self.peek(0),
                     }
                 }
-                Op::Subtract => binary_op!(self, a, b, Value::Number(a - b)),
+                Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
                     let name = self.top_frame().read_string()?;
                     let arity = self.top_frame().read_byte();
@@ -560,8 +550,8 @@ impl VM {
     }
 
     fn tail(&mut self, n: usize) -> Result<&[Value], String> {
-        if n <= self.count {
-            Ok(&self.values[self.count - n..self.count])
+        if n <= self.stack_top {
+            Ok(&self.values[self.stack_top - n..self.stack_top])
         } else {
             err!("Stack underflow")
         }
@@ -569,13 +559,21 @@ impl VM {
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
         let function = compile(source, &mut self.heap)?;
-        self.push(function.as_value());
+        self.push(Value::from(function));
         let closure = self.heap.store(Closure::new(function));
         self.pop();
-        self.push(closure.as_value());
+        self.push(Value::from(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
-            self.top_frame().error(msg)
+            eprintln!("Error: '{}'", msg);
+            while let Some(frame) = &self.frames.pop() {
+                eprintln!(
+                    "at {} line {}",
+                    *frame.closure.function,
+                    frame.chunk().lines[frame.ip as usize]
+                )
+            }
+            err!("Runtime error")
         } else {
             Ok(())
         }
@@ -643,7 +641,7 @@ mod tests {
 
     #[test]
     fn for_loop_3() {
-        let test_2 = "
+        let test = "
         { var a = \"outer a\"; }
         var temp;
         for (var b = 1; b < 10000; b = temp + b) {
@@ -651,7 +649,69 @@ mod tests {
             temp = b;
         }";
         let mut vm = VM::new(Heap::new());
-        let result = vm.interpret(test_2);
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn calling() {
+        let test = "
+        var a = \"global\";
+        {
+            fun showA() {
+              print a;
+            }
+          
+            showA();
+            var a = \"block\";
+            showA();
+        }
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn recursions() {
+        let test = "
+        fun fib(n) {
+            if (n <= 1) return n;
+            return fib(n - 2) + fib(n - 1);
+          }
+          for (var i = 0; i < 20; i = i + 1) { print fib(i); }
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn if_statement() {
+        let test = "
+        if (true) print \"less\";
+        print \"more\";
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn upvalues() {
+        let test = "
+        fun makeCounter() {
+            var i = 0;
+            fun count() {
+              i = i + 1;
+              print i;
+            }
+            return count;
+          }
+          var counter = makeCounter();
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 }
