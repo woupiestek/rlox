@@ -4,8 +4,8 @@ use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
     compiler::compile,
-    memory::{Heap, Kind, Obj, Traceable},
-    object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
+    memory::{Heap, Obj, Traceable},
+    object::{BoundMethod, Class, Closure, Function, Instance, Native, ObjVisitor, Upvalue, Value},
 };
 
 const MAX_FRAMES: usize = 1 << 6;
@@ -101,7 +101,7 @@ impl VM {
             globals: HashMap::new(),
             init_string,
             heap,
-            next_gc: 0x8000,
+            next_gc: 0x80,
         };
         s.define_native(clock_string, CLOCK_NATIVE);
         s
@@ -152,9 +152,26 @@ impl VM {
     }
 
     fn new_obj<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        if self.heap.count() > self.next_gc {
+        let before = self.heap.count();
+        if before > self.next_gc {
+            #[cfg(feature = "log_gc")]
+            {
+                println!("-- gc begin");
+            }
             let roots = self.roots();
             self.heap.collect_garbage(roots);
+            #[cfg(feature = "log_gc")]
+            {
+                println!("-- gc end");
+                let after = self.heap.count();
+                println!(
+                    "   collected {} bytes (from {} to {}) next at {}",
+                    before - after,
+                    before,
+                    after,
+                    self.next_gc
+                );
+            }
             self.next_gc *= 2;
         }
         self.heap.store(t)
@@ -179,7 +196,7 @@ impl VM {
     }
 
     fn define_native(&mut self, name: Obj<String>, native_fn: Native) {
-        let value = Value::from(self.heap.store(native_fn));
+        let value = Value::from(self.new_obj(native_fn));
         self.globals.insert(name, value);
     }
 
@@ -215,41 +232,10 @@ impl VM {
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
-        {
-            if let Value::Object(handle) = callee {
-                match handle.kind() {
-                    Kind::BoundMethod => {
-                        let bm = BoundMethod::obj_from_handle(&handle).unwrap();
-                        self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
-                        return self.call(bm.method, arity);
-                    }
-                    Kind::Class => {
-                        let class = Class::obj_from_handle(&handle).unwrap();
-                        let instance = self.heap.store(Instance::new(class));
-                        self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
-                        if let Some(&init) = class.methods.get(&self.init_string) {
-                            return self.call(init, arity);
-                        } else if arity > 0 {
-                            return err!("Expected no arguments but got {}.", arity);
-                        } else {
-                            return Ok(());
-                        }
-                    }
-                    Kind::Closure => {
-                        return self.call(Closure::obj_from_handle(&handle).unwrap(), arity);
-                    }
-                    Kind::Native => {
-                        let native = Native::obj_from_handle(&handle).unwrap();
-                        let result = native.0(self.tail(arity as usize)?);
-                        self.stack_top -= arity as usize + 1;
-                        self.push(result);
-                        return Ok(());
-                    }
-                    _ => (),
-                }
-            }
+        if let Value::Object(handle) = callee {
+            let mut obj_visitor = Caller { vm: self, arity };
+            return handle.accept(&mut obj_visitor);
         }
-
         err!("Can only call functions and classes, not '{}'", callee)
     }
 
@@ -283,7 +269,7 @@ impl VM {
             None => err!("Undefined property '{}'.", *name),
             Some(method) => {
                 let instance = Instance::obj_from_value(self.peek(0)).unwrap();
-                let bm = self.heap.store(BoundMethod::new(instance, *method));
+                let bm = self.new_obj(BoundMethod::new(instance, *method));
                 self.pop();
                 self.push(Value::from(bm));
                 Ok(())
@@ -311,7 +297,7 @@ impl VM {
 
     // combined to avoid gc errors
     fn push_traceable<T: Traceable>(&mut self, traceable: T) -> Obj<T> {
-        let obj = self.heap.store(traceable);
+        let obj = self.new_obj(traceable);
         self.push(Value::from(obj));
         obj
     }
@@ -363,10 +349,8 @@ impl VM {
                         }
 
                         return err!(
-                            "Operands must be either numbers or strings, found {} '{}' and {} '{}'",
-                            a.type_name(),
+                            "Operands must be either numbers or strings, found '{}' and '{}'",
                             a,
-                            b.type_name(),
                             b
                         );
                     }
@@ -570,7 +554,7 @@ impl VM {
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
         let function = compile(source, &mut self.heap)?;
         self.push(Value::from(function));
-        let closure = self.heap.store(Closure::new(function));
+        let closure = self.new_obj(Closure::new(function));
         self.pop();
         self.push(Value::from(closure));
         self.call(closure, 0)?;
@@ -587,6 +571,58 @@ impl VM {
         } else {
             Ok(())
         }
+    }
+}
+
+struct Caller<'b> {
+    vm: &'b mut VM,
+    arity: u8,
+}
+
+impl<'b> ObjVisitor<Result<(), String>> for Caller<'b> {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> Result<(), String> {
+        //let bm = BoundMethod::obj_from_handle(&handle).unwrap();
+        self.vm.values[self.vm.stack_top - self.arity as usize - 1] = Value::from(obj.receiver);
+        return self.vm.call(obj.method, self.arity);
+    }
+
+    fn visit_class(&mut self, obj: Obj<Class>) -> Result<(), String> {
+        let instance = self.vm.new_obj(Instance::new(obj));
+        self.vm.values[self.vm.stack_top - self.arity as usize - 1] = Value::from(instance);
+        if let Some(&init) = obj.methods.get(&self.vm.init_string) {
+            return self.vm.call(init, self.arity);
+        } else if self.arity > 0 {
+            return err!("Expected no arguments but got {}.", self.arity);
+        } else {
+            return Ok(());
+        }
+    }
+
+    fn visit_closure(&mut self, obj: Obj<Closure>) -> Result<(), String> {
+        return self.vm.call(obj, self.arity);
+    }
+
+    fn visit_function(&mut self, obj: Obj<Function>) -> Result<(), String> {
+        err!("Corrupt byte code: calling {} out of context", *obj)
+    }
+
+    fn visit_instance(&mut self, _obj: Obj<Instance>) -> Result<(), String> {
+        err!("Can only call functions and classes, not instances")
+    }
+
+    fn visit_native(&mut self, obj: Obj<Native>) -> Result<(), String> {
+        let result = obj.0(self.vm.tail(self.arity as usize)?);
+        self.vm.stack_top -= self.arity as usize + 1;
+        self.vm.push(result);
+        return Ok(());
+    }
+
+    fn visit_string(&mut self, _obj: Obj<String>) -> Result<(), String> {
+        err!("Can only call functions and classes, not strings")
+    }
+
+    fn visit_upvalue(&mut self, _obj: Obj<Upvalue>) -> Result<(), String> {
+        err!("Corrupt byte code: calling an upvalue")
     }
 }
 

@@ -7,7 +7,9 @@ use std::{
     ptr,
 };
 
-use crate::object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value};
+use crate::object::{
+    BoundMethod, Class, Closure, Function, Instance, Native, ObjVisitor, Upvalue, Value,
+};
 
 // note that usually 8 byte is allocated for this due to alignment, so plenty of space!
 
@@ -43,30 +45,63 @@ impl Handle {
         unsafe { (*self.ptr).is_marked }
     }
     fn mark(&mut self, value: bool) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!("{:?} mark {}", self.ptr, self);
+        }
         unsafe { (*self.ptr).is_marked = value }
+    }
+    pub fn accept<T>(&self, obj_visitor: &mut dyn ObjVisitor<T>) -> T {
+        match self.kind() {
+            Kind::BoundMethod => obj_visitor.visit_bound_method(BoundMethod::cast(self)),
+            Kind::Class => obj_visitor.visit_class(Class::cast(self)),
+            Kind::Closure => obj_visitor.visit_closure(Closure::cast(self)),
+            Kind::Function => obj_visitor.visit_function(Function::cast(self)),
+            Kind::Instance => obj_visitor.visit_instance(Instance::cast(self)),
+            Kind::Native => obj_visitor.visit_native(Native::cast(self)),
+            Kind::String => obj_visitor.visit_string(String::cast(self)),
+            Kind::Upvalue => obj_visitor.visit_upvalue(Upvalue::cast(self)),
+        }
+    }
+}
+
+impl ObjVisitor<std::fmt::Result> for std::fmt::Formatter<'_> {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> std::fmt::Result {
+        write!(self, "{}", *obj.method.function)
+    }
+
+    fn visit_class(&mut self, obj: Obj<Class>) -> std::fmt::Result {
+        write!(self, "<class {}>", *obj.name)
+    }
+
+    fn visit_closure(&mut self, obj: Obj<Closure>) -> std::fmt::Result {
+        write!(self, "{}", *obj.function)
+    }
+
+    fn visit_function(&mut self, obj: Obj<Function>) -> std::fmt::Result {
+        write!(self, "{}", *obj)
+    }
+
+    fn visit_instance(&mut self, obj: Obj<Instance>) -> std::fmt::Result {
+        write!(self, "{} instance", *obj.class.name)
+    }
+
+    fn visit_native(&mut self, _obj: Obj<Native>) -> std::fmt::Result {
+        write!(self, "{}", "<native fn>")
+    }
+
+    fn visit_string(&mut self, obj: Obj<String>) -> std::fmt::Result {
+        write!(self, "{}", *obj)
+    }
+
+    fn visit_upvalue(&mut self, _obj: Obj<Upvalue>) -> std::fmt::Result {
+        write!(self, "{}", "<upvalue>")
     }
 }
 
 impl Display for Handle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.kind() {
-            Kind::BoundMethod => write!(
-                f,
-                "{}",
-                *BoundMethod::obj_from_handle(self).unwrap().method.function
-            ),
-            Kind::Class => write!(f, "<class {}>", *Class::obj_from_handle(self).unwrap().name),
-            Kind::Function => write!(f, "{}", *Function::obj_from_handle(self).unwrap()),
-            Kind::Closure => write!(f, "{}", *Closure::obj_from_handle(self).unwrap().function),
-            Kind::Instance => write!(
-                f,
-                "{} instance",
-                *Instance::obj_from_handle(self).unwrap().class.name
-            ),
-            Kind::Native => write!(f, "<native fn>"),
-            Kind::String => write!(f, "\"{}\"", *String::obj_from_handle(self).unwrap()),
-            Kind::Upvalue => write!(f, "<upvalue>"),
-        }
+        self.accept(f)
     }
 }
 
@@ -122,15 +157,17 @@ where
     Self: Sized,
 {
     const KIND: Kind;
-    fn trace(&self, collector: &mut Vec<Handle>);
     fn test_handle(handle: &Handle) -> bool {
         handle.kind() == Self::KIND
     }
+    fn cast(handle: &Handle) -> Obj<Self> {
+        Obj {
+            ptr: handle.ptr as *mut (Header, Self),
+        }
+    }
     fn obj_from_handle(handle: &Handle) -> Option<Obj<Self>> {
         if Self::test_handle(handle) {
-            Some(Obj {
-                ptr: handle.ptr as *mut (Header, Self),
-            })
+            Some(Self::cast(handle))
         } else {
             None
         }
@@ -144,17 +181,12 @@ where
         }
     }
 }
-
-macro_rules! trace_handle {
-    ($handle:expr,$traceable:ty, $collector:expr) => {{
-        let ptr = $handle.ptr as *mut (Header, $traceable);
-        unsafe {
-            (*ptr).1.trace($collector);
-        }
-    }};
-}
 macro_rules! drop_handle {
     ($handle:expr,$traceable:ty) => {{
+        #[cfg(feature = "log_gc")]
+        {
+            println!("{:?} free type {:?}", $handle.ptr, <$traceable>::KIND);
+        }
         let ptr = $handle.ptr as *mut (Header, $traceable);
         unsafe {
             ptr::drop_in_place(ptr);
@@ -212,44 +244,18 @@ impl Heap {
         typed
     }
 
-    // leave this to the caller
     pub fn collect_garbage(&mut self, roots: Vec<Handle>) {
         self.trace(roots);
         self.sweep();
     }
 
-    fn drop_handle(&self, handle: Handle) {
-        match handle.kind() {
-            Kind::String => drop_handle!(handle, String),
-            Kind::Function => drop_handle!(handle, Function),
-            Kind::Upvalue => drop_handle!(handle, Upvalue),
-            Kind::BoundMethod => drop_handle!(handle, BoundMethod),
-            Kind::Class => drop_handle!(handle, Class),
-            Kind::Closure => drop_handle!(handle, Closure),
-            Kind::Instance => drop_handle!(handle, Instance),
-            Kind::Native => drop_handle!(handle, Native),
-        }
-    }
-
-    fn trace_handle(&self, handle: Handle, collector: &mut Vec<Handle>) {
-        match handle.kind() {
-            Kind::String => trace_handle!(handle, String, collector),
-            Kind::Function => trace_handle!(handle, Function, collector),
-            Kind::Upvalue => trace_handle!(handle, Upvalue, collector),
-            Kind::BoundMethod => trace_handle!(handle, BoundMethod, collector),
-            Kind::Class => trace_handle!(handle, Class, collector),
-            Kind::Closure => trace_handle!(handle, Closure, collector),
-            Kind::Instance => trace_handle!(handle, Instance, collector),
-            Kind::Native => trace_handle!(handle, Native, collector),
-        }
-    }
     fn trace(&self, mut roots: Vec<Handle>) {
         while let Some(mut handle) = roots.pop() {
             if handle.is_marked() {
                 continue;
             }
             handle.mark(true);
-            self.trace_handle(handle, &mut roots);
+            handle.accept(&mut roots);
         }
     }
     fn sweep(&mut self) {
@@ -271,13 +277,13 @@ impl Heap {
                 let mut live = self.handles.pop().unwrap();
                 if live.is_marked() {
                     // swap
-                    self.drop_handle(dead);
+                    dead.accept(&mut Demise);
                     self.handles[index] = live;
                     live.mark(false);
                     index += 1;
                     break;
                 }
-                self.drop_handle(live);
+                live.accept(&mut Demise)
             }
         }
     }
@@ -286,7 +292,98 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         while let Some(handle) = self.handles.pop() {
-            self.drop_handle(handle)
+            handle.accept(&mut Demise)
+        }
+    }
+}
+
+struct Demise;
+
+impl ObjVisitor<()> for Demise {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> () {
+        drop_handle!(obj, BoundMethod)
+    }
+
+    fn visit_class(&mut self, obj: Obj<Class>) -> () {
+        drop_handle!(obj, Class)
+    }
+
+    fn visit_closure(&mut self, obj: Obj<Closure>) -> () {
+        drop_handle!(obj, Closure)
+    }
+
+    fn visit_function(&mut self, obj: Obj<Function>) -> () {
+        drop_handle!(obj, Function)
+    }
+
+    fn visit_instance(&mut self, obj: Obj<Instance>) -> () {
+        drop_handle!(obj, Instance)
+    }
+
+    fn visit_native(&mut self, obj: Obj<Native>) -> () {
+        drop_handle!(obj, Native)
+    }
+
+    fn visit_string(&mut self, obj: Obj<String>) -> () {
+        drop_handle!(obj, String)
+    }
+
+    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> () {
+        drop_handle!(obj, Upvalue)
+    }
+}
+
+type Collector = Vec<Handle>;
+
+impl ObjVisitor<()> for Collector {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) {
+        self.push(obj.receiver.as_handle());
+        self.push(obj.method.as_handle());
+    }
+
+    fn visit_class(&mut self, obj: Obj<Class>) {
+        self.push(obj.name.as_handle());
+        for (name, method) in &obj.methods {
+            self.push(name.as_handle());
+            self.push(method.as_handle());
+        }
+    }
+
+    fn visit_closure(&mut self, obj: Obj<Closure>) {
+        self.push(obj.function.as_handle());
+        for upvalue in obj.upvalues.iter() {
+            self.push(upvalue.as_handle());
+        }
+    }
+
+    fn visit_function(&mut self, obj: Obj<Function>) {
+        if let Some(n) = &obj.name {
+            self.push(n.as_handle())
+        }
+        for value in &obj.chunk.constants {
+            if let Value::Object(h) = value {
+                self.push(*h)
+            }
+        }
+    }
+
+    fn visit_instance(&mut self, obj: Obj<Instance>) {
+        for value in obj.properties.values() {
+            if let Value::Object(handle) = value {
+                self.push(*handle)
+            }
+        }
+    }
+
+    fn visit_native(&mut self, _obj: Obj<Native>) {}
+
+    fn visit_string(&mut self, _obj: Obj<String>) {}
+
+    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) {
+        match *obj {
+            Upvalue::Open(_, Some(next)) => self.push(next.as_handle()),
+            Upvalue::Closed(Value::Object(handle)) => self.push(handle),
+            _ => (),
         }
     }
 }

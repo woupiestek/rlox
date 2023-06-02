@@ -45,24 +45,6 @@ impl Value {
             _ => false,
         }
     }
-    pub fn type_name(&self) -> &str {
-        match self {
-            Value::False => "boolean",
-            Value::Nil => "nil",
-            Value::Number(_) => "number",
-            Value::Object(a) => match a.kind() {
-                Kind::BoundMethod => "bound_method",
-                Kind::Class => "class",
-                Kind::Closure => "closure",
-                Kind::Function => "function",
-                Kind::Instance => "instance",
-                Kind::Native => "native",
-                Kind::String => "string",
-                Kind::Upvalue => "upvalue",
-            },
-            Value::True => "boolean",
-        }
-    }
 }
 
 impl Display for Value {
@@ -79,7 +61,6 @@ impl Display for Value {
 
 impl Traceable for String {
     const KIND: Kind = Kind::String;
-    fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
 
 pub struct Function {
@@ -112,17 +93,6 @@ impl Display for Function {
 
 impl Traceable for Function {
     const KIND: Kind = Kind::Function;
-
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        if let Some(n) = &self.name {
-            collector.push(n.as_handle())
-        }
-        for value in &self.chunk.constants {
-            if let Value::Object(h) = value {
-                collector.push(*h)
-            }
-        }
-    }
 }
 
 pub struct Class {
@@ -141,13 +111,6 @@ impl Class {
 
 impl Traceable for Class {
     const KIND: Kind = Kind::Class;
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.name.as_handle());
-        for (name, method) in &self.methods {
-            collector.push(name.as_handle());
-            collector.push(method.as_handle());
-        }
-    }
 }
 
 pub enum Upvalue {
@@ -157,14 +120,6 @@ pub enum Upvalue {
 
 impl Traceable for Upvalue {
     const KIND: Kind = Kind::Upvalue;
-
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        match self {
-            Upvalue::Open(_, Some(next)) => collector.push(next.as_handle()),
-            Upvalue::Closed(Value::Object(handle)) => collector.push(*handle),
-            _ => (),
-        }
-    }
 }
 
 // I guess the constructor can own the upvalues,
@@ -185,12 +140,6 @@ impl Closure {
 
 impl Traceable for Closure {
     const KIND: Kind = Kind::Closure;
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.function.as_handle());
-        for upvalue in self.upvalues.iter() {
-            collector.push(upvalue.as_handle());
-        }
-    }
 }
 
 pub struct Instance {
@@ -200,14 +149,6 @@ pub struct Instance {
 
 impl Traceable for Instance {
     const KIND: Kind = Kind::Instance;
-
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        for value in self.properties.values() {
-            if let Value::Object(handle) = value {
-                collector.push(*handle)
-            }
-        }
-    }
 }
 
 impl Instance {
@@ -232,11 +173,6 @@ impl BoundMethod {
 
 impl Traceable for BoundMethod {
     const KIND: Kind = Kind::BoundMethod;
-
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(self.receiver.as_handle());
-        collector.push(self.method.as_handle());
-    }
 }
 
 // perhaps Native should
@@ -251,6 +187,15 @@ impl std::fmt::Debug for Native {
 
 impl Traceable for Native {
     const KIND: Kind = Kind::Native;
+}
 
-    fn trace(&self, _collector: &mut Vec<Handle>) {}
+pub trait ObjVisitor<T> {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> T;
+    fn visit_class(&mut self, obj: Obj<Class>) -> T;
+    fn visit_closure(&mut self, obj: Obj<Closure>) -> T;
+    fn visit_function(&mut self, obj: Obj<Function>) -> T;
+    fn visit_instance(&mut self, obj: Obj<Instance>) -> T;
+    fn visit_native(&mut self, obj: Obj<Native>) -> T;
+    fn visit_string(&mut self, obj: Obj<String>) -> T;
+    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> T;
 }

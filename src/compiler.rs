@@ -965,8 +965,11 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             // I know, don't log & throw
             // also: what about an actual logger?
             println!(
-                "[line:{},column:{}] {}",
-                self.source.previous_token.line, self.source.previous_token.column, msg
+                "[line: {}, column: {}, lexeme: {}] {}",
+                self.source.previous_token.line,
+                self.source.previous_token.column,
+                self.source.previous_token.lexeme,
+                msg
             );
             self.error_count += 1;
             self.source.synchronize();
@@ -1002,10 +1005,10 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
     }
     parser.emit_return();
     let obj = parser.compiler.function;
-    if parser.error_count > 0 {
-        err!("There were {} compile time errors", parser.error_count)
-    } else {
-        Ok(obj)
+    match parser.error_count {
+        0 => Ok(obj),
+        1 => err!("There was a compile time error."),
+        more => err!("There were {} compile time errors.", more),
     }
 }
 

@@ -2,10 +2,19 @@
 
 ## 2023-06-02
 
-### visitors?
+Everything builds now. Finally.
 
-Another solution for the problem of trace and drop etc.
+### ideas
 
+X visitors to improve on handling differrent kinds of object
+- more clox like string implementation
+- using a custom allocation to count allocated bytes
+- actually test the garbage collector
+
+### testing
+
+Downloaded tests form munificent. Could not get through benchmarks, but the rest
+seem ok.
 
 ## 2023-05-31
 

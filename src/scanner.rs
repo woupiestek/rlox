@@ -240,7 +240,7 @@ impl<'src> Scanner<'src> {
     }
 
     fn identifier(&mut self) -> Token<'src> {
-        while self.peek().is_ascii_alphanumeric() {
+        while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
             self.advance();
         }
         self.token(self.identifier_type())
@@ -282,7 +282,7 @@ impl<'src> Scanner<'src> {
         if ch.is_ascii_digit() {
             return self.number();
         }
-        if ch.is_ascii_alphabetic() {
+        if ch.is_ascii_alphabetic() || ch == b'_' {
             return self.identifier();
         }
         match ch {
