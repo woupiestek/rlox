@@ -381,7 +381,7 @@ impl VM {
                 Op::Closure => {
                     let function = Function::obj_from_value(self.top_frame().read_constant())?;
                     let mut closure = self.push_traceable(Closure::new(function));
-                    self.push(Value::from(closure));
+                    //self.push(Value::from(closure));
                     for _ in 0..function.upvalue_count {
                         let is_local = self.top_frame().read_byte();
                         let index = self.top_frame().read_byte() as usize;

@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
@@ -77,10 +79,15 @@ struct Compiler<'src> {
     scope_depth: u16,
     // have one local vec, the compiler just keeping offsets?
     locals: Vec<Local<'src>>,
+    enclosing: Option<Box<Compiler<'src>>>,
 }
 
 impl<'src> Compiler<'src> {
-    fn new(function_type: FunctionType, function: Obj<Function>) -> Self {
+    fn new(
+        function_type: FunctionType,
+        function: Obj<Function>,
+        //enclosing: Option<Box<Compiler<'src>>>,
+    ) -> Self {
         let mut first_local = Local::new(Token::synthetic(
             if function_type == FunctionType::Function {
                 ""
@@ -95,6 +102,7 @@ impl<'src> Compiler<'src> {
             function_type,
             scope_depth: 0,
             locals: vec![first_local],
+            enclosing: None,
         }
     }
 
@@ -150,6 +158,25 @@ impl<'src> Compiler<'src> {
         }
         self.upvalues.push(Upvalue { index, is_local });
         Ok(count as u8)
+    }
+
+    fn resolve_upvalue(&mut self, name: &str) -> Result<Option<u8>, String> {
+        let enclosing = match &mut self.enclosing {
+            None => {
+                return Ok(None);
+            }
+            Some(compiler) => compiler,
+        };
+
+        if let Some(index) = enclosing.resolve_local(name)? {
+            enclosing.locals[index as usize].is_captured = true;
+            return Ok(Some(self.add_upvalue(index, true)?));
+        }
+
+        if let Some(upvalue) = enclosing.resolve_upvalue(name)? {
+            return Ok(Some(self.add_upvalue(upvalue, false)?));
+        }
+        Ok(None)
     }
 
     fn declare_variable(&mut self, name: Token<'src>) -> Result<(), String> {
@@ -251,7 +278,7 @@ pub struct Parser<'src, 'hp> {
     source: Source<'src>,
 
     // targets
-    compilers: Vec<Compiler<'src>>,
+    compiler: Box<Compiler<'src>>,
 
     has_super: u128,
     class_depth: u8,
@@ -267,20 +294,15 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     pub fn new(source: Source<'src>, heap: &'hp mut Heap) -> Self {
         Self {
             source,
-            compilers: vec![Compiler::new(
+            compiler: Box::new(Compiler::new(
                 FunctionType::Script,
                 heap.store(Function::new(None)),
-            )],
+            )),
             has_super: 0,
             class_depth: 0,
             heap,
             error_count: 0,
         }
-    }
-
-    fn current_compiler(&mut self) -> &mut Compiler<'src> {
-        let i = self.compilers.len() - 1;
-        &mut self.compilers[i]
     }
 
     fn emit_bytes(&mut self, bytes: &[u8]) {
@@ -309,7 +331,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn emit_return(&mut self) {
-        if self.current_compiler().function_type == FunctionType::Initializer {
+        if self.compiler.function_type == FunctionType::Initializer {
             self.emit_bytes(&[Op::GetLocal as u8, 0, Op::Return as u8]);
         } else {
             self.emit_bytes(&[Op::Nil as u8, Op::Return as u8]);
@@ -322,14 +344,14 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn begin_scope(&mut self) {
-        self.current_compiler().scope_depth += 1;
+        self.compiler.scope_depth += 1;
     }
 
     fn end_scope(&mut self) {
-        self.current_compiler().scope_depth -= 1;
-        let scope_depth = self.current_compiler().scope_depth;
+        self.compiler.scope_depth -= 1;
+        let scope_depth = self.compiler.scope_depth;
         loop {
-            let is_captured = match self.current_compiler().locals.last() {
+            let is_captured = match self.compiler.locals.last() {
                 None => return,
                 Some(local) => {
                     if local.depth.is_none() || local.depth.unwrap() <= scope_depth {
@@ -344,41 +366,8 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             } else {
                 Op::Pop
             } as u8]);
-            self.current_compiler().locals.pop();
+            self.compiler.locals.pop();
         }
-    }
-
-    fn resolve_upvalue(&mut self, name: &str) -> Result<Option<u8>, String> {
-        if self.compilers.len() == 0 {
-            return Ok(None);
-        }
-        let mut level = self.compilers.len() - 1;
-        // find the local index
-        let mut index = loop {
-            if let Some(local) = self.compilers[level].resolve_local(name)? {
-                self.compilers[level].locals[local as usize].is_captured = true;
-                break local;
-            }
-            if level == 0 {
-                return Ok(None);
-            } else {
-                level -= 1;
-                continue;
-            }
-        };
-        let mut is_local = true;
-        // set upvalue indices...
-        loop {
-            level += 1;
-            if level == self.compilers.len() {
-                break;
-            }
-            index = self.compilers[level].add_upvalue(index as u8, is_local)?;
-            is_local = false;
-        }
-        Ok(Some(
-            self.current_compiler().add_upvalue(index as u8, is_local)?,
-        ))
     }
 
     fn argument_list(&mut self) -> Result<u8, String> {
@@ -531,9 +520,9 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     // admit code for variable access
     fn variable(&mut self, name: &'src str, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
-            if let Some(arg) = self.current_compiler().resolve_local(name)? {
+            if let Some(arg) = self.compiler.resolve_local(name)? {
                 (arg, Op::GetLocal as u8, Op::SetLocal as u8)
-            } else if let Some(arg) = self.resolve_upvalue(name)? {
+            } else if let Some(arg) = self.compiler.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
             } else {
                 let value = Value::from(self.heap.intern(name));
@@ -552,7 +541,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn super_(&mut self) -> Result<(), String> {
-        if self.compilers.is_empty() {
+        if self.class_depth == 0 {
             return err!("Can't use 'super' outside of a class.");
         }
         if self.has_super & 1 == 0 {
@@ -574,7 +563,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn this(&mut self, can_assign: bool) -> Result<(), String> {
-        if self.compilers.is_empty() {
+        if self.class_depth == 0 {
             return err!("Can't use 'this' outside of a class.");
         }
         self.variable("this", can_assign)
@@ -650,8 +639,8 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name = self.source.previous_token;
-        self.current_compiler().declare_variable(name)?;
-        if self.current_compiler().scope_depth > 0 {
+        self.compiler.declare_variable(name)?;
+        if self.compiler.scope_depth > 0 {
             Ok(0)
         } else {
             self.intern(name.lexeme)
@@ -659,7 +648,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn define_variable(&mut self, global: u8) {
-        if !self.current_compiler().mark_initialized() {
+        if !self.compiler.mark_initialized() {
             self.emit_bytes(&[Op::DefineGlobal as u8, global])
         }
     }
@@ -677,20 +666,17 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         Ok(())
     }
 
-    fn end_compiler(&mut self) -> Compiler {
+    fn end_compiler(&mut self) -> Result<Box<Compiler>, String> {
         self.emit_return();
-        let compiler = self.compilers.pop().unwrap();
-        // disassemble!(&compiler.function.chunk);
-        compiler
+        let option = self.compiler.enclosing.take();
+        if let Some(enclosing) = option {
+            return Ok(mem::replace(&mut self.compiler, enclosing));
+        }
+        err!("Ran out of compilers")
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
-        let name = self
-            .heap
-            .store(self.source.previous_token.lexeme.to_string());
-        let mut obj_function = self.heap.store(Function::new(Some(name)));
-        self.compilers
-            .push(Compiler::new(function_type, obj_function));
+        let mut obj_function = self.init_compiler(function_type);
         self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
@@ -713,8 +699,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
 
-        let compiler = self.end_compiler();
-        //let function = compiler.function;
+        let compiler = self.end_compiler()?;
         let upvalues = compiler.upvalues;
         (*obj_function).upvalue_count = upvalues.len() as u8;
         let index = self
@@ -723,15 +708,27 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.emit_bytes(&[Op::Closure as u8, index]);
 
         // I don't get this yet
-        for i in 0..obj_function.upvalue_count {
-            let upvalue = upvalues[i as usize];
+        for upvalue in upvalues {
             self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
         Ok(())
     }
 
+    fn init_compiler(&mut self, function_type: FunctionType) -> Obj<Function> {
+        let name = self
+            .heap
+            .store(self.source.previous_token.lexeme.to_string());
+        let obj_function = self.heap.store(Function::new(Some(name)));
+        let enclosing = mem::replace(
+            &mut self.compiler,
+            Box::new(Compiler::new(function_type, obj_function)),
+        );
+        self.compiler.enclosing = Some(enclosing);
+        obj_function
+    }
+
     fn current_chunk(&mut self) -> &mut Chunk {
-        &mut self.current_compiler().function.chunk
+        &mut self.compiler.function.chunk
     }
 
     fn method(&mut self) -> Result<(), String> {
@@ -752,7 +749,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     //classDecl      → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
     fn class(&mut self) -> Result<(), String> {
         let class_name = self.identifier_name("Expect class name.")?;
-        self.current_compiler().declare_variable(class_name)?;
+        self.compiler.declare_variable(class_name)?;
         let index = self.intern(class_name.lexeme)?;
         self.emit_bytes(&[Op::Class as u8, index]);
         self.define_variable(index);
@@ -773,8 +770,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
                 return err!("A class can't inherit from itself.");
             }
             self.begin_scope();
-            self.current_compiler()
-                .add_local(Token::synthetic("super"))?;
+            self.compiler.add_local(Token::synthetic("super"))?;
             self.define_variable(0);
             self.variable(class_name.lexeme, false)?;
             self.emit_op(Op::Inherit);
@@ -809,7 +805,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn fun_declaration(&mut self) -> Result<(), String> {
         let index = self.parse_variable("Expect function name.")?;
-        self.current_compiler().mark_initialized();
+        self.compiler.mark_initialized();
         self.function(FunctionType::Function)?;
         self.define_variable(index);
         Ok(())
@@ -916,7 +912,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn return_statement(&mut self) -> Result<(), String> {
-        if self.current_compiler().function_type == FunctionType::Script {
+        if self.compiler.function_type == FunctionType::Script {
             return err!("Can't return from top-level code.");
         }
 
@@ -924,7 +920,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             self.emit_return();
             Ok(())
         } else {
-            if self.current_compiler().function_type == FunctionType::Initializer {
+            if self.compiler.function_type == FunctionType::Initializer {
                 return err!("Can't return a value from an initializer.");
             }
 
@@ -1004,7 +1000,8 @@ pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<
     while !parser.source.match_type(TokenType::End) {
         parser.declaration();
     }
-    let obj = parser.end_compiler().function;
+    parser.emit_return();
+    let obj = parser.compiler.function;
     if parser.error_count > 0 {
         err!("There were {} compile time errors", parser.error_count)
     } else {
