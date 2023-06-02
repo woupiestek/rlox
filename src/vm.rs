@@ -57,7 +57,8 @@ impl CallFrame {
     }
 
     fn read_string(&mut self) -> Result<Obj<String>, String> {
-        String::obj_from_value(self.read_constant())
+        let value = self.read_constant();
+        String::obj_from_value(value).ok_or(format!("'{}' is not a string", value))
     }
 
     fn read_upvalue(&mut self) -> Obj<Upvalue> {
@@ -218,35 +219,38 @@ impl VM {
             if let Value::Object(handle) = callee {
                 match handle.kind() {
                     Kind::BoundMethod => {
-                        let bm = BoundMethod::obj_from_handle(&handle)?;
+                        let bm = BoundMethod::obj_from_handle(&handle).unwrap();
                         self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
                         return self.call(bm.method, arity);
                     }
                     Kind::Class => {
-                        let class = Class::obj_from_handle(&handle)?;
+                        let class = Class::obj_from_handle(&handle).unwrap();
                         let instance = self.heap.store(Instance::new(class));
                         self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
                         if let Some(&init) = class.methods.get(&self.init_string) {
                             return self.call(init, arity);
+                        } else if arity > 0 {
+                            return err!("Expected no arguments but got {}.", arity);
+                        } else {
+                            return Ok(());
                         }
                     }
                     Kind::Closure => {
-                        return self.call(Closure::obj_from_handle(&handle)?, arity);
+                        return self.call(Closure::obj_from_handle(&handle).unwrap(), arity);
                     }
                     Kind::Native => {
-                        let native = Native::obj_from_handle(&handle)?;
+                        let native = Native::obj_from_handle(&handle).unwrap();
                         let result = native.0(self.tail(arity as usize)?);
                         self.stack_top -= arity as usize + 1;
                         self.push(result);
                         return Ok(());
                     }
-
                     _ => (),
                 }
             }
         }
 
-        err!("Can only call functions and classes.")
+        err!("Can only call functions and classes, not '{}'", callee)
     }
 
     fn invoke_from_class(
@@ -264,8 +268,8 @@ impl VM {
     }
 
     fn invoke(&mut self, name: Obj<String>, arity: u8) -> Result<(), String> {
-        let instance =
-            Instance::get(self.peek(arity as usize)).ok_or("Only instances have methods.")?;
+        let value = self.peek(arity as usize);
+        let instance = Instance::obj_from_value(value).ok_or("Only instances have methods.")?;
         if let Some(property) = instance.properties.get(&name) {
             self.values[self.stack_top - arity as usize - 1] = *property;
             self.call_value(*property, arity)
@@ -278,7 +282,7 @@ impl VM {
         match class.methods.get(&name) {
             None => err!("Undefined property '{}'.", *name),
             Some(method) => {
-                let instance = Instance::obj_from_value(self.peek(0))?;
+                let instance = Instance::obj_from_value(self.peek(0)).unwrap();
                 let bm = self.heap.store(BoundMethod::new(instance, *method));
                 self.pop();
                 self.push(Value::from(bm));
@@ -288,12 +292,13 @@ impl VM {
     }
 
     fn define_method(&mut self, name: Obj<String>) -> Result<(), String> {
-        let method = self.peek(0);
-        let mut class = Class::obj_from_value(method)?;
-        (*class)
-            .methods
-            .insert(name, Closure::obj_from_value(method)?);
-        self.pop();
+        if let Ok(&[a, method]) = self.tail(2) {
+            let mut class = Class::obj_from_value(a).unwrap();
+            (*class)
+                .methods
+                .insert(name, Closure::obj_from_value(method).unwrap());
+            self.pop();
+        }
         Ok(())
     }
 
@@ -342,7 +347,7 @@ impl VM {
             match instruction {
                 Op::Add => {
                     if let &[a, b] = self.tail(2)? {
-                        if let (Ok(a), Ok(b)) =
+                        if let (Some(a), Some(b)) =
                             (String::obj_from_value(a), String::obj_from_value(b))
                         {
                             let c = self.concatenate(&*a, &*b);
@@ -379,7 +384,8 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = Function::obj_from_value(self.top_frame().read_constant())?;
+                    let function =
+                        Function::obj_from_value(self.top_frame().read_constant()).unwrap();
                     let mut closure = self.push_traceable(Closure::new(function));
                     //self.push(Value::from(closure));
                     for _ in 0..function.upvalue_count {
@@ -426,7 +432,8 @@ impl VM {
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
-                    let instance = Instance::get(self.peek(0))
+                    let value = self.peek(0);
+                    let instance = Instance::obj_from_value(value)
                         .ok_or("Only instances have properties.".to_string())?;
                     let name = self.top_frame().read_string()?;
                     if let Some(&value) = instance.properties.get(&name) {
@@ -438,22 +445,25 @@ impl VM {
                 }
                 Op::GetSuper => {
                     let name = self.top_frame().read_string()?;
-                    let super_class = Class::obj_from_value(self.pop())?;
+                    let super_class = Class::obj_from_value(self.pop()).unwrap();
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
-                    let value = Value::from(self.top_frame().read_upvalue());
-                    self.push(value)
+                    let value = match *self.top_frame().read_upvalue() {
+                        Upvalue::Open(index, _) => self.values[index],
+                        Upvalue::Closed(value) => value,
+                    };
+                    self.push(value);
                 }
                 Op::Greater => {
                     binary_op!(self, a, b, a > b)
                 }
                 Op::Inherit => {
                     if let &[a, b] = self.tail(2)? {
-                        let super_class =
-                            Class::get(a).ok_or("Super class must be a class.".to_string())?;
-                        let mut sub_class =
-                            Class::get(b).ok_or("Sub class must be a class.".to_string())?;
+                        let super_class = Class::obj_from_value(a)
+                            .ok_or("Super class must be a class.".to_string())?;
+                        let mut sub_class = Class::obj_from_value(b)
+                            .ok_or("Sub class must be a class.".to_string())?;
                         for (&k, &v) in &super_class.methods {
                             sub_class.methods.insert(k, v);
                         }
@@ -521,8 +531,8 @@ impl VM {
                 }
                 Op::SetProperty => {
                     if let &[a, b] = self.tail(2)? {
-                        let mut instance =
-                            Instance::get(a).ok_or("Only instances have fields.".to_string())?;
+                        let mut instance = Instance::obj_from_value(a)
+                            .ok_or("Only instances have fields.".to_string())?;
                         instance
                             .properties
                             .insert(self.top_frame().read_string()?, b);
@@ -541,7 +551,7 @@ impl VM {
                 Op::SuperInvoke => {
                     let name = self.top_frame().read_string()?;
                     let arity = self.top_frame().read_byte();
-                    let super_class = Class::obj_from_value(self.pop())?;
+                    let super_class = Class::obj_from_value(self.pop()).unwrap();
                     self.invoke_from_class(super_class, name, arity)?;
                 }
                 Op::True => self.push(Value::True),
@@ -565,10 +575,10 @@ impl VM {
         self.push(Value::from(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
-            eprintln!("Error: '{}'", msg);
+            eprintln!("Error: {}", msg);
             while let Some(frame) = &self.frames.pop() {
                 eprintln!(
-                    "at {} line {}",
+                    "  at {} line {}",
                     *frame.closure.function,
                     frame.chunk().lines[frame.ip as usize]
                 )
@@ -707,8 +717,38 @@ mod tests {
               print i;
             }
             return count;
-          }
-          var counter = makeCounter();
+        }
+        var counter = makeCounter();
+        counter();
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn classes() {
+        let test = "
+        class Breakfast {
+            cook() {
+              print \"Eggs a-fryin'!'\";
+            }
+          
+            serve(who) {
+              print \"Enjoy your breakfast, \" + who + \".\";
+            }
+        }
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn classes_2() {
+        let test = "
+        class Bagel { eat() { print \"Crunch crunch crunch!\"; } }
+        var bagel = Bagel();
         ";
         let mut vm = VM::new(Heap::new());
         let result = vm.interpret(test);

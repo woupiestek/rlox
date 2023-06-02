@@ -55,16 +55,16 @@ impl Display for Handle {
                 "{}",
                 *BoundMethod::obj_from_handle(self).unwrap().method.function
             ),
-            Kind::Class => write!(f, "{}", *Class::obj_from_handle(self).unwrap().name),
+            Kind::Class => write!(f, "<class {}>", *Class::obj_from_handle(self).unwrap().name),
             Kind::Function => write!(f, "{}", *Function::obj_from_handle(self).unwrap()),
             Kind::Closure => write!(f, "{}", *Closure::obj_from_handle(self).unwrap().function),
             Kind::Instance => write!(
                 f,
                 "{} instance",
-                *Class::obj_from_handle(self).unwrap().name
+                *Instance::obj_from_handle(self).unwrap().class.name
             ),
             Kind::Native => write!(f, "<native fn>"),
-            Kind::String => write!(f, "{}", *String::obj_from_handle(self).unwrap()),
+            Kind::String => write!(f, "\"{}\"", *String::obj_from_handle(self).unwrap()),
             Kind::Upvalue => write!(f, "<upvalue>"),
         }
     }
@@ -126,32 +126,21 @@ where
     fn test_handle(handle: &Handle) -> bool {
         handle.kind() == Self::KIND
     }
-    fn obj_from_handle(handle: &Handle) -> Result<Obj<Self>, String> {
+    fn obj_from_handle(handle: &Handle) -> Option<Obj<Self>> {
         if Self::test_handle(handle) {
-            Ok(Obj {
+            Some(Obj {
                 ptr: handle.ptr as *mut (Header, Self),
             })
         } else {
-            err!("'{:?}' is no '{:?}'", handle.kind(), Self::KIND)
+            None
         }
     }
 
-    fn get(value: Value) -> Option<Obj<Self>> {
-        if let Value::Object(handle) = value {
-            if Self::test_handle(&handle) {
-                return Some(Obj {
-                    ptr: handle.ptr as *mut (Header, Self),
-                });
-            }
-        }
-        return None;
-    }
-
-    fn obj_from_value(value: Value) -> Result<Obj<Self>, String> {
+    fn obj_from_value(value: Value) -> Option<Obj<Self>> {
         if let Value::Object(handle) = value {
             Self::obj_from_handle(&handle)
         } else {
-            err!("'{:?}' is no '{:?}'", value, Self::KIND)
+            None
         }
     }
 }
