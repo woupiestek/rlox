@@ -135,8 +135,8 @@ impl Chunk {
     }
     pub fn add_constant(&mut self, value: Value) -> Result<u8, String> {
         let len = self.constants.len();
-        if len == u8::MAX as usize {
-            Err("too many constants in function".to_string())
+        if len > u8::MAX as usize {
+            Err("Too many constants in function".to_string())
         } else {
             self.constants.push(value);
             Ok(len as u8)

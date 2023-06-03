@@ -1,5 +1,19 @@
 # Rlox
 
+## 2023-06-03
+
+- add README
+- more clox like string implementation
+- using a custom allocation to count allocated bytes
+- & mut instead of Box for compilers
+- one stack of locals
+
+### lifetime stack
+
+For the compilers: a stack of &mut where each Compiler lives somewhere on the
+stack. The deeper in the stack, the longer the lifetime. I cannot explain this
+to rustc yet, if it is possible. The lifetime bounds only allow 'outlive'.
+
 ## 2023-06-02
 
 Everything builds now. Finally.
@@ -7,9 +21,10 @@ Everything builds now. Finally.
 ### ideas
 
 X visitors to improve on handling differrent kinds of object
+
 - more clox like string implementation
-- using a custom allocation to count allocated bytes
-- actually test the garbage collector
+- using a custom allocation to count allocated bytes X actually test the garbage
+  collector
 
 ### testing
 

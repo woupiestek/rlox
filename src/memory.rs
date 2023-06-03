@@ -47,7 +47,7 @@ impl Handle {
     fn mark(&mut self, value: bool) {
         #[cfg(feature = "log_gc")]
         {
-            println!("{:?} mark {}", self.ptr, self);
+            println!("{:?} mark {} as {}", self.ptr, self, value);
         }
         unsafe { (*self.ptr).is_marked = value }
     }
@@ -120,6 +120,16 @@ impl<T: Traceable> Obj<T> {
             ptr: self.ptr as *mut Header,
         }
     }
+
+    fn drop_in_place(&self) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!("{:?} free type {:?}", self.ptr, T::KIND);
+        }
+        unsafe {
+            ptr::drop_in_place(self.ptr);
+        }
+    }
 }
 
 impl<T: Traceable> Copy for Obj<T> {}
@@ -157,41 +167,22 @@ where
     Self: Sized,
 {
     const KIND: Kind;
-    fn test_handle(handle: &Handle) -> bool {
-        handle.kind() == Self::KIND
-    }
     fn cast(handle: &Handle) -> Obj<Self> {
         Obj {
             ptr: handle.ptr as *mut (Header, Self),
         }
     }
-    fn obj_from_handle(handle: &Handle) -> Option<Obj<Self>> {
-        if Self::test_handle(handle) {
-            Some(Self::cast(handle))
-        } else {
-            None
-        }
-    }
-
     fn obj_from_value(value: Value) -> Option<Obj<Self>> {
         if let Value::Object(handle) = value {
-            Self::obj_from_handle(&handle)
+            if handle.kind() == Self::KIND {
+                Some(Self::cast(&handle))
+            } else {
+                None
+            }
         } else {
             None
         }
     }
-}
-macro_rules! drop_handle {
-    ($handle:expr,$traceable:ty) => {{
-        #[cfg(feature = "log_gc")]
-        {
-            println!("{:?} free type {:?}", $handle.ptr, <$traceable>::KIND);
-        }
-        let ptr = $handle.ptr as *mut (Header, $traceable);
-        unsafe {
-            ptr::drop_in_place(ptr);
-        }
-    }};
 }
 
 pub struct Heap {
@@ -225,7 +216,7 @@ impl Heap {
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        let typed = unsafe {
+        let obj = unsafe {
             let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
             assert!(!ptr.is_null());
             ptr::write(
@@ -240,16 +231,36 @@ impl Heap {
             );
             Obj { ptr }
         };
-        self.handles.push(typed.as_handle());
-        typed
+        self.handles.push(obj.as_handle());
+        #[cfg(feature = "log_gc")]
+        {
+            println!("{:?} store type {:?}", obj.ptr, T::KIND);
+        }
+        obj
     }
 
     pub fn collect_garbage(&mut self, roots: Vec<Handle>) {
-        self.trace(roots);
+        self.mark(roots);
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Starting sweeping.");
+        }
         self.sweep();
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Finished tracing references");
+        }
     }
 
-    fn trace(&self, mut roots: Vec<Handle>) {
+    fn mark(&self, mut roots: Vec<Handle>) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!(
+                "Start marking objects & tracing references. Number of roots: {}",
+                roots.len()
+            );
+        }
+
         while let Some(mut handle) = roots.pop() {
             if handle.is_marked() {
                 continue;
@@ -257,34 +268,42 @@ impl Heap {
             handle.mark(true);
             handle.accept(&mut roots);
         }
+
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Done with mark & trace");
+        }
     }
     fn sweep(&mut self) {
-        // clean up the string pool
+        // first clean up the string pool
         self.string_pool.retain(|_, v| v.is_marked());
-
         let mut index: usize = 0;
-        while index < self.handles.len() {
+        let mut len: usize = self.handles.len();
+        loop {
             // look for dead object
-            let mut dead = self.handles[index];
-            if dead.is_marked() {
+            while self.handles[index].is_marked() {
+                self.handles[index].mark(false);
                 index += 1;
-                dead.mark(false);
-                continue;
+                if index == len {
+                    self.handles.truncate(index);
+                    return;
+                }
             }
-
-            while self.handles.len() > index {
-                // look for live object
-                let mut live = self.handles.pop().unwrap();
-                if live.is_marked() {
-                    // swap
-                    dead.accept(&mut Demise);
-                    self.handles[index] = live;
-                    live.mark(false);
-                    index += 1;
+            self.handles[index].accept(&mut Demise);
+            // look for live object from other end
+            loop {
+                len -= 1;
+                if index == len {
+                    self.handles.truncate(len);
+                    return;
+                }
+                if self.handles[len].is_marked() {
                     break;
                 }
-                live.accept(&mut Demise)
+                self.handles[len].accept(&mut Demise);
             }
+            // swap
+            self.handles[index] = self.handles[len];
         }
     }
 }
@@ -301,35 +320,35 @@ struct Demise;
 
 impl ObjVisitor<()> for Demise {
     fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> () {
-        drop_handle!(obj, BoundMethod)
+        obj.drop_in_place();
     }
 
     fn visit_class(&mut self, obj: Obj<Class>) -> () {
-        drop_handle!(obj, Class)
+        obj.drop_in_place();
     }
 
     fn visit_closure(&mut self, obj: Obj<Closure>) -> () {
-        drop_handle!(obj, Closure)
+        obj.drop_in_place();
     }
 
     fn visit_function(&mut self, obj: Obj<Function>) -> () {
-        drop_handle!(obj, Function)
+        obj.drop_in_place();
     }
 
     fn visit_instance(&mut self, obj: Obj<Instance>) -> () {
-        drop_handle!(obj, Instance)
+        obj.drop_in_place();
     }
 
     fn visit_native(&mut self, obj: Obj<Native>) -> () {
-        drop_handle!(obj, Native)
+        obj.drop_in_place();
     }
 
     fn visit_string(&mut self, obj: Obj<String>) -> () {
-        drop_handle!(obj, String)
+        obj.drop_in_place();
     }
 
     fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> () {
-        drop_handle!(obj, Upvalue)
+        obj.drop_in_place();
     }
 }
 
@@ -405,11 +424,11 @@ mod tests {
         heap.intern("");
     }
 
-    fn first(_args: &[Value]) -> Value {
+    fn first(_args: &[Value]) -> Result<Value, String> {
         if _args.len() > 0 {
-            _args[0]
+            Ok(_args[0])
         } else {
-            Value::Nil
+            err!("Too few arguments.")
         }
     }
 

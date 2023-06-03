@@ -83,11 +83,7 @@ struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    fn new(
-        function_type: FunctionType,
-        function: Obj<Function>,
-        //enclosing: Option<Box<Compiler<'src>>>,
-    ) -> Self {
+    fn new(function_type: FunctionType, function: Obj<Function>) -> Self {
         let mut first_local = Local::new(Token::synthetic(
             if function_type == FunctionType::Function {
                 ""
@@ -153,7 +149,7 @@ impl<'src> Compiler<'src> {
                 return Ok(i as u8);
             }
         }
-        if count == u8::MAX as usize {
+        if count > u8::MAX as usize {
             return err!("Too many closure variables in function.");
         }
         self.upvalues.push(Upvalue { index, is_local });
@@ -666,26 +662,39 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         Ok(())
     }
 
+    fn init_compiler(&mut self, function_type: FunctionType) {
+        let name = self
+            .heap
+            .store(self.source.previous_token.lexeme.to_string());
+        let obj_function = self.heap.store(Function::new(Some(name)));
+        let enclosing = mem::replace(
+            &mut self.compiler,
+            Box::new(Compiler::new(function_type, obj_function)),
+        );
+        self.compiler.enclosing = Some(enclosing);
+    }
+
     fn end_compiler(&mut self) -> Result<Box<Compiler>, String> {
         self.emit_return();
-        let option = self.compiler.enclosing.take();
-        if let Some(enclosing) = option {
-            return Ok(mem::replace(&mut self.compiler, enclosing));
-        }
-        err!("Ran out of compilers")
+        let enclosing = self
+            .compiler
+            .enclosing
+            .take()
+            .ok_or("Ran out of compilers.")?;
+        Ok(mem::replace(&mut self.compiler, enclosing))
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
-        let mut obj_function = self.init_compiler(function_type);
+        self.init_compiler(function_type);
         self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                if obj_function.arity == u8::MAX {
+                if self.compiler.function.arity == u8::MAX {
                     return err!("Can't have more than 255 parameters.");
                 }
-                (*obj_function).arity += 1;
+                (self.compiler.function).arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index);
                 if !self.source.match_type(TokenType::Comma) {
@@ -701,30 +710,17 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
         let compiler = self.end_compiler()?;
         let upvalues = compiler.upvalues;
+        let mut obj_function = compiler.function;
         (*obj_function).upvalue_count = upvalues.len() as u8;
         let index = self
             .current_chunk()
             .add_constant(Value::from(obj_function))?;
         self.emit_bytes(&[Op::Closure as u8, index]);
-
         // I don't get this yet
         for upvalue in upvalues {
             self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
         Ok(())
-    }
-
-    fn init_compiler(&mut self, function_type: FunctionType) -> Obj<Function> {
-        let name = self
-            .heap
-            .store(self.source.previous_token.lexeme.to_string());
-        let obj_function = self.heap.store(Function::new(Some(name)));
-        let enclosing = mem::replace(
-            &mut self.compiler,
-            Box::new(Compiler::new(function_type, obj_function)),
-        );
-        self.compiler.enclosing = Some(enclosing);
-        obj_function
     }
 
     fn current_chunk(&mut self) -> &mut Chunk {

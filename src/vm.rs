@@ -8,14 +8,13 @@ use crate::{
     object::{BoundMethod, Class, Closure, Function, Instance, Native, ObjVisitor, Upvalue, Value},
 };
 
-const MAX_FRAMES: usize = 1 << 6;
+const MAX_FRAMES: usize = 0x40;
 const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 
-// todo: maybe support native functions that Err
-fn clock_native(_args: &[Value]) -> Value {
+fn clock_native(_args: &[Value]) -> Result<Value, String> {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
-        Ok(duration) => Value::from(duration.as_millis() as f64),
-        Err(_) => Value::Nil, // just like how js would solve it
+        Ok(duration) => Ok(Value::from(duration.as_millis() as f64)),
+        Err(x) => Err(x.to_string()),
     }
 }
 
@@ -92,7 +91,6 @@ pub struct VM {
 impl VM {
     pub fn new(mut heap: Heap) -> Self {
         let init_string = heap.intern("init");
-        let clock_string = heap.intern("clock");
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
@@ -101,9 +99,9 @@ impl VM {
             globals: HashMap::new(),
             init_string,
             heap,
-            next_gc: 0x80,
+            next_gc: 0x8000,
         };
-        s.define_native(clock_string, CLOCK_NATIVE);
+        s.define_native("clock", CLOCK_NATIVE);
         s
     }
     pub fn capture_upvalue(&mut self, location: usize) -> Obj<Upvalue> {
@@ -165,7 +163,7 @@ impl VM {
                 println!("-- gc end");
                 let after = self.heap.count();
                 println!(
-                    "   collected {} bytes (from {} to {}) next at {}",
+                    "   collected {} objects (from {} to {}) next at {}",
                     before - after,
                     before,
                     after,
@@ -179,25 +177,54 @@ impl VM {
 
     fn roots(&mut self) -> Vec<crate::memory::Handle> {
         let mut collector = Vec::new();
-        for value in self.values {
-            if let Value::Object(handle) = value {
+        #[cfg(feature = "log_gc")]
+        {
+            println!("collect stack objects");
+        }
+        for i in 0..self.stack_top {
+            if let Value::Object(handle) = self.values[i] {
                 collector.push(handle);
             }
+        }
+        #[cfg(feature = "log_gc")]
+        {
+            println!("collect frames");
         }
         for frame in &self.frames {
             collector.push(frame.closure.as_handle())
         }
+        #[cfg(feature = "log_gc")]
+        {
+            println!("collect upvalues");
+        }
         if let Some(upvalue) = self.open_upvalues {
             collector.push(upvalue.as_handle());
         }
+        #[cfg(feature = "log_gc")]
+        {
+            println!("collect globals");
+        }
+        for (k, v) in &self.globals {
+            collector.push(k.as_handle());
+            if let Value::Object(handle) = v {
+                collector.push(*handle)
+            }
+        }
         // no compiler roots
+        #[cfg(feature = "log_gc")]
+        {
+            println!("collect init string");
+        }
         collector.push(self.init_string.as_handle());
         collector
     }
 
-    fn define_native(&mut self, name: Obj<String>, native_fn: Native) {
+    fn define_native(&mut self, name: &str, native_fn: Native) {
+        let key = self.heap.intern(name);
+        self.push(Value::from(key));
         let value = Value::from(self.new_obj(native_fn));
-        self.globals.insert(name, value);
+        self.globals.insert(key, value);
+        self.pop();
     }
 
     fn push(&mut self, value: Value) {
@@ -379,10 +406,6 @@ impl VM {
                             let location = self.top_frame().slots + index;
                             self.capture_upvalue(location)
                         } else {
-                            // todo: fix bug & remove
-                            if self.top_frame().closure.upvalues.len() <= index {
-                                return err!("Missing upvalue {}", index);
-                            }
                             self.top_frame().closure.upvalues[index]
                         })
                     }
@@ -551,6 +574,11 @@ impl VM {
         }
     }
 
+    fn reset_stack(&mut self) {
+        self.stack_top = 0;
+        self.open_upvalues = None;
+    }
+
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
         let function = compile(source, &mut self.heap)?;
         self.push(Value::from(function));
@@ -567,7 +595,8 @@ impl VM {
                     frame.chunk().lines[frame.ip as usize]
                 )
             }
-            err!("Runtime error")
+            self.reset_stack();
+            err!("Runtime error!")
         } else {
             Ok(())
         }
@@ -581,7 +610,6 @@ struct Caller<'b> {
 
 impl<'b> ObjVisitor<Result<(), String>> for Caller<'b> {
     fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> Result<(), String> {
-        //let bm = BoundMethod::obj_from_handle(&handle).unwrap();
         self.vm.values[self.vm.stack_top - self.arity as usize - 1] = Value::from(obj.receiver);
         return self.vm.call(obj.method, self.arity);
     }
@@ -611,7 +639,7 @@ impl<'b> ObjVisitor<Result<(), String>> for Caller<'b> {
     }
 
     fn visit_native(&mut self, obj: Obj<Native>) -> Result<(), String> {
-        let result = obj.0(self.vm.tail(self.arity as usize)?);
+        let result = obj.0(self.vm.tail(self.arity as usize)?)?;
         self.vm.stack_top -= self.arity as usize + 1;
         self.vm.push(result);
         return Ok(());
@@ -785,6 +813,26 @@ mod tests {
         let test = "
         class Bagel { eat() { print \"Crunch crunch crunch!\"; } }
         var bagel = Bagel();
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn clock() {
+        let test = "
+        print clock();
+        ";
+        let mut vm = VM::new(Heap::new());
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn string_equality() {
+        let test = "
+        print \"x\" == \"x\";
         ";
         let mut vm = VM::new(Heap::new());
         let result = vm.interpret(test);

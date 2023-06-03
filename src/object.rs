@@ -177,7 +177,7 @@ impl Traceable for BoundMethod {
 
 // perhaps Native should
 #[derive(Copy, Clone)]
-pub struct Native(pub fn(args: &[Value]) -> Value);
+pub struct Native(pub fn(args: &[Value]) -> Result<Value, String>);
 
 impl std::fmt::Debug for Native {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
