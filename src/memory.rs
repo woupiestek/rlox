@@ -1,7 +1,7 @@
 use std::{
     alloc::alloc,
     alloc::Layout,
-    collections::HashMap,
+    collections::HashSet,
     fmt::Display,
     ops::{Deref, DerefMut},
     ptr,
@@ -28,7 +28,7 @@ pub enum Kind {
 
 #[derive(Copy, Clone, Debug)]
 pub struct Header {
-    pub is_marked: bool,
+    is_marked: bool,
     kind: Kind,
 }
 
@@ -105,7 +105,14 @@ impl Display for Handle {
     }
 }
 
-#[derive(Eq, Hash, PartialEq)]
+impl<T: Traceable> From<Obj<T>> for Handle {
+    fn from(value: Obj<T>) -> Self {
+        Self {
+            ptr: value.ptr as *mut Header,
+        }
+    }
+}
+
 pub struct Obj<Body: Traceable> {
     ptr: *mut (Header, Body),
 }
@@ -113,12 +120,6 @@ pub struct Obj<Body: Traceable> {
 impl<T: Traceable> Obj<T> {
     fn is_marked(&self) -> bool {
         unsafe { (*self.ptr).0.is_marked }
-    }
-
-    pub fn as_handle(&self) -> Handle {
-        Handle {
-            ptr: self.ptr as *mut Header,
-        }
     }
 
     fn drop_in_place(&self) {
@@ -162,6 +163,26 @@ impl<T: Traceable> DerefMut for Obj<T> {
     }
 }
 
+impl<T: Traceable> From<T> for Obj<T> {
+    fn from(t: T) -> Self {
+        unsafe {
+            let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
+            assert!(!ptr.is_null());
+            ptr::write(
+                ptr,
+                (
+                    Header {
+                        is_marked: false,
+                        kind: T::KIND,
+                    },
+                    t,
+                ),
+            );
+            Obj { ptr }
+        }
+    }
+}
+
 pub trait Traceable
 where
     Self: Sized,
@@ -187,14 +208,14 @@ where
 
 pub struct Heap {
     handles: Vec<Handle>,
-    string_pool: HashMap<String, Obj<String>>,
+    string_pool: HashSet<Obj<String>>,
 }
 
 impl Heap {
     pub fn new() -> Self {
         Self {
             handles: Vec::with_capacity(1 << 12),
-            string_pool: HashMap::new(),
+            string_pool: HashSet::new(),
         }
     }
 
@@ -203,35 +224,23 @@ impl Heap {
     }
 
     pub fn intern(&mut self, name: &str) -> Obj<String> {
-        match self.string_pool.get(name) {
-            Some(obj) => *obj,
+        let new_obj = Obj::from(String::from(name));
+        match self.string_pool.get(&new_obj) {
+            Some(obj) => {
+                new_obj.drop_in_place();
+                *obj
+            }
             None => {
-                // note: two copies of name are stored now.
-                // that can be avoided, for example by moving closer to the clox solution.
-                let obj = self.store(name.to_string());
-                self.string_pool.insert(name.to_string(), obj);
-                obj
+                self.string_pool.insert(new_obj);
+                self.handles.push(Handle::from(new_obj));
+                new_obj
             }
         }
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        let obj = unsafe {
-            let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
-            assert!(!ptr.is_null());
-            ptr::write(
-                ptr,
-                (
-                    Header {
-                        is_marked: false,
-                        kind: T::KIND,
-                    },
-                    t,
-                ),
-            );
-            Obj { ptr }
-        };
-        self.handles.push(obj.as_handle());
+        let obj = Obj::from(t);
+        self.handles.push(Handle::from(obj));
         #[cfg(feature = "log_gc")]
         {
             println!("{:?} store type {:?}", obj.ptr, T::KIND);
@@ -276,7 +285,7 @@ impl Heap {
     }
     fn sweep(&mut self) {
         // first clean up the string pool
-        self.string_pool.retain(|_, v| v.is_marked());
+        self.string_pool.retain(|v| v.is_marked());
         let mut index: usize = 0;
         let mut len: usize = self.handles.len();
         loop {
@@ -356,28 +365,28 @@ type Collector = Vec<Handle>;
 
 impl ObjVisitor<()> for Collector {
     fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) {
-        self.push(obj.receiver.as_handle());
-        self.push(obj.method.as_handle());
+        self.push(Handle::from(obj.receiver));
+        self.push(Handle::from(obj.method));
     }
 
     fn visit_class(&mut self, obj: Obj<Class>) {
-        self.push(obj.name.as_handle());
+        self.push(Handle::from(obj.name));
         for (name, method) in &obj.methods {
-            self.push(name.as_handle());
-            self.push(method.as_handle());
+            self.push(Handle::from(*name));
+            self.push(Handle::from(*method));
         }
     }
 
     fn visit_closure(&mut self, obj: Obj<Closure>) {
-        self.push(obj.function.as_handle());
+        self.push(Handle::from(obj.function));
         for upvalue in obj.upvalues.iter() {
-            self.push(upvalue.as_handle());
+            self.push(Handle::from(*upvalue));
         }
     }
 
     fn visit_function(&mut self, obj: Obj<Function>) {
-        if let Some(n) = &obj.name {
-            self.push(n.as_handle())
+        if let Some(name) = &obj.name {
+            self.push(Handle::from(*name))
         }
         for value in &obj.chunk.constants {
             if let Value::Object(h) = value {
@@ -400,7 +409,7 @@ impl ObjVisitor<()> for Collector {
 
     fn visit_upvalue(&mut self, obj: Obj<Upvalue>) {
         match *obj {
-            Upvalue::Open(_, Some(next)) => self.push(next.as_handle()),
+            Upvalue::Open(_, Some(next)) => self.push(Handle::from(next)),
             Upvalue::Closed(Value::Object(handle)) => self.push(handle),
             _ => (),
         }

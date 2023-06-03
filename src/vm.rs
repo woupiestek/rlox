@@ -4,7 +4,7 @@ use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
     compiler::compile,
-    memory::{Heap, Obj, Traceable},
+    memory::{Handle, Heap, Obj, Traceable},
     object::{BoundMethod, Class, Closure, Function, Instance, Native, ObjVisitor, Upvalue, Value},
 };
 
@@ -99,7 +99,7 @@ impl VM {
             globals: HashMap::new(),
             init_string,
             heap,
-            next_gc: 0x8000,
+            next_gc: 1, // 0x8000,
         };
         s.define_native("clock", CLOCK_NATIVE);
         s
@@ -158,6 +158,7 @@ impl VM {
             }
             let roots = self.roots();
             self.heap.collect_garbage(roots);
+            self.next_gc *= 2;
             #[cfg(feature = "log_gc")]
             {
                 println!("-- gc end");
@@ -170,7 +171,6 @@ impl VM {
                     self.next_gc
                 );
             }
-            self.next_gc *= 2;
         }
         self.heap.store(t)
     }
@@ -191,21 +191,21 @@ impl VM {
             println!("collect frames");
         }
         for frame in &self.frames {
-            collector.push(frame.closure.as_handle())
+            collector.push(Handle::from(frame.closure))
         }
         #[cfg(feature = "log_gc")]
         {
             println!("collect upvalues");
         }
         if let Some(upvalue) = self.open_upvalues {
-            collector.push(upvalue.as_handle());
+            collector.push(Handle::from(upvalue));
         }
         #[cfg(feature = "log_gc")]
         {
             println!("collect globals");
         }
         for (k, v) in &self.globals {
-            collector.push(k.as_handle());
+            collector.push(Handle::from(*k));
             if let Value::Object(handle) = v {
                 collector.push(*handle)
             }
@@ -215,7 +215,7 @@ impl VM {
         {
             println!("collect init string");
         }
-        collector.push(self.init_string.as_handle());
+        collector.push(Handle::from(self.init_string));
         collector
     }
 

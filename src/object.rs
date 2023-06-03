@@ -1,6 +1,10 @@
 // run time data structures
 
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    hash::{Hash, Hasher},
+};
 
 use crate::{
     chunk::Chunk,
@@ -34,7 +38,7 @@ impl From<f64> for Value {
 
 impl<T: Traceable> From<Obj<T>> for Value {
     fn from(value: Obj<T>) -> Self {
-        Value::Object(value.as_handle())
+        Value::Object(Handle::from(value))
     }
 }
 
@@ -59,8 +63,30 @@ impl Display for Value {
     }
 }
 
+impl PartialEq for Obj<String> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ptr() == other.as_ptr() || **self == **other
+    }
+}
+
+impl Eq for Obj<String> {}
+
+impl Hash for Obj<String> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_str(self).hash(state);
+    }
+}
+
 impl Traceable for String {
     const KIND: Kind = Kind::String;
+}
+pub fn hash_str(chars: &str) -> u32 {
+    let mut hash = 2166136261u32;
+    for &byte in chars.as_bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    return hash;
 }
 
 pub struct Function {

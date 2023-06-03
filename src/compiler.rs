@@ -470,11 +470,6 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         &self.source.previous_token.lexeme
     }
 
-    fn identifier_name(&mut self, error_msg: &str) -> Result<Token<'src>, String> {
-        self.source.consume(TokenType::Identifier, error_msg)?;
-        Ok(self.source.previous_token)
-    }
-
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         self.intern(self.lexeme())
@@ -663,9 +658,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 
     fn init_compiler(&mut self, function_type: FunctionType) {
-        let name = self
-            .heap
-            .store(self.source.previous_token.lexeme.to_string());
+        let name = self.heap.intern(self.source.previous_token.lexeme);
         let obj_function = self.heap.store(Function::new(Some(name)));
         let enclosing = mem::replace(
             &mut self.compiler,
@@ -744,7 +737,9 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     //classDecl      → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
     fn class(&mut self) -> Result<(), String> {
-        let class_name = self.identifier_name("Expect class name.")?;
+        self.source
+            .consume(TokenType::Identifier, "Expect class name.")?;
+        let class_name = self.source.previous_token;
         self.compiler.declare_variable(class_name)?;
         let index = self.intern(class_name.lexeme)?;
         self.emit_bytes(&[Op::Class as u8, index]);
@@ -1197,5 +1192,35 @@ mod tests {
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn too_many_constants() {
+        let test = "
+        var a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        ";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        // normal behavior for lox?
+        assert!(result.is_err());
     }
 }

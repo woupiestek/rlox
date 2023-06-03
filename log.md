@@ -2,8 +2,8 @@
 
 ## 2023-06-03
 
-- add README
-- more clox like string implementation
+- add README 
+- ~~more clox like string implementation~~
 - using a custom allocation to count allocated bytes
 - & mut instead of Box for compilers
 - one stack of locals
@@ -13,6 +13,20 @@
 For the compilers: a stack of &mut where each Compiler lives somewhere on the
 stack. The deeper in the stack, the longer the lifetime. I cannot explain this
 to rustc yet, if it is possible. The lifetime bounds only allow 'outlive'.
+
+### LoxStrings
+
+To do the hashset thing, Eq and Hash are needed on `Obj<String>`. I was think
+Rlox should just allocate everything in one go, inclusing the space for the
+charaters of the string, but Clox doesn't function that way.
+
+HashSet with normal Strings does the job: storing the hashcodes with the strings
+is not necessary.
+
+### constants
+
+Each time a script access a global variable, a constant is added to the chunk,
+and there is no dead code analysis. The string_equals benchmark therefore fails.
 
 ## 2023-06-02
 
