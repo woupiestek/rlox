@@ -99,7 +99,7 @@ impl VM {
             globals: HashMap::new(),
             init_string,
             heap,
-            next_gc: 1, // 0x8000,
+            next_gc: 1<<20,
         };
         s.define_native("clock", CLOCK_NATIVE);
         s
@@ -150,7 +150,7 @@ impl VM {
     }
 
     fn new_obj<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        let before = self.heap.count();
+        let before = self.heap.byte_count();
         if before > self.next_gc {
             #[cfg(feature = "log_gc")]
             {
@@ -159,13 +159,13 @@ impl VM {
             }
             let roots = self.roots();
             self.heap.collect_garbage(roots);
-            // self.next_gc *= 2;
+            self.next_gc *= 2;
             #[cfg(feature = "log_gc")]
             {
                 println!("-- gc end");
-                let after = self.heap.count();
+                let after = self.heap.byte_count();
                 println!(
-                    "   collected {} objects (from {} to {}) next at {}",
+                    "   collected {} byte (from {} to {}) next at {}",
                     before - after,
                     before,
                     after,

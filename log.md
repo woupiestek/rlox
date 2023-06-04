@@ -2,13 +2,14 @@
 
 ## 2023-06-03
 
-- using a custom allocation to count allocated bytes
+- ~~using a custom allocation to count allocated bytes~~
 - add README
+- add to munificents list
 - one stack of locals
 - ~~replace Kind with fat pointer to trait object: the 'handler' idea.~~
 - & mut instead of Box for compilers
 
-### byte countering allocator
+### byte counting allocator
 
 Already found that replacing the allocator requires getting into unstalble rust
 apis, and I don't want to do that now. To make matters worse, allocators are

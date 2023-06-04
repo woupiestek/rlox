@@ -200,10 +200,6 @@ impl Heap {
         self.byte_count += diff;
     }
 
-    pub fn count(&mut self) -> usize {
-        self.handles.len()
-    }
-
     pub fn byte_count(&mut self) -> usize {
         self.byte_count
     }
