@@ -209,17 +209,17 @@ impl Heap {
     }
 
     pub fn intern(&mut self, name: &str) -> Obj<String> {
-        let new_obj = Obj::from(String::from(name));
-        match self.string_pool.get(&new_obj) {
+        let new_str = Obj::from(String::from(name));
+        match self.string_pool.get(&new_str) {
             Some(obj) => {
-                new_obj.free();
+                new_str.free();
                 *obj
             }
             None => {
-                self.string_pool.insert(new_obj);
-                self.handles.push(Handle::from(new_obj));
-                self.byte_count += new_obj.byte_count();
-                new_obj
+                self.string_pool.insert(new_str);
+                self.handles.push(Handle::from(new_str));
+                self.byte_count += new_str.byte_count();
+                new_str
             }
         }
     }
@@ -297,13 +297,7 @@ impl Heap {
             // swap
             self.handles[index] = self.handles[len];
         }
-        if self.byte_count != byte_count {
-            eprintln!(
-                "byte miscount: actual {}, expected {}",
-                byte_count, self.byte_count
-            );
-            self.byte_count = byte_count;
-        }
+        assert_eq!(byte_count, self.byte_count);
         self.handles.truncate(len);
         #[cfg(feature = "log_gc")]
         {

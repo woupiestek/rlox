@@ -3,7 +3,7 @@ use std::mem;
 use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
-    memory::{Heap, Obj},
+    memory::{Heap, Obj, Traceable},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
 };
@@ -674,14 +674,12 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             .enclosing
             .take()
             .ok_or("Ran out of compilers.")?;
-        // account for bytes allocated
-        let diff = self.current_chunk().byte_increment();
-        self.heap.increase_byte_count(diff);
         Ok(mem::replace(&mut self.compiler, enclosing))
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         self.init_compiler(function_type);
+        let before = self.compiler.function.byte_count();
         self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
@@ -708,6 +706,8 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         let upvalues = compiler.upvalues;
         let mut obj_function = compiler.function;
         (*obj_function).upvalue_count = upvalues.len() as u8;
+        self.heap
+            .increase_byte_count(obj_function.byte_count() - before);
         let index = self
             .current_chunk()
             .add_constant(Value::from(obj_function))?;
@@ -990,15 +990,30 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             self.expression_statement()
         }
     }
+
+    fn script(&mut self) -> Result<Obj<Function>, String> {
+        let before = self.compiler.function.byte_count();
+        while !self.source.match_type(TokenType::End) {
+            self.declaration();
+        }
+        self.emit_return();
+        let replace = mem::replace(
+            &mut self.compiler,
+            Box::new(Compiler::new(
+                FunctionType::Script,
+                self.heap.store(Function::new(None)),
+            )),
+        )
+        .function;
+
+        self.heap.increase_byte_count(replace.byte_count() - before);
+        Ok(replace)
+    }
 }
 
 pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<Function>, String> {
     let mut parser: Parser<'src, 'hp> = Parser::new(Source::new(source), heap);
-    while !parser.source.match_type(TokenType::End) {
-        parser.declaration();
-    }
-    parser.emit_return();
-    let obj = parser.compiler.function;
+    let obj = parser.script()?;
     match parser.error_count {
         0 => Ok(obj),
         1 => err!("There was a compile time error."),
