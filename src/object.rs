@@ -44,10 +44,7 @@ impl<T: Traceable> From<Obj<T>> for Value {
 
 impl Value {
     pub fn is_falsey(&self) -> bool {
-        match self {
-            Value::Nil | Value::False => true,
-            _ => false,
-        }
+        matches!(self, Value::Nil | Value::False)
     }
 }
 
@@ -91,7 +88,7 @@ pub fn hash_str(chars: &str) -> u32 {
         hash ^= byte as u32;
         hash = hash.wrapping_mul(16777619);
     }
-    return hash;
+    hash
 }
 
 pub struct Function {

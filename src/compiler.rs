@@ -39,8 +39,7 @@ impl TokenType {
         }
     }
 }
-// make this smaller later
-#[derive(Clone, Copy)]
+
 struct Local<'src> {
     name: Token<'src>,
     depth: Option<u16>,
@@ -125,11 +124,11 @@ impl<'src> Compiler<'src> {
     }
 
     fn add_local(&mut self, name: Token<'src>) -> Result<(), String> {
-        if self.locals.len() == U8_COUNT {
+        if self.locals.len() > U8_COUNT {
             return err!("Too many local variables in function.");
         }
         self.locals.push(Local::new(name));
-        return Ok(());
+        Ok(())
     }
 
     fn mark_initialized(&mut self) -> bool {
@@ -138,13 +137,13 @@ impl<'src> Compiler<'src> {
         }
         let i = self.locals.len() - 1;
         self.locals[i].depth = Some(self.scope_depth);
-        return true;
+        true
     }
 
     fn add_upvalue(&mut self, index: u8, is_local: bool) -> Result<u8, String> {
         let count = self.upvalues.len();
         for i in 0..count {
-            let upvalue = &self.upvalues[i as usize];
+            let upvalue = &self.upvalues[i];
             if upvalue.is_local == is_local && upvalue.index == index {
                 return Ok(i as u8);
             }
@@ -182,7 +181,7 @@ impl<'src> Compiler<'src> {
         let mut i = self.locals.len();
         while i > 0 {
             i -= 1;
-            let local = self.locals[i];
+            let local = &self.locals[i];
             if let Some(depth) = local.depth {
                 if depth < self.scope_depth {
                     break;
@@ -236,7 +235,8 @@ impl<'src> Source<'src> {
 
     fn consume<'b>(&mut self, token_type: TokenType, msg: &'b str) -> Result<(), &'b str> {
         if self.check(token_type) {
-            Ok(self.advance())
+            self.advance();
+            Ok(())
         } else {
             Err(msg)
         }
@@ -336,7 +336,8 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn emit_constant(&mut self, value: Value) -> Result<(), String> {
         let make_constant = self.current_chunk().add_constant(value)?;
-        Ok(self.emit_bytes(&[Op::Constant as u8, make_constant]))
+        self.emit_bytes(&[Op::Constant as u8, make_constant]);
+        Ok(())
     }
 
     fn begin_scope(&mut self) {
@@ -444,7 +445,8 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn call(&mut self) -> Result<(), String> {
         let arity = self.argument_list()?;
-        Ok(self.emit_bytes(&[Op::Call as u8, arity]))
+        self.emit_bytes(&[Op::Call as u8, arity]);
+        Ok(())
     }
 
     fn dot(&mut self, can_assign: bool) -> Result<(), String> {
@@ -463,11 +465,11 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 
     fn intern(&mut self, name: &'src str) -> Result<u8, String> {
         let value = Value::from(self.heap.intern(name));
-        Ok(self.current_chunk().add_constant(value)?)
+        self.current_chunk().add_constant(value)
     }
 
     fn lexeme(&self) -> &'src str {
-        &self.source.previous_token.lexeme
+        self.source.previous_token.lexeme
     }
 
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
@@ -597,9 +599,18 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             TokenType::Identifier => self.variable(self.source.previous_token.lexeme, can_assign),
             TokenType::String => self.string(),
             TokenType::Number => self.number(),
-            TokenType::False => Ok(self.emit_op(Op::False)),
-            TokenType::Nil => Ok(self.emit_op(Op::Nil)),
-            TokenType::True => Ok(self.emit_op(Op::True)),
+            TokenType::False => {
+                self.emit_op(Op::False);
+                Ok(())
+            }
+            TokenType::Nil => {
+                self.emit_op(Op::Nil);
+                Ok(())
+            }
+            TokenType::True => {
+                self.emit_op(Op::True);
+                Ok(())
+            }
             TokenType::Super => self.super_(),
             TokenType::This => self.this(can_assign),
             _ => err!("Expect expression."),
@@ -705,7 +716,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         let compiler = self.end_compiler()?;
         let upvalues = compiler.upvalues;
         let mut obj_function = compiler.function;
-        (*obj_function).upvalue_count = upvalues.len() as u8;
+        obj_function.upvalue_count = upvalues.len() as u8;
         self.heap
             .increase_byte_count(obj_function.byte_count() - before);
         let index = self
@@ -1238,7 +1249,7 @@ mod tests {
         ";
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
-        // normal behavior for lox?
-        assert!(result.is_err());
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        disassemble!(&result.unwrap().chunk);
     }
 }

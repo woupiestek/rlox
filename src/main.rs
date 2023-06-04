@@ -22,11 +22,11 @@ fn repl(vm: &mut VM) {
         print!("> ");
         let mut buf = String::new();
         if io::stdin().read_line(&mut buf).is_err() {
-            print!("\n");
+            println!();
             return;
         }
         if buf == "\r\n" {
-            print!("\n");
+            println!();
             return;
         }
         if let Err(msg) = vm.interpret(&buf) {
@@ -36,8 +36,8 @@ fn repl(vm: &mut VM) {
 }
 
 fn run_file(file_path: &str, vm: &mut VM) {
-    let source =
-        fs::read_to_string(file_path).expect(&format!("Couldn't read the file '{}'", file_path));
+    let source = fs::read_to_string(file_path)
+        .unwrap_or_else(|_| panic!("Couldn't read the file '{}'", file_path));
     if let Err(msg) = vm.interpret(&source) {
         eprintln!("{}", msg);
         exit(70)

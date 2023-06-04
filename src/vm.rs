@@ -5,7 +5,7 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     memory::{Handle, Heap, Kind, Obj, Traceable},
-    object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
+    object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
 };
 
 const MAX_FRAMES: usize = 0x40;
@@ -99,7 +99,7 @@ impl VM {
             globals: HashMap::new(),
             init_string,
             heap,
-            next_gc: 1<<20,
+            next_gc: 1 << 20,
         };
         s.define_native("clock", CLOCK_NATIVE);
         s
@@ -306,9 +306,7 @@ impl VM {
         arity: u8,
     ) -> Result<(), String> {
         match class.methods.get(&name) {
-            None => {
-                return err!("Undefined property '{}'", *name);
-            }
+            None => err!("Undefined property '{}'", *name),
             Some(method) => self.call(*method, arity),
         }
     }
@@ -328,7 +326,7 @@ impl VM {
         match class.methods.get(&name) {
             None => err!("Undefined property '{}'.", *name),
             Some(method) => {
-                let instance = Instance::obj_from_value(self.peek(0)).unwrap();
+                let instance = Obj::from(self.peek(0));
                 let bm = self.new_obj(BoundMethod::new(instance, *method));
                 self.pop();
                 self.push(Value::from(bm));
@@ -339,11 +337,9 @@ impl VM {
 
     fn define_method(&mut self, name: Obj<String>) -> Result<(), String> {
         if let Ok(&[a, method]) = self.tail(2) {
-            let mut class = Class::obj_from_value(a).unwrap();
+            let mut class = Obj::<Class>::from(a);
             let before_count = class.byte_count();
-            (*class)
-                .methods
-                .insert(name, Closure::obj_from_value(method).unwrap());
+            class.methods.insert(name, Obj::from(method));
             self.heap
                 .increase_byte_count(class.byte_count() - before_count);
             self.pop();
@@ -399,7 +395,7 @@ impl VM {
                         if let (Some(a), Some(b)) =
                             (String::obj_from_value(a), String::obj_from_value(b))
                         {
-                            let c = self.concatenate(&*a, &*b);
+                            let c = self.concatenate(&a, &b);
                             self.stack_top -= 2;
                             self.push(c);
                             continue;
@@ -431,8 +427,7 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function =
-                        Function::obj_from_value(self.top_frame().read_constant()).unwrap();
+                    let function = Obj::from(self.top_frame().read_constant());
                     let mut closure = self.push_traceable(Closure::new(function));
                     let before_count = closure.byte_count();
                     for _ in 0..function.upvalue_count {
@@ -490,7 +485,7 @@ impl VM {
                 }
                 Op::GetSuper => {
                     let name = self.top_frame().read_string()?;
-                    let super_class = Class::obj_from_value(self.pop()).unwrap();
+                    let super_class = Obj::from(self.pop());
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
@@ -559,7 +554,7 @@ impl VM {
                     let location = self.top_frame().slots;
                     self.close_upvalues(location);
                     self.frames.pop();
-                    if self.frames.len() == 0 {
+                    if self.frames.is_empty() {
                         self.pop();
                         return Ok(());
                     }
@@ -602,7 +597,7 @@ impl VM {
                 Op::SuperInvoke => {
                     let name = self.top_frame().read_string()?;
                     let arity = self.top_frame().read_byte();
-                    let super_class = Class::obj_from_value(self.pop()).unwrap();
+                    let super_class = Obj::from(self.pop());
                     self.invoke_from_class(super_class, name, arity)?;
                 }
                 Op::True => self.push(Value::True),

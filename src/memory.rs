@@ -106,9 +106,7 @@ impl<T: Traceable> Copy for Obj<T> {}
 
 impl<T: Traceable> Clone for Obj<T> {
     fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr.clone(),
-        }
+        *self
     }
 }
 
@@ -179,6 +177,17 @@ where
         }
     }
     fn trace(&self, collector: &mut Vec<Handle>);
+}
+
+impl<T: Traceable> From<Value> for Obj<T> {
+    fn from(value: Value) -> Self {
+        if let Value::Object(handle) = value {
+            assert_eq!(handle.kind(), T::KIND);
+            T::cast(&handle)
+        } else {
+            panic!("cannot cast {} to {:?}", value, T::KIND)
+        }
+    }
 }
 
 pub struct Heap {

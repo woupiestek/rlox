@@ -135,16 +135,22 @@ impl Chunk {
         self.code.len()
     }
     pub fn add_constant(&mut self, value: Value) -> Result<u8, String> {
-        let len = self.constants.len();
-        if len > u8::MAX as usize {
+        let mut i = 0;
+        while i < self.constants.len() {
+            if self.constants[i] == value {
+                return Ok(i as u8);
+            } else {
+                i += 1;
+            }
+        }
+        if i > u8::MAX as usize {
             err!("Too many constants in function, {} won't fit.", value)
         } else {
             self.constants.push(value);
-            Ok(len as u8)
+            Ok(i as u8)
         }
     }
     pub fn read_byte(&self, index: usize) -> u8 {
-        assert!(index < self.code.len());
         self.code[index]
     }
     pub fn read_short(&self, index: usize) -> u16 {
