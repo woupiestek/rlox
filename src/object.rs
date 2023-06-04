@@ -79,6 +79,9 @@ impl Hash for Obj<String> {
 
 impl Traceable for String {
     const KIND: Kind = Kind::String;
+    fn byte_count(&self) -> usize {
+        self.capacity() + 24
+    }
 }
 pub fn hash_str(chars: &str) -> u32 {
     let mut hash = 2166136261u32;
@@ -119,10 +122,15 @@ impl Display for Function {
 
 impl Traceable for Function {
     const KIND: Kind = Kind::Function;
+    // just consider initial allocation
+    fn byte_count(&self) -> usize {
+        60 + self.chunk.byte_increment()
+    }
 }
 
 pub struct Class {
     pub name: Obj<String>,
+    // heap allocated
     pub methods: HashMap<Obj<String>, Obj<Closure>>,
 }
 
@@ -137,6 +145,12 @@ impl Class {
 
 impl Traceable for Class {
     const KIND: Kind = Kind::Class;
+
+    fn byte_count(&self) -> usize {
+        // 32 is 8 for name and 24 for hashmap, assuming similar size to Vec
+        // 36 is 8 for obj, 16 for value, 8 for hash, +10% for scattering
+        32 + 36 * self.methods.capacity()
+    }
 }
 
 pub enum Upvalue {
@@ -146,12 +160,17 @@ pub enum Upvalue {
 
 impl Traceable for Upvalue {
     const KIND: Kind = Kind::Upvalue;
+
+    fn byte_count(&self) -> usize {
+        24
+    }
 }
 
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
 pub struct Closure {
     pub function: Obj<Function>,
+    // heap allocated
     pub upvalues: Vec<Obj<Upvalue>>,
 }
 
@@ -166,15 +185,26 @@ impl Closure {
 
 impl Traceable for Closure {
     const KIND: Kind = Kind::Closure;
+
+    fn byte_count(&self) -> usize {
+        16 + self.upvalues.capacity()
+    }
 }
 
 pub struct Instance {
     pub class: Obj<Class>,
+    // heap allocated
     pub properties: HashMap<Obj<String>, Value>,
 }
 
 impl Traceable for Instance {
     const KIND: Kind = Kind::Instance;
+
+    fn byte_count(&self) -> usize {
+        // 32 is 8 for class and 24 for hashmap, assuming similar size to Vec
+        // 36 is 8 for obj, 16 for value, 8 for hash, +10% for scattering
+        32 + 36 * self.properties.capacity()
+    }
 }
 
 impl Instance {
@@ -199,6 +229,10 @@ impl BoundMethod {
 
 impl Traceable for BoundMethod {
     const KIND: Kind = Kind::BoundMethod;
+
+    fn byte_count(&self) -> usize {
+        16
+    }
 }
 
 // perhaps Native should
@@ -213,6 +247,10 @@ impl std::fmt::Debug for Native {
 
 impl Traceable for Native {
     const KIND: Kind = Kind::Native;
+
+    fn byte_count(&self) -> usize {
+        8
+    }
 }
 
 pub trait ObjVisitor<T> {

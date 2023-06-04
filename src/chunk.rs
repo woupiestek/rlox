@@ -94,6 +94,7 @@ impl TryFrom<u8> for Op {
     }
 }
 
+// heap allocated
 pub struct Chunk {
     code: Vec<u8>,
     pub lines: Vec<u16>,
@@ -151,5 +152,9 @@ impl Chunk {
     }
     pub fn read_constant(&self, index: usize) -> Value {
         self.constants[self.read_byte(index) as usize]
+    }
+    // count adjustment after compiling
+    pub fn byte_increment(&self) -> usize {
+        self.code.capacity() + 2 * self.lines.capacity() + 2 * self.constants.capacity()
     }
 }

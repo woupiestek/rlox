@@ -183,11 +183,16 @@ impl<T: Traceable> From<T> for Obj<T> {
     }
 }
 
+pub trait Tracer {
+    type Target;
+}
+
 pub trait Traceable
 where
     Self: Sized,
 {
     const KIND: Kind;
+    fn byte_count(&self) -> usize;
     fn cast(handle: &Handle) -> Obj<Self> {
         Obj {
             ptr: handle.ptr as *mut (Header, Self),
@@ -209,6 +214,7 @@ where
 pub struct Heap {
     handles: Vec<Handle>,
     string_pool: HashSet<Obj<String>>,
+    byte_count: usize,
 }
 
 impl Heap {
@@ -216,11 +222,20 @@ impl Heap {
         Self {
             handles: Vec::with_capacity(1 << 12),
             string_pool: HashSet::new(),
+            byte_count: 0,
         }
+    }
+
+    pub fn increase_byte_count(&mut self, diff: usize) {
+        self.byte_count += diff;
     }
 
     pub fn count(&mut self) -> usize {
         self.handles.len()
+    }
+
+    pub fn byte_count(&mut self) -> usize {
+        self.byte_count
     }
 
     pub fn intern(&mut self, name: &str) -> Obj<String> {
@@ -233,6 +248,7 @@ impl Heap {
             None => {
                 self.string_pool.insert(new_obj);
                 self.handles.push(Handle::from(new_obj));
+                self.byte_count += new_obj.byte_count();
                 new_obj
             }
         }
@@ -241,6 +257,7 @@ impl Heap {
     pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
         let obj = Obj::from(t);
         self.handles.push(Handle::from(obj));
+        self.byte_count += obj.byte_count();
         #[cfg(feature = "log_gc")]
         {
             println!("{:?} store type {:?}", obj.ptr, T::KIND);
@@ -250,15 +267,7 @@ impl Heap {
 
     pub fn collect_garbage(&mut self, roots: Vec<Handle>) {
         self.mark(roots);
-        #[cfg(feature = "log_gc")]
-        {
-            println!("Starting sweeping.");
-        }
         self.sweep();
-        #[cfg(feature = "log_gc")]
-        {
-            println!("Finished tracing references");
-        }
     }
 
     fn mark(&self, mut roots: Vec<Handle>) {
@@ -284,35 +293,51 @@ impl Heap {
         }
     }
     fn sweep(&mut self) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Start sweeping.");
+        }
         // first clean up the string pool
         self.string_pool.retain(|v| v.is_marked());
         let mut index: usize = 0;
         let mut len: usize = self.handles.len();
-        loop {
+        let mut byte_count: usize = 0;
+        'a: loop {
             // look for dead object
             while self.handles[index].is_marked() {
                 self.handles[index].mark(false);
+                byte_count += self.handles[index].accept(&mut ByteCount);
                 index += 1;
                 if index == len {
-                    self.handles.truncate(index);
-                    return;
+                    break 'a;
                 }
             }
-            self.handles[index].accept(&mut Demise);
+            self.byte_count -= self.handles[index].accept(&mut Free);
             // look for live object from other end
             loop {
                 len -= 1;
                 if index == len {
-                    self.handles.truncate(len);
-                    return;
+                    break 'a;
                 }
                 if self.handles[len].is_marked() {
                     break;
                 }
-                self.handles[len].accept(&mut Demise);
+                self.byte_count -= self.handles[len].accept(&mut Free);
             }
             // swap
             self.handles[index] = self.handles[len];
+        }
+        if self.byte_count != byte_count {
+            eprintln!(
+                "byte miscount: actual {}, expected {}",
+                byte_count, self.byte_count
+            );
+            self.byte_count = byte_count;
+        }
+        self.handles.truncate(len);
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Done sweeping");
         }
     }
 }
@@ -320,44 +345,53 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         while let Some(handle) = self.handles.pop() {
-            handle.accept(&mut Demise)
+            // no point to adjusting byte counts now, but some appear to be unaccounted for!
+            handle.accept(&mut Free);
         }
     }
 }
 
-struct Demise;
+struct Free;
 
-impl ObjVisitor<()> for Demise {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> () {
-        obj.drop_in_place();
+macro_rules! free {
+    ($obj:expr) => {{
+        let bs = $obj.byte_count();
+        $obj.drop_in_place();
+        bs
+    }};
+}
+
+impl ObjVisitor<usize> for Free {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> usize {
+        free!(obj)
     }
 
-    fn visit_class(&mut self, obj: Obj<Class>) -> () {
-        obj.drop_in_place();
+    fn visit_class(&mut self, obj: Obj<Class>) -> usize {
+        free!(obj)
     }
 
-    fn visit_closure(&mut self, obj: Obj<Closure>) -> () {
-        obj.drop_in_place();
+    fn visit_closure(&mut self, obj: Obj<Closure>) -> usize {
+        free!(obj)
     }
 
-    fn visit_function(&mut self, obj: Obj<Function>) -> () {
-        obj.drop_in_place();
+    fn visit_function(&mut self, obj: Obj<Function>) -> usize {
+        free!(obj)
     }
 
-    fn visit_instance(&mut self, obj: Obj<Instance>) -> () {
-        obj.drop_in_place();
+    fn visit_instance(&mut self, obj: Obj<Instance>) -> usize {
+        free!(obj)
     }
 
-    fn visit_native(&mut self, obj: Obj<Native>) -> () {
-        obj.drop_in_place();
+    fn visit_native(&mut self, obj: Obj<Native>) -> usize {
+        free!(obj)
     }
 
-    fn visit_string(&mut self, obj: Obj<String>) -> () {
-        obj.drop_in_place();
+    fn visit_string(&mut self, obj: Obj<String>) -> usize {
+        free!(obj)
     }
 
-    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> () {
-        obj.drop_in_place();
+    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> usize {
+        free!(obj)
     }
 }
 
@@ -413,6 +447,41 @@ impl ObjVisitor<()> for Collector {
             Upvalue::Closed(Value::Object(handle)) => self.push(handle),
             _ => (),
         }
+    }
+}
+
+struct ByteCount;
+impl ObjVisitor<usize> for ByteCount {
+    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_class(&mut self, obj: Obj<Class>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_closure(&mut self, obj: Obj<Closure>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_function(&mut self, obj: Obj<Function>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_instance(&mut self, obj: Obj<Instance>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_native(&mut self, obj: Obj<Native>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_string(&mut self, obj: Obj<String>) -> usize {
+        obj.byte_count()
+    }
+
+    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> usize {
+        obj.byte_count()
     }
 }
 

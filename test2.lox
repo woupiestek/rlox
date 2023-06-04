@@ -1,5 +1,22 @@
-class Pair {}
+class A {
+  run() {
+    print "A";
+  }
+}
 
-var pair = Pair();
-print pair;
-pair.first = 1;
+class B {
+  run() {
+    print "B";
+  }
+}
+
+var C;
+if(clock() < 1700000000000) {
+  C = A;
+} else {
+  C = B;
+}
+
+class D < C {}
+
+D().run();

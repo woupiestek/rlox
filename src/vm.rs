@@ -155,10 +155,11 @@ impl VM {
             #[cfg(feature = "log_gc")]
             {
                 println!("-- gc begin");
+                println!("byte count: {}", self.heap.byte_count());
             }
             let roots = self.roots();
             self.heap.collect_garbage(roots);
-            self.next_gc *= 2;
+            // self.next_gc *= 2;
             #[cfg(feature = "log_gc")]
             {
                 println!("-- gc end");
@@ -170,6 +171,7 @@ impl VM {
                     after,
                     self.next_gc
                 );
+                println!("byte count: {}", self.heap.byte_count());
             }
         }
         self.heap.store(t)
@@ -307,9 +309,12 @@ impl VM {
     fn define_method(&mut self, name: Obj<String>) -> Result<(), String> {
         if let Ok(&[a, method]) = self.tail(2) {
             let mut class = Class::obj_from_value(a).unwrap();
+            let before_count = class.byte_count();
             (*class)
                 .methods
                 .insert(name, Closure::obj_from_value(method).unwrap());
+            self.heap
+                .increase_byte_count(class.byte_count() - before_count);
             self.pop();
         }
         Ok(())
@@ -398,7 +403,7 @@ impl VM {
                     let function =
                         Function::obj_from_value(self.top_frame().read_constant()).unwrap();
                     let mut closure = self.push_traceable(Closure::new(function));
-                    //self.push(Value::from(closure));
+                    let before_count = closure.byte_count();
                     for _ in 0..function.upvalue_count {
                         let is_local = self.top_frame().read_byte();
                         let index = self.top_frame().read_byte() as usize;
@@ -409,6 +414,8 @@ impl VM {
                             self.top_frame().closure.upvalues[index]
                         })
                     }
+                    self.heap
+                        .increase_byte_count(closure.byte_count() - before_count)
                 }
                 Op::Constant => {
                     let value = self.top_frame().read_constant();
@@ -471,9 +478,12 @@ impl VM {
                             .ok_or("Super class must be a class.".to_string())?;
                         let mut sub_class = Class::obj_from_value(b)
                             .ok_or("Sub class must be a class.".to_string())?;
+                        let bytes_before = sub_class.byte_count();
                         for (&k, &v) in &super_class.methods {
                             sub_class.methods.insert(k, v);
                         }
+                        self.heap
+                            .increase_byte_count(sub_class.byte_count() - bytes_before);
                         self.pop();
                     }
                 }
@@ -540,9 +550,12 @@ impl VM {
                     if let &[a, b] = self.tail(2)? {
                         let mut instance = Instance::obj_from_value(a)
                             .ok_or("Only instances have fields.".to_string())?;
+                        let before_count = instance.byte_count();
                         instance
                             .properties
                             .insert(self.top_frame().read_string()?, b);
+                        self.heap
+                            .increase_byte_count(instance.byte_count() - before_count);
                         self.stack_top -= 2;
                         self.push(b);
                     }

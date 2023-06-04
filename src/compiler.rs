@@ -674,6 +674,9 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             .enclosing
             .take()
             .ok_or("Ran out of compilers.")?;
+        // account for bytes allocated
+        let diff = self.current_chunk().byte_increment();
+        self.heap.increase_byte_count(diff);
         Ok(mem::replace(&mut self.compiler, enclosing))
     }
 
