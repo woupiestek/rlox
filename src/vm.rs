@@ -4,8 +4,8 @@ use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
     compiler::compile,
-    memory::{Handle, Heap, Obj, Traceable},
-    object::{BoundMethod, Class, Closure, Function, Instance, Native, ObjVisitor, Upvalue, Value},
+    memory::{Handle, Heap, Kind, Obj, Traceable},
+    object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
 };
 
 const MAX_FRAMES: usize = 0x40;
@@ -261,9 +261,40 @@ impl VM {
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
+        if let Some(bm) = BoundMethod::obj_from_value(callee) {
+            self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
+            return self.call(bm.method, arity);
+        }
         if let Value::Object(handle) = callee {
-            let mut obj_visitor = Caller { vm: self, arity };
-            return handle.accept(&mut obj_visitor);
+            match handle.kind() {
+                Kind::BoundMethod => {
+                    let bm = BoundMethod::cast(&handle);
+                    self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
+                    return self.call(bm.method, arity);
+                }
+                Kind::Class => {
+                    let obj = Class::cast(&handle);
+                    let instance = self.new_obj(Instance::new(obj));
+                    self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
+                    if let Some(&init) = obj.methods.get(&self.init_string) {
+                        return self.call(init, arity);
+                    } else if arity > 0 {
+                        return err!("Expected no arguments but got {}.", arity);
+                    } else {
+                        return Ok(());
+                    }
+                }
+                Kind::Closure => {
+                    return self.call(Closure::cast(&handle), arity);
+                }
+                Kind::Native => {
+                    let result = Native::cast(&handle).0(self.tail(arity as usize)?)?;
+                    self.stack_top -= arity as usize + 1;
+                    self.push(result);
+                    return Ok(());
+                }
+                _ => (),
+            }
         }
         err!("Can only call functions and classes, not '{}'", callee)
     }
@@ -613,57 +644,6 @@ impl VM {
         } else {
             Ok(())
         }
-    }
-}
-
-struct Caller<'b> {
-    vm: &'b mut VM,
-    arity: u8,
-}
-
-impl<'b> ObjVisitor<Result<(), String>> for Caller<'b> {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> Result<(), String> {
-        self.vm.values[self.vm.stack_top - self.arity as usize - 1] = Value::from(obj.receiver);
-        return self.vm.call(obj.method, self.arity);
-    }
-
-    fn visit_class(&mut self, obj: Obj<Class>) -> Result<(), String> {
-        let instance = self.vm.new_obj(Instance::new(obj));
-        self.vm.values[self.vm.stack_top - self.arity as usize - 1] = Value::from(instance);
-        if let Some(&init) = obj.methods.get(&self.vm.init_string) {
-            return self.vm.call(init, self.arity);
-        } else if self.arity > 0 {
-            return err!("Expected no arguments but got {}.", self.arity);
-        } else {
-            return Ok(());
-        }
-    }
-
-    fn visit_closure(&mut self, obj: Obj<Closure>) -> Result<(), String> {
-        return self.vm.call(obj, self.arity);
-    }
-
-    fn visit_function(&mut self, obj: Obj<Function>) -> Result<(), String> {
-        err!("Corrupt byte code: calling {} out of context", *obj)
-    }
-
-    fn visit_instance(&mut self, _obj: Obj<Instance>) -> Result<(), String> {
-        err!("Can only call functions and classes, not instances")
-    }
-
-    fn visit_native(&mut self, obj: Obj<Native>) -> Result<(), String> {
-        let result = obj.0(self.vm.tail(self.arity as usize)?)?;
-        self.vm.stack_top -= self.arity as usize + 1;
-        self.vm.push(result);
-        return Ok(());
-    }
-
-    fn visit_string(&mut self, _obj: Obj<String>) -> Result<(), String> {
-        err!("Can only call functions and classes, not strings")
-    }
-
-    fn visit_upvalue(&mut self, _obj: Obj<Upvalue>) -> Result<(), String> {
-        err!("Corrupt byte code: calling an upvalue")
     }
 }
 

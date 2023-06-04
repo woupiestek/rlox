@@ -7,9 +7,7 @@ use std::{
     ptr,
 };
 
-use crate::object::{
-    BoundMethod, Class, Closure, Function, Instance, Native, ObjVisitor, Upvalue, Value,
-};
+use crate::object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value};
 
 // note that usually 8 byte is allocated for this due to alignment, so plenty of space!
 
@@ -51,57 +49,26 @@ impl Handle {
         }
         unsafe { (*self.ptr).is_marked = value }
     }
-    pub fn accept<T>(&self, obj_visitor: &mut dyn ObjVisitor<T>) -> T {
-        match self.kind() {
-            Kind::BoundMethod => obj_visitor.visit_bound_method(BoundMethod::cast(self)),
-            Kind::Class => obj_visitor.visit_class(Class::cast(self)),
-            Kind::Closure => obj_visitor.visit_closure(Closure::cast(self)),
-            Kind::Function => obj_visitor.visit_function(Function::cast(self)),
-            Kind::Instance => obj_visitor.visit_instance(Instance::cast(self)),
-            Kind::Native => obj_visitor.visit_native(Native::cast(self)),
-            Kind::String => obj_visitor.visit_string(String::cast(self)),
-            Kind::Upvalue => obj_visitor.visit_upvalue(Upvalue::cast(self)),
-        }
-    }
 }
 
-impl ObjVisitor<std::fmt::Result> for std::fmt::Formatter<'_> {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> std::fmt::Result {
-        write!(self, "{}", *obj.method.function)
-    }
-
-    fn visit_class(&mut self, obj: Obj<Class>) -> std::fmt::Result {
-        write!(self, "<class {}>", *obj.name)
-    }
-
-    fn visit_closure(&mut self, obj: Obj<Closure>) -> std::fmt::Result {
-        write!(self, "{}", *obj.function)
-    }
-
-    fn visit_function(&mut self, obj: Obj<Function>) -> std::fmt::Result {
-        write!(self, "{}", *obj)
-    }
-
-    fn visit_instance(&mut self, obj: Obj<Instance>) -> std::fmt::Result {
-        write!(self, "{} instance", *obj.class.name)
-    }
-
-    fn visit_native(&mut self, _obj: Obj<Native>) -> std::fmt::Result {
-        write!(self, "{}", "<native fn>")
-    }
-
-    fn visit_string(&mut self, obj: Obj<String>) -> std::fmt::Result {
-        write!(self, "{}", *obj)
-    }
-
-    fn visit_upvalue(&mut self, _obj: Obj<Upvalue>) -> std::fmt::Result {
-        write!(self, "{}", "<upvalue>")
-    }
+macro_rules! as_traceable {
+    ($handle:expr, $method:ident($($args:tt)*)) => {
+        match $handle.kind() {
+            Kind::BoundMethod => BoundMethod::cast(&$handle).$method($($args)*),
+            Kind::Class => Class::cast(&$handle).$method($($args)*),
+            Kind::Closure => Closure::cast(&$handle).$method($($args)*),
+            Kind::Function => Function::cast(&$handle).$method($($args)*),
+            Kind::Instance => Instance::cast(&$handle).$method($($args)*),
+            Kind::Native => Native::cast(&$handle).$method($($args)*),
+            Kind::String => String::cast(&$handle).$method($($args)*),
+            Kind::Upvalue => Upvalue::cast(&$handle).$method($($args)*),
+        }
+    };
 }
 
 impl Display for Handle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.accept(f)
+        as_traceable!(self, fmt(f))
     }
 }
 
@@ -122,13 +89,15 @@ impl<T: Traceable> Obj<T> {
         unsafe { (*self.ptr).0.is_marked }
     }
 
-    fn drop_in_place(&self) {
+    fn free(&self) -> usize {
         #[cfg(feature = "log_gc")]
         {
-            println!("{:?} free type {:?}", self.ptr, T::KIND);
+            println!("{:?} free {}", self.ptr, **self);
         }
         unsafe {
+            let count = self.byte_count();
             ptr::drop_in_place(self.ptr);
+            count
         }
     }
 }
@@ -189,7 +158,7 @@ pub trait Tracer {
 
 pub trait Traceable
 where
-    Self: Sized,
+    Self: Sized + Display,
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
@@ -209,6 +178,7 @@ where
             None
         }
     }
+    fn trace(&self, collector: &mut Vec<Handle>);
 }
 
 pub struct Heap {
@@ -242,7 +212,7 @@ impl Heap {
         let new_obj = Obj::from(String::from(name));
         match self.string_pool.get(&new_obj) {
             Some(obj) => {
-                new_obj.drop_in_place();
+                new_obj.free();
                 *obj
             }
             None => {
@@ -284,7 +254,7 @@ impl Heap {
                 continue;
             }
             handle.mark(true);
-            handle.accept(&mut roots);
+            as_traceable!(handle, trace(&mut roots));
         }
 
         #[cfg(feature = "log_gc")]
@@ -306,13 +276,13 @@ impl Heap {
             // look for dead object
             while self.handles[index].is_marked() {
                 self.handles[index].mark(false);
-                byte_count += self.handles[index].accept(&mut ByteCount);
+                byte_count += as_traceable!(self.handles[index], byte_count());
                 index += 1;
                 if index == len {
                     break 'a;
                 }
             }
-            self.byte_count -= self.handles[index].accept(&mut Free);
+            self.byte_count -= as_traceable!(self.handles[index], free());
             // look for live object from other end
             loop {
                 len -= 1;
@@ -322,7 +292,7 @@ impl Heap {
                 if self.handles[len].is_marked() {
                     break;
                 }
-                self.byte_count -= self.handles[len].accept(&mut Free);
+                self.byte_count -= as_traceable!(self.handles[len], free());
             }
             // swap
             self.handles[index] = self.handles[len];
@@ -346,142 +316,8 @@ impl Drop for Heap {
     fn drop(&mut self) {
         while let Some(handle) = self.handles.pop() {
             // no point to adjusting byte counts now, but some appear to be unaccounted for!
-            handle.accept(&mut Free);
+            as_traceable!(handle, free());
         }
-    }
-}
-
-struct Free;
-
-macro_rules! free {
-    ($obj:expr) => {{
-        let bs = $obj.byte_count();
-        $obj.drop_in_place();
-        bs
-    }};
-}
-
-impl ObjVisitor<usize> for Free {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_class(&mut self, obj: Obj<Class>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_closure(&mut self, obj: Obj<Closure>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_function(&mut self, obj: Obj<Function>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_instance(&mut self, obj: Obj<Instance>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_native(&mut self, obj: Obj<Native>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_string(&mut self, obj: Obj<String>) -> usize {
-        free!(obj)
-    }
-
-    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> usize {
-        free!(obj)
-    }
-}
-
-type Collector = Vec<Handle>;
-
-impl ObjVisitor<()> for Collector {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) {
-        self.push(Handle::from(obj.receiver));
-        self.push(Handle::from(obj.method));
-    }
-
-    fn visit_class(&mut self, obj: Obj<Class>) {
-        self.push(Handle::from(obj.name));
-        for (name, method) in &obj.methods {
-            self.push(Handle::from(*name));
-            self.push(Handle::from(*method));
-        }
-    }
-
-    fn visit_closure(&mut self, obj: Obj<Closure>) {
-        self.push(Handle::from(obj.function));
-        for upvalue in obj.upvalues.iter() {
-            self.push(Handle::from(*upvalue));
-        }
-    }
-
-    fn visit_function(&mut self, obj: Obj<Function>) {
-        if let Some(name) = &obj.name {
-            self.push(Handle::from(*name))
-        }
-        for value in &obj.chunk.constants {
-            if let Value::Object(h) = value {
-                self.push(*h)
-            }
-        }
-    }
-
-    fn visit_instance(&mut self, obj: Obj<Instance>) {
-        for value in obj.properties.values() {
-            if let Value::Object(handle) = value {
-                self.push(*handle)
-            }
-        }
-    }
-
-    fn visit_native(&mut self, _obj: Obj<Native>) {}
-
-    fn visit_string(&mut self, _obj: Obj<String>) {}
-
-    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) {
-        match *obj {
-            Upvalue::Open(_, Some(next)) => self.push(Handle::from(next)),
-            Upvalue::Closed(Value::Object(handle)) => self.push(handle),
-            _ => (),
-        }
-    }
-}
-
-struct ByteCount;
-impl ObjVisitor<usize> for ByteCount {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_class(&mut self, obj: Obj<Class>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_closure(&mut self, obj: Obj<Closure>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_function(&mut self, obj: Obj<Function>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_instance(&mut self, obj: Obj<Instance>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_native(&mut self, obj: Obj<Native>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_string(&mut self, obj: Obj<String>) -> usize {
-        obj.byte_count()
-    }
-
-    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> usize {
-        obj.byte_count()
     }
 }
 

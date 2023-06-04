@@ -2,44 +2,53 @@
 
 ## 2023-06-03
 
-- add README 
 - using a custom allocation to count allocated bytes
-- & mut instead of Box for compilers
+- add README
 - one stack of locals
-- replace Kind with fat pointer to trait object: the 'handler' idea. Difference: one tracer for all obj of a type.
+- ~~replace Kind with fat pointer to trait object: the 'handler' idea.~~
+- & mut instead of Box for compilers
 
 ### byte countering allocator
 
-Already found that replacing the allocator requires getting into unstalble rust apis, and I don't want to do that now.
-To make matters worse, allocators are supposed to be immutable, so another workaround is needed for counting.
+Already found that replacing the allocator requires getting into unstalble rust
+apis, and I don't want to do that now. To make matters worse, allocators are
+supposed to be immutable, so another workaround is needed for counting.
 
-Alternatives: guestimate sizes on allocation...
-Analysis:
+Alternatives: guestimate sizes on allocation... Analysis:
 
 - strings are heap allocated, but immutable in lox
 - chunks have heap allocated members, but don't change size at runtime.
-- classes have heap allocated members, but these costs are determined at initialisation time.
-- this leaves instances, which are the only actually dynamically sized structures.
+- classes have heap allocated members, but these costs are determined at
+  initialisation time.
+- this leaves instances, which are the only actually dynamically sized
+  structures.
 
-If the compiler could resolve super classes, then method tables could be constructed by the compiler.
-Did a little test:super classes can be dynamic, so the size of a class is not determined at compile time.
+If the compiler could resolve super classes, then method tables could be
+constructed by the compiler. Did a little test:super classes can be dynamic, so
+the size of a class is not determined at compile time.
 
-This is a plan: when storing object on the heap, estimate the number of bytes allocated
-do extra updates when building classes and setting properties.
+This is a plan: when storing object on the heap, estimate the number of bytes
+allocated do extra updates when building classes and setting properties.
 
 ### Traceable vs Tracer
 
 Maybe separate the trait that connects the kind to a type form...
 
-reason not to work with `dyn` is that fat pointers take up more space.
-but couldn't 'kind' be replaced by one fat pointer?
+reason not to work with `dyn` is that fat pointers take up more space. but
+couldn't 'kind' be replaced by one fat pointer?
 
-Can you do `type Target` and still be object safe?
-All because a fat pointer takes up too much space.
+Can you do `type Target` and still be object safe? All because a fat pointer
+takes up too much space.
+
+I am not content with the visitor now, but maybe it can work with a macro instead.
+
+### less clumsy call
+
+What if we waited to get the arity from the stack until we need it?
 
 ## 2023-06-03
 
-- add README 
+- add README
 - ~~more clox like string implementation~~
 - using a custom allocation to count allocated bytes
 - & mut instead of Box for compilers

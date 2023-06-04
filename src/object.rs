@@ -82,6 +82,8 @@ impl Traceable for String {
     fn byte_count(&self) -> usize {
         self.capacity() + 24
     }
+
+    fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
 pub fn hash_str(chars: &str) -> u32 {
     let mut hash = 2166136261u32;
@@ -126,6 +128,17 @@ impl Traceable for Function {
     fn byte_count(&self) -> usize {
         60 + self.chunk.byte_increment()
     }
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        if let Some(name) = self.name {
+            collector.push(Handle::from(name))
+        }
+        for &value in &self.chunk.constants {
+            if let Value::Object(h) = value {
+                collector.push(h)
+            }
+        }
+    }
 }
 
 pub struct Class {
@@ -151,6 +164,20 @@ impl Traceable for Class {
         // 36 is 8 for obj, 16 for value, 8 for hash, +10% for scattering
         32 + 36 * self.methods.capacity()
     }
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(Handle::from(self.name));
+        for (name, method) in &self.methods {
+            collector.push(Handle::from(*name));
+            collector.push(Handle::from(*method));
+        }
+    }
+}
+
+impl Display for Class {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<class {}>", *self.name)
+    }
 }
 
 pub enum Upvalue {
@@ -163,6 +190,20 @@ impl Traceable for Upvalue {
 
     fn byte_count(&self) -> usize {
         24
+    }
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        match *self {
+            Upvalue::Open(_, Some(next)) => collector.push(Handle::from(next)),
+            Upvalue::Closed(Value::Object(handle)) => collector.push(handle),
+            _ => (),
+        }
+    }
+}
+
+impl Display for Upvalue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "<upvalue>")
     }
 }
 
@@ -189,6 +230,18 @@ impl Traceable for Closure {
     fn byte_count(&self) -> usize {
         16 + self.upvalues.capacity()
     }
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(Handle::from(self.function));
+        for upvalue in self.upvalues.iter() {
+            collector.push(Handle::from(*upvalue));
+        }
+    }
+}
+impl Display for Closure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.function.fmt(f)
+    }
 }
 
 pub struct Instance {
@@ -205,6 +258,15 @@ impl Traceable for Instance {
         // 36 is 8 for obj, 16 for value, 8 for hash, +10% for scattering
         32 + 36 * self.properties.capacity()
     }
+
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(Handle::from(self.class));
+        for value in self.properties.values() {
+            if let Value::Object(handle) = value {
+                collector.push(*handle)
+            }
+        }
+    }
 }
 
 impl Instance {
@@ -216,6 +278,11 @@ impl Instance {
     }
 }
 
+impl Display for Instance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{} instance>", *self.class)
+    }
+}
 pub struct BoundMethod {
     pub receiver: Obj<Instance>,
     pub method: Obj<Closure>,
@@ -233,8 +300,17 @@ impl Traceable for BoundMethod {
     fn byte_count(&self) -> usize {
         16
     }
-}
 
+    fn trace(&self, collector: &mut Vec<Handle>) {
+        collector.push(Handle::from(self.receiver));
+        collector.push(Handle::from(self.method));
+    }
+}
+impl Display for BoundMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.method.fmt(f)
+    }
+}
 // perhaps Native should
 #[derive(Copy, Clone)]
 pub struct Native(pub fn(args: &[Value]) -> Result<Value, String>);
@@ -251,15 +327,12 @@ impl Traceable for Native {
     fn byte_count(&self) -> usize {
         8
     }
+
+    fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
 
-pub trait ObjVisitor<T> {
-    fn visit_bound_method(&mut self, obj: Obj<BoundMethod>) -> T;
-    fn visit_class(&mut self, obj: Obj<Class>) -> T;
-    fn visit_closure(&mut self, obj: Obj<Closure>) -> T;
-    fn visit_function(&mut self, obj: Obj<Function>) -> T;
-    fn visit_instance(&mut self, obj: Obj<Instance>) -> T;
-    fn visit_native(&mut self, obj: Obj<Native>) -> T;
-    fn visit_string(&mut self, obj: Obj<String>) -> T;
-    fn visit_upvalue(&mut self, obj: Obj<Upvalue>) -> T;
+impl Display for Native {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<native>")
+    }
 }
