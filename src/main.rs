@@ -12,6 +12,7 @@ mod common;
 mod chunk;
 mod compiler;
 mod loxtr;
+mod table;
 
 mod memory;
 mod object;

@@ -39,13 +39,23 @@ lines. O well.
 Compiler performance maybe.
 
 The upvalues are a linked list, because of the desired behavior:
-- inserts can happen everywhere, but are more likely at the start,
-- upvalues are removed from the end.
-So an alternative is a stacksize array of `Option<Obj<Upvalue>>`,
-It takes up more space, but inserts require constant time, and
-closing depends on how many values get allocated with a frame (max 256...)
 
-I doubt the difference will be notable.
+- inserts can happen everywhere, but are more likely at the start,
+- upvalues are removed from the end. So an alternative is a stacksize array of
+  `Option<Obj<Upvalue>>`, It takes up more space, but inserts require constant
+  time, and closing depends on how many values get allocated with a frame (max
+  256...)
+
+I doubt the difference will be notable, and it may be negative, but this
+solution is simpler. Okay, it is slower! Like 20% on a few of the benchmarks.
+
+### tables
+
+What I am use to for arrays is actually `Box<[T]>`. This could be the basis for
+a `Table` implementation.
+
+Porting table wasn't hard. Let's see what it does for performance later this
+week.
 
 ## 2023-06-04
 

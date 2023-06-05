@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, time::SystemTime};
 
 use crate::{
     chunk::{Chunk, Op},
@@ -1023,8 +1023,13 @@ impl<'src, 'hp> Parser<'src, 'hp> {
 }
 
 pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<Function>, String> {
+    let start = SystemTime::now();
     let mut parser: Parser<'src, 'hp> = Parser::new(Source::new(source), heap);
     let obj = parser.script()?;
+    println!(
+        "Compilation finished in {} ns.",
+        SystemTime::now().duration_since(start).unwrap().as_nanos()
+    );
     match parser.error_count {
         0 => Ok(obj),
         1 => err!("There was a compile time error."),
