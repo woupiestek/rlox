@@ -779,7 +779,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             self.define_variable(0);
             self.variable(class_name.lexeme, false)?;
             self.emit_op(Op::Inherit);
-            self.has_super &= 1;
+            self.has_super |= 1;
         }
 
         // why this again?
@@ -1246,6 +1246,23 @@ mod tests {
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
+        ";
+        let mut heap = Heap::new();
+        let result = compile(test, &mut heap);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        disassemble!(&result.unwrap().chunk);
+    }
+
+    #[test]
+    fn super_call() {
+        let test = "
+        class A {
+            f(x) { print x; }
+        }
+        class B < A {
+            f(x) { super.f(x); print x; }
+        }
+        B.f(\"hello\");
         ";
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);

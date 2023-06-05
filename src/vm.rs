@@ -13,7 +13,7 @@ const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 
 fn clock_native(_args: &[Value]) -> Result<Value, String> {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
-        Ok(duration) => Ok(Value::from(duration.as_millis() as f64)),
+        Ok(duration) => Ok(Value::from(duration.as_secs_f64())),
         Err(x) => Err(x.to_string()),
     }
 }

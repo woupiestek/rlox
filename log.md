@@ -1,6 +1,45 @@
 # Rlox
 
-## 2023-06-03
+## 2023-06-05
+
+### benchmarks
+
+When running benchmarks, use `--release`, otherwise the run will be slow.
+
+binary_trees: 
+  clox: 6.474, 
+  rlox: 14.052
+equality: 
+  clox: loop 6.343 elapsed 8.136
+  rlox: loop 6.635 elapsed 6.676
+fib: 
+  clox: 3.978
+  rlox: 5.064148664474487
+instantiation:
+  clox: 2.993
+  rlox: 3.9380042552948
+invocation:
+  clox: 0.956
+  rlox: 4.011815547943115
+method_call:
+  clox: 0.806
+  rlox: 2.945194721221924
+properties:
+  clox: 1.638
+  rlox: 7.1311938762664795
+trees:
+  clox: 11.644
+  rlox: 32.88513708114624
+zoo_batch: (number of batches processed)
+  clox: 1102
+  rlox: 316
+zoo:
+  clox: 1.401
+  rlox: 5.305315971374512
+
+Property access is expensive as expected. So let's fix it?
+
+## 2023-06-04
 
 - ~~using a custom allocation to count allocated bytes~~
 - add README
