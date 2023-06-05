@@ -6,38 +6,46 @@
 
 When running benchmarks, use `--release`, otherwise the run will be slow.
 
-binary_trees: 
-  clox: 6.474, 
-  rlox: 14.052
-equality: 
-  clox: loop 6.343 elapsed 8.136
-  rlox: loop 6.635 elapsed 6.676
-fib: 
-  clox: 3.978
-  rlox: 5.064148664474487
-instantiation:
-  clox: 2.993
-  rlox: 3.9380042552948
-invocation:
-  clox: 0.956
-  rlox: 4.011815547943115
-method_call:
-  clox: 0.806
-  rlox: 2.945194721221924
-properties:
-  clox: 1.638
-  rlox: 7.1311938762664795
-trees:
-  clox: 11.644
-  rlox: 32.88513708114624
-zoo_batch: (number of batches processed)
-  clox: 1102
-  rlox: 316
-zoo:
-  clox: 1.401
-  rlox: 5.305315971374512
+binary_trees: clox: 6.474 rlox: 14.052 equality: clox: loop 6.343 elapsed 8.136
+rlox: loop 6.635 elapsed 6.676 fib: clox: 3.978 rlox: 5.064148664474487
+instantiation: clox: 2.993 rlox: 3.9380042552948 invocation: clox: 0.956 rlox:
+4.011815547943115 method_call: clox: 0.806 rlox: 2.945194721221924 properties:
+clox: 1.638 rlox: 7.1311938762664795 trees: clox: 11.644 rlox: 32.88513708114624
+zoo_batch: (number of batches processed) clox: 1102 rlox: 316 zoo: clox: 1.401
+rlox: 5.305315971374512
 
 Property access is expensive as expected. So let's fix it?
+
+### another attempt at Loxtr
+
+Basically make it a `str` with a pre computed hash code.
+
+binary_trees: rlox: 8.950028419494629 equality: rlox: loop 3.950610399246216
+elapsed 3.556746482849121 fib: rlox: 2.7511284351348877 instantiation: rlox:
+2.541790246963501 invocation: rlox: 1.1747519969940186 method_call: rlox:
+1.3273963928222656 properties: rlox: 2.8201920986175537 trees: rlox:
+16.289510488510132 zoo_batch: (number of batches processed) rlox: 760 zoo: rlox:
+2.0269880294799805
+
+I am pretty happy with this improvement. Rlox is somehow beating clox on some of
+the benchmarx how? Because the garbage collector is less busy? Is it the
+constant table optimisation? Property access has much improved.
+
+Right, vs code didn't know it was supposed to keep the benchmarks on separate
+lines. O well.
+
+### so what next?
+
+Compiler performance maybe.
+
+The upvalues are a linked list, because of the desired behavior:
+- inserts can happen everywhere, but are more likely at the start,
+- upvalues are removed from the end.
+So an alternative is a stacksize array of `Option<Obj<Upvalue>>`,
+It takes up more space, but inserts require constant time, and
+closing depends on how many values get allocated with a frame (max 256...)
+
+I doubt the difference will be notable.
 
 ## 2023-06-04
 
@@ -80,7 +88,8 @@ couldn't 'kind' be replaced by one fat pointer?
 Can you do `type Target` and still be object safe? All because a fat pointer
 takes up too much space.
 
-I am not content with the visitor now, but maybe it can work with a macro instead.
+I am not content with the visitor now, but maybe it can work with a macro
+instead.
 
 ### less clumsy call
 
@@ -102,7 +111,7 @@ to rustc yet, if it is possible. The lifetime bounds only allow 'outlive'.
 
 ### LoxStrings
 
-To do the hashset thing, Eq and Hash are needed on `Obj<String>`. I was think
+To do the hashset thing, Eq and Hash are needed on `Obj<Loxtr>`. I was think
 Rlox should just allocate everything in one go, inclusing the space for the
 charaters of the string, but Clox doesn't function that way.
 

@@ -11,6 +11,7 @@ mod debug;
 mod common;
 mod chunk;
 mod compiler;
+mod loxtr;
 
 mod memory;
 mod object;

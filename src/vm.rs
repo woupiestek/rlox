@@ -4,6 +4,7 @@ use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
     compiler::compile,
+    loxtr::Loxtr,
     memory::{Handle, Heap, Kind, Obj, Traceable},
     object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
 };
@@ -55,9 +56,9 @@ impl CallFrame {
         self.chunk().read_constant(self.ip as usize)
     }
 
-    fn read_string(&mut self) -> Result<Obj<String>, String> {
+    fn read_string(&mut self) -> Result<Obj<Loxtr>, String> {
         let value = self.read_constant();
-        String::obj_from_value(value).ok_or(format!("'{}' is not a string", value))
+        Loxtr::nullable(value).ok_or_else(|| format!("'{}' is not a string", value))
     }
 
     fn read_upvalue(&mut self) -> Obj<Upvalue> {
@@ -82,8 +83,8 @@ pub struct VM {
     stack_top: usize,
     frames: Vec<CallFrame>,
     open_upvalues: Option<Obj<Upvalue>>,
-    globals: HashMap<Obj<String>, Value>,
-    init_string: Obj<String>,
+    globals: HashMap<Obj<Loxtr>, Value>,
+    init_string: Obj<Loxtr>,
     heap: Heap,
     next_gc: usize,
 }
@@ -261,10 +262,6 @@ impl VM {
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
-        if let Some(bm) = BoundMethod::obj_from_value(callee) {
-            self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
-            return self.call(bm.method, arity);
-        }
         if let Value::Object(handle) = callee {
             match handle.kind() {
                 Kind::BoundMethod => {
@@ -302,7 +299,7 @@ impl VM {
     fn invoke_from_class(
         &mut self,
         class: Obj<Class>,
-        name: Obj<String>,
+        name: Obj<Loxtr>,
         arity: u8,
     ) -> Result<(), String> {
         match class.methods.get(&name) {
@@ -311,9 +308,9 @@ impl VM {
         }
     }
 
-    fn invoke(&mut self, name: Obj<String>, arity: u8) -> Result<(), String> {
+    fn invoke(&mut self, name: Obj<Loxtr>, arity: u8) -> Result<(), String> {
         let value = self.peek(arity as usize);
-        let instance = Instance::obj_from_value(value).ok_or("Only instances have methods.")?;
+        let instance = Instance::nullable(value).ok_or("Only instances have methods.")?;
         if let Some(property) = instance.properties.get(&name) {
             self.values[self.stack_top - arity as usize - 1] = *property;
             self.call_value(*property, arity)
@@ -322,7 +319,7 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: Obj<Class>, name: Obj<String>) -> Result<(), String> {
+    fn bind_method(&mut self, class: Obj<Class>, name: Obj<Loxtr>) -> Result<(), String> {
         match class.methods.get(&name) {
             None => err!("Undefined property '{}'.", *name),
             Some(method) => {
@@ -335,7 +332,7 @@ impl VM {
         }
     }
 
-    fn define_method(&mut self, name: Obj<String>) -> Result<(), String> {
+    fn define_method(&mut self, name: Obj<Loxtr>) -> Result<(), String> {
         if let Ok(&[a, method]) = self.tail(2) {
             let mut class = Obj::<Class>::from(a);
             let before_count = class.byte_count();
@@ -392,10 +389,8 @@ impl VM {
             match instruction {
                 Op::Add => {
                     if let &[a, b] = self.tail(2)? {
-                        if let (Some(a), Some(b)) =
-                            (String::obj_from_value(a), String::obj_from_value(b))
-                        {
-                            let c = self.concatenate(&a, &b);
+                        if let (Some(a), Some(b)) = (Loxtr::nullable(a), Loxtr::nullable(b)) {
+                            let c = self.concatenate(a.as_ref(), b.as_ref());
                             self.stack_top -= 2;
                             self.push(c);
                             continue;
@@ -473,8 +468,8 @@ impl VM {
                 }
                 Op::GetProperty => {
                     let value = self.peek(0);
-                    let instance = Instance::obj_from_value(value)
-                        .ok_or("Only instances have properties.".to_string())?;
+                    let instance = Instance::nullable(value)
+                        .ok_or(String::from("Only instances have properties."))?;
                     let name = self.top_frame().read_string()?;
                     if let Some(&value) = instance.properties.get(&name) {
                         // replace instance
@@ -500,10 +495,10 @@ impl VM {
                 }
                 Op::Inherit => {
                     if let &[a, b] = self.tail(2)? {
-                        let super_class = Class::obj_from_value(a)
-                            .ok_or("Super class must be a class.".to_string())?;
-                        let mut sub_class = Class::obj_from_value(b)
-                            .ok_or("Sub class must be a class.".to_string())?;
+                        let super_class = Class::nullable(a)
+                            .ok_or(String::from("Super class must be a class."))?;
+                        let mut sub_class =
+                            Class::nullable(b).ok_or(String::from("Sub class must be a class."))?;
                         let bytes_before = sub_class.byte_count();
                         for (&k, &v) in &super_class.methods {
                             sub_class.methods.insert(k, v);
@@ -574,8 +569,8 @@ impl VM {
                 }
                 Op::SetProperty => {
                     if let &[a, b] = self.tail(2)? {
-                        let mut instance = Instance::obj_from_value(a)
-                            .ok_or("Only instances have fields.".to_string())?;
+                        let mut instance = Instance::nullable(a)
+                            .ok_or(String::from("Only instances have fields."))?;
                         let before_count = instance.byte_count();
                         instance
                             .properties

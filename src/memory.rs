@@ -7,7 +7,10 @@ use std::{
     ptr,
 };
 
-use crate::object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value};
+use crate::{
+    loxtr::Loxtr,
+    object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
+};
 
 // note that usually 8 byte is allocated for this due to alignment, so plenty of space!
 
@@ -60,7 +63,7 @@ macro_rules! as_traceable {
             Kind::Function => Function::cast(&$handle).$method($($args)*),
             Kind::Instance => Instance::cast(&$handle).$method($($args)*),
             Kind::Native => Native::cast(&$handle).$method($($args)*),
-            Kind::String => String::cast(&$handle).$method($($args)*),
+            Kind::String => Loxtr::cast(&$handle).$method($($args)*),
             Kind::Upvalue => Upvalue::cast(&$handle).$method($($args)*),
         }
     };
@@ -165,7 +168,7 @@ where
             ptr: handle.ptr as *mut (Header, Self),
         }
     }
-    fn obj_from_value(value: Value) -> Option<Obj<Self>> {
+    fn nullable(value: Value) -> Option<Obj<Self>> {
         if let Value::Object(handle) = value {
             if handle.kind() == Self::KIND {
                 Some(Self::cast(&handle))
@@ -192,7 +195,7 @@ impl<T: Traceable> From<Value> for Obj<T> {
 
 pub struct Heap {
     handles: Vec<Handle>,
-    string_pool: HashSet<Obj<String>>,
+    string_pool: HashSet<Obj<Loxtr>>,
     byte_count: usize,
 }
 
@@ -213,8 +216,8 @@ impl Heap {
         self.byte_count
     }
 
-    pub fn intern(&mut self, name: &str) -> Obj<String> {
-        let new_str = Obj::from(String::from(name));
+    pub fn intern(&mut self, name: &str) -> Obj<Loxtr> {
+        let new_str = Obj::from(Loxtr::copy(name));
         match self.string_pool.get(&new_str) {
             Some(obj) => {
                 new_str.free();

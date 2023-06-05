@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     chunk::Chunk,
+    loxtr::Loxtr,
     memory::{Handle, Kind, Obj, Traceable},
 };
 
@@ -60,46 +61,38 @@ impl Display for Value {
     }
 }
 
-impl PartialEq for Obj<String> {
+impl PartialEq for Obj<Loxtr> {
     fn eq(&self, other: &Self) -> bool {
-        self.as_ptr() == other.as_ptr() || **self == **other
+        self.hash_code() == other.hash_code() && self.as_ref() == other.as_ref()
     }
 }
 
-impl Eq for Obj<String> {}
+impl Eq for Obj<Loxtr> {}
 
-impl Hash for Obj<String> {
+impl Hash for Obj<Loxtr> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_str(self).hash(state);
+        self.hash_code().hash(state);
     }
 }
 
-impl Traceable for String {
+impl Traceable for Loxtr {
     const KIND: Kind = Kind::String;
     fn byte_count(&self) -> usize {
-        self.capacity() + 24
+        self.as_ref().len() + 24
     }
 
     fn trace(&self, _collector: &mut Vec<Handle>) {}
 }
-pub fn hash_str(chars: &str) -> u32 {
-    let mut hash = 2166136261u32;
-    for &byte in chars.as_bytes() {
-        hash ^= byte as u32;
-        hash = hash.wrapping_mul(16777619);
-    }
-    hash
-}
 
 pub struct Function {
-    pub name: Option<Obj<String>>,
+    pub name: Option<Obj<Loxtr>>,
     pub arity: u8,
     pub upvalue_count: u8,
     pub chunk: Chunk,
 }
 
 impl Function {
-    pub fn new(name: Option<Obj<String>>) -> Self {
+    pub fn new(name: Option<Obj<Loxtr>>) -> Self {
         Self {
             name,
             arity: 0,
@@ -139,13 +132,13 @@ impl Traceable for Function {
 }
 
 pub struct Class {
-    pub name: Obj<String>,
+    pub name: Obj<Loxtr>,
     // heap allocated
-    pub methods: HashMap<Obj<String>, Obj<Closure>>,
+    pub methods: HashMap<Obj<Loxtr>, Obj<Closure>>,
 }
 
 impl Class {
-    pub fn new(name: Obj<String>) -> Self {
+    pub fn new(name: Obj<Loxtr>) -> Self {
         Self {
             name,
             methods: HashMap::new(),
@@ -244,7 +237,7 @@ impl Display for Closure {
 pub struct Instance {
     pub class: Obj<Class>,
     // heap allocated
-    pub properties: HashMap<Obj<String>, Value>,
+    pub properties: HashMap<Obj<Loxtr>, Value>,
 }
 
 impl Traceable for Instance {
