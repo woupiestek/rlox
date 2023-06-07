@@ -87,7 +87,6 @@ pub struct VM {
     globals: Table<Value>,
     init_string: GC<Loxtr>,
     heap: Heap,
-    next_gc: usize,
 }
 
 impl VM {
@@ -101,7 +100,6 @@ impl VM {
             globals: Table::new(),
             init_string,
             heap,
-            next_gc: 1 << 20,
         };
         s.define_native("clock", CLOCK_NATIVE);
         s
@@ -152,29 +150,9 @@ impl VM {
     }
 
     fn new_obj<T: Traceable>(&mut self, t: T) -> GC<T> {
-        let before = self.heap.byte_count();
-        if before > self.next_gc {
-            #[cfg(feature = "log_gc")]
-            {
-                println!("-- gc begin");
-                println!("byte count: {}", self.heap.byte_count());
-            }
+        if self.heap.needs_gc() {
             let roots = self.roots();
             self.heap.collect_garbage(roots);
-            self.next_gc *= 2;
-            #[cfg(feature = "log_gc")]
-            {
-                println!("-- gc end");
-                let after = self.heap.byte_count();
-                println!(
-                    "   collected {} byte (from {} to {}) next at {}",
-                    before - after,
-                    before,
-                    after,
-                    self.next_gc
-                );
-                println!("byte count: {}", self.heap.byte_count());
-            }
         }
         self.heap.store(t)
     }

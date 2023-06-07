@@ -14,7 +14,7 @@ use crate::{
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Kind {
-    BoundMethod = 1,
+    BoundMethod = 1, // different (better?) miri errors
     Class,
     Closure,
     Function,
@@ -24,6 +24,7 @@ pub enum Kind {
     Upvalue,
 }
 
+// struct -> seg fault
 type Obj<T> = (Kind, bool, T);
 
 macro_rules! as_traceable {
@@ -176,6 +177,7 @@ pub struct Heap {
     handles: Vec<Handle>,
     string_pool: Table<()>,
     byte_count: usize,
+    next_gc: usize,
 }
 
 impl Heap {
@@ -184,15 +186,12 @@ impl Heap {
             handles: Vec::with_capacity(1 << 12),
             string_pool: Table::new(),
             byte_count: 0,
+            next_gc: 1 << 20,
         }
     }
 
     pub fn increase_byte_count(&mut self, diff: usize) {
         self.byte_count += diff;
-    }
-
-    pub fn byte_count(&mut self) -> usize {
-        self.byte_count
     }
 
     pub fn intern(&mut self, name: &str) -> GC<Loxtr> {
@@ -203,6 +202,10 @@ impl Heap {
             self.string_pool.set(gc, ());
             gc
         }
+    }
+
+    pub fn needs_gc(&self) -> bool {
+        self.byte_count > self.next_gc
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> GC<T> {
@@ -220,8 +223,28 @@ impl Heap {
     }
 
     pub fn collect_garbage(&mut self, roots: Vec<Handle>) {
+        #[cfg(feature = "log_gc")]
+        let before = self.byte_count;
+        #[cfg(feature = "log_gc")]
+        {
+            println!("-- gc begin");
+            println!("byte count: {}", before);
+        }
         self.mark(roots);
         self.sweep();
+        self.next_gc *= 2;
+        #[cfg(feature = "log_gc")]
+        {
+            println!("-- gc end");
+            let after = self.byte_count;
+            println!(
+                "   collected {} byte (from {} to {}) next at {}",
+                before - after,
+                before,
+                after,
+                self.next_gc
+            );
+        }
     }
 
     fn mark(&self, mut roots: Vec<Handle>) {

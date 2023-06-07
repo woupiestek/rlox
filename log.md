@@ -1,6 +1,36 @@
 # Rlox
 
+## 2023-06-08
+
+- add README
+- add to munificents list
+- reddit?
+- one stack of locals
+- & mut instead of Box for compilers
+
+### gc thoughts
+
+I don't like how the heap is dependent on other to supply the roots, but what
+options do we have?
+
+- move all run time memory into one struct and put the logic there. Note: this
+  is all of the VM, actually
+- somehow keep track of roots, like assume new elements are rooted, then signal
+  when throwing them out. Sounds like overhead.
+
+Another point: because the heap is no linked list, it will occassion have to
+resize, added extra garbage pauses, when it doesn't collect anything. Maybe the
+trigger should be a combination: either reach a number of objects or a number of
+bytes, and then use the sweep in place or on resize.
+
+
 ## 2023-06-07
+
+- add README
+- add to munificents list
+- reddit?
+- one stack of locals
+- & mut instead of Box for compilers
 
 ### adding table
 
@@ -38,8 +68,8 @@ leak with miri!
 
 ### new problem
 
-The byte count check was calling free instead on the byte_count method! Removed it,
-because it might hurt performance.
+The byte count check was calling free instead on the byte_count method! Removed
+it, because it might hurt performance.
 
 - binary_trees: 6.376673221588135 (better)
 - equality: loop 3.703075647354126 elapsed 3.112445116043091 (worse)
