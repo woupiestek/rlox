@@ -1,9 +1,6 @@
 use std::{
-    alloc::alloc,
-    alloc::Layout,
     fmt::Display,
     ops::{Deref, DerefMut},
-    ptr,
 };
 
 use crate::{
@@ -17,7 +14,7 @@ use crate::{
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Kind {
-    BoundMethod,
+    BoundMethod = 1,
     Class,
     Closure,
     Function,
@@ -27,32 +24,7 @@ pub enum Kind {
     Upvalue,
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct Header {
-    is_marked: bool,
-    kind: Kind,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Handle {
-    ptr: *mut Header,
-}
-
-impl Handle {
-    pub fn kind(&self) -> Kind {
-        unsafe { (*self.ptr).kind }
-    }
-    fn is_marked(&self) -> bool {
-        unsafe { (*self.ptr).is_marked }
-    }
-    fn mark(&mut self, value: bool) {
-        #[cfg(feature = "log_gc")]
-        {
-            println!("{:?} mark {} as {}", self.ptr, self, value);
-        }
-        unsafe { (*self.ptr).is_marked = value }
-    }
-}
+type Obj<T> = (Kind, bool, T);
 
 macro_rules! as_traceable {
     ($handle:expr, $method:ident($($args:tt)*)) => {
@@ -69,91 +41,96 @@ macro_rules! as_traceable {
     };
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Handle {
+    // Obj<()> did not work! perhaps it is an zero size type issue
+    ptr: *mut Obj<u8>,
+}
+
+impl Handle {
+    pub fn kind(&self) -> Kind {
+        unsafe { (*self.ptr).0 }
+    }
+    fn is_marked(&self) -> bool {
+        unsafe { (*self.ptr).1 }
+    }
+    fn mark(&mut self, value: bool) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!("{:?} mark {} as {}", self.ptr, self, value);
+        }
+        unsafe { (*self.ptr).1 = value }
+    }
+    fn free(&self) -> usize {
+        as_traceable!(self, free())
+    }
+}
+
 impl Display for Handle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         as_traceable!(self, fmt(f))
     }
 }
 
-impl<T: Traceable> From<Obj<T>> for Handle {
-    fn from(value: Obj<T>) -> Self {
+impl<T: Traceable> From<GC<T>> for Handle {
+    fn from(value: GC<T>) -> Self {
         Self {
-            ptr: value.ptr as *mut Header,
+            ptr: value.ptr as *mut Obj<u8>,
         }
     }
 }
 
-pub struct Obj<Body: Traceable> {
-    ptr: *mut (Header, Body),
+pub struct GC<Body: Traceable> {
+    ptr: *mut Obj<Body>,
 }
 
-impl<T: Traceable> Obj<T> {
+impl<T: Traceable> GC<T> {
     pub fn is_marked(&self) -> bool {
-        unsafe { (*self.ptr).0.is_marked }
+        unsafe { (*self.ptr).1 }
     }
 
     fn free(&self) -> usize {
         #[cfg(feature = "log_gc")]
         {
-            println!("{:?} free {}", self.ptr, **self);
+            println!("{:?} free as {:?}", self.ptr, T::KIND);
         }
         unsafe {
             let count = self.byte_count();
-            ptr::drop_in_place(self.ptr);
+            drop(Box::from_raw(self.ptr));
             count
         }
     }
 }
 
-impl<T: Traceable> Copy for Obj<T> {}
+impl<T: Traceable> Copy for GC<T> {}
 
-impl<T: Traceable> Clone for Obj<T> {
+impl<T: Traceable> Clone for GC<T> {
     fn clone(&self) -> Self {
-        *self
+        Self { ptr: self.ptr }
     }
 }
 
-impl<T: Traceable> std::fmt::Debug for Obj<T> {
+impl<T: Traceable> std::fmt::Debug for GC<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Obj").field("ptr", &self.ptr).finish()
+        f.debug_struct("GC").field("ptr", &self.ptr).finish()
     }
 }
 
-impl<T: Traceable> Deref for Obj<T> {
+impl<T: Traceable> Deref for GC<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &(*self.ptr).1 }
+        unsafe { &(*self.ptr).2 }
     }
 }
 
-impl<T: Traceable> DerefMut for Obj<T> {
+impl<T: Traceable> DerefMut for GC<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut (*self.ptr).1 }
+        unsafe { &mut (*self.ptr).2 }
     }
 }
 
-impl<T: Traceable> From<T> for Obj<T> {
-    fn from(t: T) -> Self {
-        unsafe {
-            let ptr = alloc(Layout::new::<(Header, T)>()) as *mut (Header, T);
-            assert!(!ptr.is_null());
-            ptr::write(
-                ptr,
-                (
-                    Header {
-                        is_marked: false,
-                        kind: T::KIND,
-                    },
-                    t,
-                ),
-            );
-            Obj { ptr }
-        }
-    }
-}
-
-impl<T: Traceable> PartialEq for Obj<T> {
+impl<T: Traceable> PartialEq for GC<T> {
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }
@@ -165,12 +142,12 @@ where
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
-    fn cast(handle: &Handle) -> Obj<Self> {
-        Obj {
-            ptr: handle.ptr as *mut (Header, Self),
+    fn cast(handle: &Handle) -> GC<Self> {
+        GC {
+            ptr: handle.ptr as *mut Obj<Self>,
         }
     }
-    fn nullable(value: Value) -> Option<Obj<Self>> {
+    fn nullable(value: Value) -> Option<GC<Self>> {
         if let Value::Object(handle) = value {
             if handle.kind() == Self::KIND {
                 Some(Self::cast(&handle))
@@ -184,7 +161,7 @@ where
     fn trace(&self, collector: &mut Vec<Handle>);
 }
 
-impl<T: Traceable> From<Value> for Obj<T> {
+impl<T: Traceable> From<Value> for GC<T> {
     fn from(value: Value) -> Self {
         if let Value::Object(handle) = value {
             assert_eq!(handle.kind(), T::KIND);
@@ -218,25 +195,26 @@ impl Heap {
         self.byte_count
     }
 
-    pub fn intern(&mut self, name: &str) -> Obj<Loxtr> {
-        if let Some(obj) = self.string_pool.find_key(name) {
-            obj
+    pub fn intern(&mut self, name: &str) -> GC<Loxtr> {
+        if let Some(gc) = self.string_pool.find_key(name) {
+            gc
         } else {
-            let new_str = Obj::from(Loxtr::copy(name));
-            self.string_pool.set(new_str, ());
-            self.handles.push(Handle::from(new_str));
-            self.byte_count += new_str.byte_count();
-            new_str
+            let gc = self.store(Loxtr::copy(name));
+            self.string_pool.set(gc, ());
+            gc
         }
     }
 
-    pub fn store<T: Traceable>(&mut self, t: T) -> Obj<T> {
-        let obj = Obj::from(t);
+    pub fn store<T: Traceable>(&mut self, t: T) -> GC<T> {
+        let obj = GC {
+            ptr: Box::into_raw(Box::from((T::KIND, false, t))),
+        };
         self.handles.push(Handle::from(obj));
         self.byte_count += obj.byte_count();
         #[cfg(feature = "log_gc")]
         {
-            println!("{:?} store type {:?}", obj.ptr, T::KIND);
+            let kind: Kind = unsafe { (*obj.ptr).0 };
+            println!("{:?} store as {:?}", obj.ptr, kind);
         }
         obj
     }
@@ -277,18 +255,16 @@ impl Heap {
         self.string_pool.sweep();
         let mut index: usize = 0;
         let mut len: usize = self.handles.len();
-        let mut byte_count: usize = 0;
         'a: loop {
             // look for dead object
             while self.handles[index].is_marked() {
                 self.handles[index].mark(false);
-                byte_count += as_traceable!(self.handles[index], byte_count());
                 index += 1;
                 if index == len {
                     break 'a;
                 }
             }
-            self.byte_count -= as_traceable!(self.handles[index], free());
+            self.byte_count -= self.handles[index].free();
             // look for live object from other end
             loop {
                 len -= 1;
@@ -298,12 +274,11 @@ impl Heap {
                 if self.handles[len].is_marked() {
                     break;
                 }
-                self.byte_count -= as_traceable!(self.handles[len], free());
+                self.byte_count -= self.handles[len].free();
             }
             // swap
             self.handles[index] = self.handles[len];
         }
-        assert_eq!(byte_count, self.byte_count);
         self.handles.truncate(len);
         #[cfg(feature = "log_gc")]
         {
@@ -315,8 +290,7 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         while let Some(handle) = self.handles.pop() {
-            // no point to adjusting byte counts now, but some appear to be unaccounted for!
-            as_traceable!(handle, free());
+            handle.free();
         }
     }
 }

@@ -1,9 +1,9 @@
-use std::{mem, time::SystemTime};
+use std::{mem, time::Instant};
 
 use crate::{
     chunk::{Chunk, Op},
     common::U8_COUNT,
-    memory::{Heap, Obj, Traceable},
+    memory::{Heap, Traceable, GC},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
 };
@@ -72,7 +72,7 @@ enum FunctionType {
 
 struct Compiler<'src> {
     function_type: FunctionType,
-    function: Obj<Function>,
+    function: GC<Function>,
     // same idea?
     upvalues: Vec<Upvalue>,
     scope_depth: u16,
@@ -82,7 +82,7 @@ struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    fn new(function_type: FunctionType, function: Obj<Function>) -> Self {
+    fn new(function_type: FunctionType, function: GC<Function>) -> Self {
         let mut first_local = Local::new(Token::synthetic(
             if function_type == FunctionType::Function {
                 ""
@@ -1002,7 +1002,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         }
     }
 
-    fn script(&mut self) -> Result<Obj<Function>, String> {
+    fn script(&mut self) -> Result<GC<Function>, String> {
         let before = self.compiler.function.byte_count();
         while !self.source.match_type(TokenType::End) {
             self.declaration();
@@ -1022,13 +1022,13 @@ impl<'src, 'hp> Parser<'src, 'hp> {
     }
 }
 
-pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<Obj<Function>, String> {
-    let start = SystemTime::now();
+pub fn compile<'src, 'hp>(source: &'src str, heap: &'hp mut Heap) -> Result<GC<Function>, String> {
+    let start = Instant::now();
     let mut parser: Parser<'src, 'hp> = Parser::new(Source::new(source), heap);
     let obj = parser.script()?;
     println!(
         "Compilation finished in {} ns.",
-        SystemTime::now().duration_since(start).unwrap().as_nanos()
+        Instant::now().duration_since(start).as_nanos()
     );
     match parser.error_count {
         0 => Ok(obj),

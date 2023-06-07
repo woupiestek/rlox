@@ -5,7 +5,7 @@ use std::fmt::Display;
 use crate::{
     chunk::Chunk,
     loxtr::Loxtr,
-    memory::{Handle, Kind, Obj, Traceable},
+    memory::{Handle, Kind, Traceable, GC},
     table::Table,
 };
 
@@ -34,8 +34,8 @@ impl From<f64> for Value {
     }
 }
 
-impl<T: Traceable> From<Obj<T>> for Value {
-    fn from(value: Obj<T>) -> Self {
+impl<T: Traceable> From<GC<T>> for Value {
+    fn from(value: GC<T>) -> Self {
         Value::Object(Handle::from(value))
     }
 }
@@ -68,14 +68,14 @@ impl Traceable for Loxtr {
 }
 
 pub struct Function {
-    pub name: Option<Obj<Loxtr>>,
+    pub name: Option<GC<Loxtr>>,
     pub arity: u8,
     pub upvalue_count: u8,
     pub chunk: Chunk,
 }
 
 impl Function {
-    pub fn new(name: Option<Obj<Loxtr>>) -> Self {
+    pub fn new(name: Option<GC<Loxtr>>) -> Self {
         Self {
             name,
             arity: 0,
@@ -115,13 +115,13 @@ impl Traceable for Function {
 }
 
 pub struct Class {
-    pub name: Obj<Loxtr>,
+    pub name: GC<Loxtr>,
     // heap allocated
-    pub methods: Table<Obj<Closure>>,
+    pub methods: Table<GC<Closure>>,
 }
 
 impl Class {
-    pub fn new(name: Obj<Loxtr>) -> Self {
+    pub fn new(name: GC<Loxtr>) -> Self {
         Self {
             name,
             methods: Table::new(),
@@ -151,7 +151,7 @@ impl Display for Class {
 }
 
 pub enum Upvalue {
-    Open(usize, Option<Obj<Upvalue>>),
+    Open(usize, Option<GC<Upvalue>>),
     Closed(Value),
 }
 
@@ -180,13 +180,13 @@ impl Display for Upvalue {
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
 pub struct Closure {
-    pub function: Obj<Function>,
+    pub function: GC<Function>,
     // heap allocated
-    pub upvalues: Vec<Obj<Upvalue>>,
+    pub upvalues: Vec<GC<Upvalue>>,
 }
 
 impl Closure {
-    pub fn new(function: Obj<Function>) -> Self {
+    pub fn new(function: GC<Function>) -> Self {
         Self {
             function,
             upvalues: Vec::new(),
@@ -215,7 +215,7 @@ impl Display for Closure {
 }
 
 pub struct Instance {
-    pub class: Obj<Class>,
+    pub class: GC<Class>,
     // heap allocated
     pub properties: Table<Value>,
 }
@@ -234,7 +234,7 @@ impl Traceable for Instance {
 }
 
 impl Instance {
-    pub fn new(class: Obj<Class>) -> Self {
+    pub fn new(class: GC<Class>) -> Self {
         Self {
             class,
             properties: Table::new(),
@@ -248,12 +248,12 @@ impl Display for Instance {
     }
 }
 pub struct BoundMethod {
-    pub receiver: Obj<Instance>,
-    pub method: Obj<Closure>,
+    pub receiver: GC<Instance>,
+    pub method: GC<Closure>,
 }
 
 impl BoundMethod {
-    pub fn new(receiver: Obj<Instance>, method: Obj<Closure>) -> Self {
+    pub fn new(receiver: GC<Instance>, method: GC<Closure>) -> Self {
         Self { receiver, method }
     }
 }

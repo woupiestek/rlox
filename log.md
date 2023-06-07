@@ -19,18 +19,53 @@ Big performance gain!
 
 We're in no clear winner territory.
 
+### miri
+
+Tried: `cargo +nightly miri test 2> error.log` Found hundreds of leaks. Possible
+reasons:
+
+- miri is not smart enough to understand the garbage collector.
+- there is a memory leak, because we are not freeing memory as we should.
+
+I am using boxes for allowcation and deallocation, but strange things are
+happening. Everything seem already until drop: at that point the memory is
+already filled with strange data. Why though?
+
+Hunch: Kind and bool are small, so their layout is heavily optimized. Whatever
+it was, turning handle into `*mut Obj<u8>` seems ot have fixed it. The only
+error remaining is that mrir cannot handle `clock`. I actually debugged a memory
+leak with miri!
+
+### new problem
+
+The byte count check was calling free instead on the byte_count method! Removed it,
+because it might hurt performance.
+
+- binary_trees: 6.376673221588135 (better)
+- equality: loop 3.703075647354126 elapsed 3.112445116043091 (worse)
+- fib: 1.9507935047149658 (worse)
+- instantiation: 1.9068045616149902 (worse)
+- invocation: 0.6107420921325684 (better)
+- method_call: 0.8883857727050781 (better)
+- properties: 1.6284961700439453 (better)
+- trees: 12.144921064376831 (better)
+- zoo_batch: 1248 (worse)
+- zoo: 1.1798393726348877 (better)
+
+The differences are small, though, so it might be background processes.
+
 ## 2023-06-05
 
 ### benchmarks
 
 When running benchmarks, use `--release`, otherwise the run will be slow.
 
-- binary_trees: clox: 6.474 rlox: 14.052 
-- equality: clox: loop 6.343 elapsed 8.136 rlox: loop 6.635 elapsed 6.676 
+- binary_trees: clox: 6.474 rlox: 14.052
+- equality: clox: loop 6.343 elapsed 8.136 rlox: loop 6.635 elapsed 6.676
 - fib: clox: 3.978 rlox: 5.064148664474487
 - instantiation: clox: 2.993 rlox: 3.9380042552948
-- invocation: clox: 0.956 rlox: 4.011815547943115 
-- method_call: clox: 0.806 rlox: 2.945194721221924 
+- invocation: clox: 0.956 rlox: 4.011815547943115
+- method_call: clox: 0.806 rlox: 2.945194721221924
 - properties: clox: 1.638 rlox: 7.1311938762664795
 - trees: clox: 11.644 rlox: 32.88513708114624
 - zoo_batch: (number of batches processed) clox: 1102 rlox: 316

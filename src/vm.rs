@@ -5,7 +5,7 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     loxtr::Loxtr,
-    memory::{Handle, Heap, Kind, Obj, Traceable},
+    memory::{Handle, Heap, Kind, Traceable, GC},
     object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
     table::Table,
 };
@@ -25,11 +25,11 @@ const CLOCK_NATIVE: Native = Native(clock_native);
 struct CallFrame {
     ip: isize,
     slots: usize,
-    closure: Obj<Closure>,
+    closure: GC<Closure>,
 }
 
 impl CallFrame {
-    fn new(slots: usize, closure: Obj<Closure>) -> Self {
+    fn new(slots: usize, closure: GC<Closure>) -> Self {
         Self {
             ip: -1,
             slots,
@@ -57,12 +57,12 @@ impl CallFrame {
         self.chunk().read_constant(self.ip as usize)
     }
 
-    fn read_string(&mut self) -> Result<Obj<Loxtr>, String> {
+    fn read_string(&mut self) -> Result<GC<Loxtr>, String> {
         let value = self.read_constant();
         Loxtr::nullable(value).ok_or_else(|| format!("'{}' is not a string", value))
     }
 
-    fn read_upvalue(&mut self) -> Obj<Upvalue> {
+    fn read_upvalue(&mut self) -> GC<Upvalue> {
         let read_byte = self.read_byte() as usize;
         self.closure.upvalues[read_byte]
     }
@@ -83,9 +83,9 @@ pub struct VM {
     values: [Value; STACK_SIZE],
     stack_top: usize,
     frames: Vec<CallFrame>,
-    open_upvalues: Option<Obj<Upvalue>>,
+    open_upvalues: Option<GC<Upvalue>>,
     globals: Table<Value>,
-    init_string: Obj<Loxtr>,
+    init_string: GC<Loxtr>,
     heap: Heap,
     next_gc: usize,
 }
@@ -106,7 +106,7 @@ impl VM {
         s.define_native("clock", CLOCK_NATIVE);
         s
     }
-    pub fn capture_upvalue(&mut self, location: usize) -> Obj<Upvalue> {
+    pub fn capture_upvalue(&mut self, location: usize) -> GC<Upvalue> {
         let mut previous = None;
         let mut current = self.open_upvalues;
         while let Some(link) = current {
@@ -151,7 +151,7 @@ impl VM {
         }
     }
 
-    fn new_obj<T: Traceable>(&mut self, t: T) -> Obj<T> {
+    fn new_obj<T: Traceable>(&mut self, t: T) -> GC<T> {
         let before = self.heap.byte_count();
         if before > self.next_gc {
             #[cfg(feature = "log_gc")]
@@ -240,7 +240,7 @@ impl VM {
         self.values[self.stack_top - 1 - distance]
     }
 
-    fn call(&mut self, closure: Obj<Closure>, arity: u8) -> Result<(), String> {
+    fn call(&mut self, closure: GC<Closure>, arity: u8) -> Result<(), String> {
         if arity != closure.function.arity {
             return err!(
                 "Expected {} arguments but got {}.",
@@ -294,8 +294,8 @@ impl VM {
 
     fn invoke_from_class(
         &mut self,
-        class: Obj<Class>,
-        name: Obj<Loxtr>,
+        class: GC<Class>,
+        name: GC<Loxtr>,
         arity: u8,
     ) -> Result<(), String> {
         match class.methods.get(name) {
@@ -304,7 +304,7 @@ impl VM {
         }
     }
 
-    fn invoke(&mut self, name: Obj<Loxtr>, arity: u8) -> Result<(), String> {
+    fn invoke(&mut self, name: GC<Loxtr>, arity: u8) -> Result<(), String> {
         let value = self.peek(arity as usize);
         let instance = Instance::nullable(value).ok_or("Only instances have methods.")?;
         if let Some(property) = instance.properties.get(name) {
@@ -315,11 +315,11 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: Obj<Class>, name: Obj<Loxtr>) -> Result<(), String> {
+    fn bind_method(&mut self, class: GC<Class>, name: GC<Loxtr>) -> Result<(), String> {
         match class.methods.get(name) {
             None => err!("Undefined property '{}'.", *name),
             Some(method) => {
-                let instance = Obj::from(self.peek(0));
+                let instance = GC::from(self.peek(0));
                 let bm = self.new_obj(BoundMethod::new(instance, method));
                 self.pop();
                 self.push(Value::from(bm));
@@ -328,11 +328,11 @@ impl VM {
         }
     }
 
-    fn define_method(&mut self, name: Obj<Loxtr>) -> Result<(), String> {
+    fn define_method(&mut self, name: GC<Loxtr>) -> Result<(), String> {
         if let Ok(&[a, method]) = self.tail(2) {
-            let mut class = Obj::<Class>::from(a);
+            let mut class = GC::<Class>::from(a);
             let before_count = class.byte_count();
-            class.methods.set(name, Obj::from(method));
+            class.methods.set(name, GC::from(method));
             self.heap
                 .increase_byte_count(class.byte_count() - before_count);
             self.pop();
@@ -348,7 +348,7 @@ impl VM {
     }
 
     // combined to avoid gc errors
-    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> Obj<T> {
+    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> GC<T> {
         let obj = self.new_obj(traceable);
         self.push(Value::from(obj));
         obj
@@ -418,7 +418,7 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = Obj::from(self.top_frame().read_constant());
+                    let function = GC::from(self.top_frame().read_constant());
                     let mut closure = self.push_traceable(Closure::new(function));
                     let before_count = closure.byte_count();
                     for _ in 0..function.upvalue_count {
@@ -476,7 +476,7 @@ impl VM {
                 }
                 Op::GetSuper => {
                     let name = self.top_frame().read_string()?;
-                    let super_class = Obj::from(self.pop());
+                    let super_class = GC::from(self.pop());
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
@@ -584,7 +584,7 @@ impl VM {
                 Op::SuperInvoke => {
                     let name = self.top_frame().read_string()?;
                     let arity = self.top_frame().read_byte();
-                    let super_class = Obj::from(self.pop());
+                    let super_class = GC::from(self.pop());
                     self.invoke_from_class(super_class, name, arity)?;
                 }
                 Op::True => self.push(Value::True),

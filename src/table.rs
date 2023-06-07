@@ -1,13 +1,13 @@
 use crate::{
     loxtr::{hash_str, Loxtr},
-    memory::{Handle, Obj},
+    memory::{Handle, GC},
     object::{Closure, Value},
 };
 
 #[derive(Clone, Debug)]
 enum Entry<V: Clone> {
     Empty,
-    Taken { key: Obj<Loxtr>, value: V },
+    Taken { key: GC<Loxtr>, value: V },
     Tombstone,
 }
 
@@ -37,7 +37,7 @@ impl<V: Clone> Table<V> {
         self.capacity
     }
 
-    fn find(entries: &[Entry<V>], mask: usize, key: Obj<Loxtr>) -> usize {
+    fn find(entries: &[Entry<V>], mask: usize, key: GC<Loxtr>) -> usize {
         let mut index = key.hash_code() as usize & mask;
         let mut tombstone: Option<usize> = None;
         loop {
@@ -68,7 +68,7 @@ impl<V: Clone> Table<V> {
         self.capacity = capacity;
     }
 
-    pub fn get(&self, key: Obj<Loxtr>) -> Option<V> {
+    pub fn get(&self, key: GC<Loxtr>) -> Option<V> {
         if self.count == 0 {
             return None;
         }
@@ -81,7 +81,7 @@ impl<V: Clone> Table<V> {
         }
     }
 
-    pub fn set(&mut self, key: Obj<Loxtr>, value: V) -> bool {
+    pub fn set(&mut self, key: GC<Loxtr>, value: V) -> bool {
         if (self.count + 1) as f64 > (self.capacity as f64) * Self::MAX_LOAD {
             self.grow(if self.capacity < 8 {
                 8
@@ -98,7 +98,7 @@ impl<V: Clone> Table<V> {
         is_new_key
     }
 
-    pub fn delete(&mut self, key: Obj<Loxtr>) -> bool {
+    pub fn delete(&mut self, key: GC<Loxtr>) -> bool {
         if self.count == 0 {
             return false;
         }
@@ -120,7 +120,7 @@ impl<V: Clone> Table<V> {
     }
 }
 
-impl Table<Obj<Closure>> {
+impl Table<GC<Closure>> {
     pub fn trace(&self, collector: &mut Vec<Handle>) {
         for entry in self.entries.iter() {
             if let Entry::Taken { key: _, value } = entry {
@@ -154,7 +154,7 @@ impl Table<()> {
         }
     }
 
-    pub fn find_key(&self, str: &str) -> Option<Obj<Loxtr>> {
+    pub fn find_key(&self, str: &str) -> Option<GC<Loxtr>> {
         let hash = hash_str(str);
         if self.count == 0 {
             return None;
@@ -178,7 +178,7 @@ impl Table<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::Heap;
+    use crate::memory::{Heap, Kind};
 
     use super::*;
 
@@ -187,6 +187,10 @@ mod tests {
         let mut heap = Heap::new();
         let mut table = Table::new();
         let key = heap.intern("name");
+        let handle = Handle::from(key);
+        assert_eq!(handle.kind(), Kind::String);
+        assert_eq!(key.is_marked(), false);
+        assert_eq!(key.as_ref(), "name");
         assert!(table.set(key, ()));
         assert!(table.get(key).is_some());
     }
