@@ -1,15 +1,12 @@
 // run time data structures
 
-use std::{
-    collections::HashMap,
-    fmt::Display,
-    hash::{Hash, Hasher},
-};
+use std::fmt::Display;
 
 use crate::{
     chunk::Chunk,
     loxtr::Loxtr,
     memory::{Handle, Kind, Obj, Traceable},
+    table::Table,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -58,20 +55,6 @@ impl Display for Value {
             Value::Object(a) => write!(f, "{}", a),
             Value::True => write!(f, "true"),
         }
-    }
-}
-
-impl PartialEq for Obj<Loxtr> {
-    fn eq(&self, other: &Self) -> bool {
-        self.hash_code() == other.hash_code() && self.as_ref() == other.as_ref()
-    }
-}
-
-impl Eq for Obj<Loxtr> {}
-
-impl Hash for Obj<Loxtr> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash_code().hash(state);
     }
 }
 
@@ -134,14 +117,14 @@ impl Traceable for Function {
 pub struct Class {
     pub name: Obj<Loxtr>,
     // heap allocated
-    pub methods: HashMap<Obj<Loxtr>, Obj<Closure>>,
+    pub methods: Table<Obj<Closure>>,
 }
 
 impl Class {
     pub fn new(name: Obj<Loxtr>) -> Self {
         Self {
             name,
-            methods: HashMap::new(),
+            methods: Table::new(),
         }
     }
 }
@@ -150,17 +133,14 @@ impl Traceable for Class {
     const KIND: Kind = Kind::Class;
 
     fn byte_count(&self) -> usize {
-        // 32 is 8 for name and 24 for hashmap, assuming similar size to Vec
-        // 36 is 8 for obj, 16 for value, 8 for hash, +10% for scattering
-        32 + 36 * self.methods.capacity()
+        // 32 is 8 for name and 32 for Table
+        // 16 is 8 for obj, 8 for closure
+        40 + 16 * self.methods.capacity()
     }
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(Handle::from(self.name));
-        for (name, method) in &self.methods {
-            collector.push(Handle::from(*name));
-            collector.push(Handle::from(*method));
-        }
+        self.methods.trace(collector);
     }
 }
 
@@ -237,25 +217,19 @@ impl Display for Closure {
 pub struct Instance {
     pub class: Obj<Class>,
     // heap allocated
-    pub properties: HashMap<Obj<Loxtr>, Value>,
+    pub properties: Table<Value>,
 }
 
 impl Traceable for Instance {
     const KIND: Kind = Kind::Instance;
 
     fn byte_count(&self) -> usize {
-        // 32 is 8 for class and 24 for hashmap, assuming similar size to Vec
-        // 36 is 8 for obj, 16 for value, 8 for hash, +10% for scattering
-        32 + 36 * self.properties.capacity()
+        40 + 24 * self.properties.capacity()
     }
 
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(Handle::from(self.class));
-        for value in self.properties.values() {
-            if let Value::Object(handle) = value {
-                collector.push(*handle)
-            }
-        }
+        self.properties.trace(collector);
     }
 }
 
@@ -263,7 +237,7 @@ impl Instance {
     pub fn new(class: Obj<Class>) -> Self {
         Self {
             class,
-            properties: HashMap::new(),
+            properties: Table::new(),
         }
     }
 }

@@ -1,6 +1,10 @@
-use crate::{loxtr::Loxtr, memory::Obj};
+use crate::{
+    loxtr::{hash_str, Loxtr},
+    memory::{Handle, Obj},
+    object::{Closure, Value},
+};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Entry<V: Clone> {
     Empty,
     Taken { key: Obj<Loxtr>, value: V },
@@ -77,7 +81,6 @@ impl<V: Clone> Table<V> {
         }
     }
 
-    // return optionally evicted value
     pub fn set(&mut self, key: Obj<Loxtr>, value: V) -> bool {
         if (self.count + 1) as f64 > (self.capacity as f64) * Self::MAX_LOAD {
             self.grow(if self.capacity < 8 {
@@ -88,6 +91,9 @@ impl<V: Clone> Table<V> {
         }
         let index = Self::find(&self.entries, self.capacity - 1, key);
         let is_new_key = self.entries[index].is_empty();
+        if is_new_key {
+            self.count += 1;
+        }
         self.entries[index] = Entry::Taken { key, value };
         is_new_key
     }
@@ -112,8 +118,44 @@ impl<V: Clone> Table<V> {
             }
         }
     }
+}
 
-    pub fn find_key(&self, str: &str, hash: u64) -> Option<Obj<Loxtr>> {
+impl Table<Obj<Closure>> {
+    pub fn trace(&self, collector: &mut Vec<Handle>) {
+        for entry in self.entries.iter() {
+            if let Entry::Taken { key: _, value } = entry {
+                collector.push(Handle::from(*value))
+            }
+        }
+    }
+}
+impl Table<Value> {
+    pub fn trace(&self, collector: &mut Vec<Handle>) {
+        for entry in self.entries.iter() {
+            if let Entry::Taken {
+                key: _,
+                value: Value::Object(handle),
+            } = entry
+            {
+                collector.push(*handle)
+            }
+        }
+    }
+}
+
+impl Table<()> {
+    pub fn sweep(&mut self) {
+        for index in 0..self.capacity {
+            if let Entry::Taken { key, value: _ } = self.entries[index] {
+                if !key.is_marked() {
+                    self.entries[index] = Entry::Tombstone
+                }
+            }
+        }
+    }
+
+    pub fn find_key(&self, str: &str) -> Option<Obj<Loxtr>> {
+        let hash = hash_str(str);
         if self.count == 0 {
             return None;
         }
@@ -123,13 +165,29 @@ impl<V: Clone> Table<V> {
             match self.entries[index] {
                 Entry::Empty => return None,
                 Entry::Taken { key, value: _ } => {
-                    if key.hash_code() == hash && key.as_ref() == str {
+                    if key.as_ref() == str {
                         return Some(key);
                     }
                 }
-                Entry::Tombstone => todo!(),
+                Entry::Tombstone => (),
             }
             index = (index + 1) & mask;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::memory::Heap;
+
+    use super::*;
+
+    #[test]
+    pub fn set_and_get() {
+        let mut heap = Heap::new();
+        let mut table = Table::new();
+        let key = heap.intern("name");
+        assert!(table.set(key, ()));
+        assert!(table.get(key).is_some());
     }
 }

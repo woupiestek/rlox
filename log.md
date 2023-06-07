@@ -1,18 +1,40 @@
 # Rlox
 
+## 2023-06-07
+
+### adding table
+
+Big performance gain!
+
+- binary_trees: 6.599929571151733
+- equality: loop 3.3784124851226807 elapsed 3.054243803024292
+- fib: 1.9488043785095215
+- instantiation: 1.4910368919372559
+- invocation: 0.614128828048706
+- method_call: 0.9227621555328369
+- properties: 1.6836957931518555
+- trees: 12.388887405395508
+- zoo_batch: 1324
+- zoo: 1.33463716506958
+
+We're in no clear winner territory.
+
 ## 2023-06-05
 
 ### benchmarks
 
 When running benchmarks, use `--release`, otherwise the run will be slow.
 
-binary_trees: clox: 6.474 rlox: 14.052 equality: clox: loop 6.343 elapsed 8.136
-rlox: loop 6.635 elapsed 6.676 fib: clox: 3.978 rlox: 5.064148664474487
-instantiation: clox: 2.993 rlox: 3.9380042552948 invocation: clox: 0.956 rlox:
-4.011815547943115 method_call: clox: 0.806 rlox: 2.945194721221924 properties:
-clox: 1.638 rlox: 7.1311938762664795 trees: clox: 11.644 rlox: 32.88513708114624
-zoo_batch: (number of batches processed) clox: 1102 rlox: 316 zoo: clox: 1.401
-rlox: 5.305315971374512
+- binary_trees: clox: 6.474 rlox: 14.052 
+- equality: clox: loop 6.343 elapsed 8.136 rlox: loop 6.635 elapsed 6.676 
+- fib: clox: 3.978 rlox: 5.064148664474487
+- instantiation: clox: 2.993 rlox: 3.9380042552948
+- invocation: clox: 0.956 rlox: 4.011815547943115 
+- method_call: clox: 0.806 rlox: 2.945194721221924 
+- properties: clox: 1.638 rlox: 7.1311938762664795
+- trees: clox: 11.644 rlox: 32.88513708114624
+- zoo_batch: (number of batches processed) clox: 1102 rlox: 316
+- zoo: clox: 1.401 rlox: 5.305315971374512
 
 Property access is expensive as expected. So let's fix it?
 
@@ -20,12 +42,16 @@ Property access is expensive as expected. So let's fix it?
 
 Basically make it a `str` with a pre computed hash code.
 
-binary_trees: rlox: 8.950028419494629 equality: rlox: loop 3.950610399246216
-elapsed 3.556746482849121 fib: rlox: 2.7511284351348877 instantiation: rlox:
-2.541790246963501 invocation: rlox: 1.1747519969940186 method_call: rlox:
-1.3273963928222656 properties: rlox: 2.8201920986175537 trees: rlox:
-16.289510488510132 zoo_batch: (number of batches processed) rlox: 760 zoo: rlox:
-2.0269880294799805
+- binary_trees: 8.950028419494629
+- equality: loop 3.950610399246216 elapsed 3.556746482849121
+- fib: 2.7511284351348877
+- instantiation: 2.541790246963501
+- invocation: 1.1747519969940186
+- method_call: 1.3273963928222656
+- properties: 2.8201920986175537
+- trees: 16.289510488510132
+- zoo_batch: 760
+- zoo: 2.0269880294799805
 
 I am pretty happy with this improvement. Rlox is somehow beating clox on some of
 the benchmarx how? Because the garbage collector is less busy? Is it the

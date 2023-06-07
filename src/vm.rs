@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time};
+use std::time;
 
 use crate::{
     chunk::{Chunk, Op},
@@ -7,6 +7,7 @@ use crate::{
     loxtr::Loxtr,
     memory::{Handle, Heap, Kind, Obj, Traceable},
     object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
+    table::Table,
 };
 
 const MAX_FRAMES: usize = 0x40;
@@ -83,7 +84,7 @@ pub struct VM {
     stack_top: usize,
     frames: Vec<CallFrame>,
     open_upvalues: Option<Obj<Upvalue>>,
-    globals: HashMap<Obj<Loxtr>, Value>,
+    globals: Table<Value>,
     init_string: Obj<Loxtr>,
     heap: Heap,
     next_gc: usize,
@@ -97,7 +98,7 @@ impl VM {
             stack_top: 0,
             frames: Vec::with_capacity(MAX_FRAMES),
             open_upvalues: None,
-            globals: HashMap::new(),
+            globals: Table::new(),
             init_string,
             heap,
             next_gc: 1 << 20,
@@ -207,12 +208,7 @@ impl VM {
         {
             println!("collect globals");
         }
-        for (k, v) in &self.globals {
-            collector.push(Handle::from(*k));
-            if let Value::Object(handle) = v {
-                collector.push(*handle)
-            }
-        }
+        self.globals.trace(&mut collector);
         // no compiler roots
         #[cfg(feature = "log_gc")]
         {
@@ -226,7 +222,7 @@ impl VM {
         let key = self.heap.intern(name);
         self.push(Value::from(key));
         let value = Value::from(self.new_obj(native_fn));
-        self.globals.insert(key, value);
+        self.globals.set(key, value);
         self.pop();
     }
 
@@ -273,7 +269,7 @@ impl VM {
                     let obj = Class::cast(&handle);
                     let instance = self.new_obj(Instance::new(obj));
                     self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
-                    if let Some(&init) = obj.methods.get(&self.init_string) {
+                    if let Some(init) = obj.methods.get(self.init_string) {
                         return self.call(init, arity);
                     } else if arity > 0 {
                         return err!("Expected no arguments but got {}.", arity);
@@ -302,29 +298,29 @@ impl VM {
         name: Obj<Loxtr>,
         arity: u8,
     ) -> Result<(), String> {
-        match class.methods.get(&name) {
+        match class.methods.get(name) {
             None => err!("Undefined property '{}'", *name),
-            Some(method) => self.call(*method, arity),
+            Some(method) => self.call(method, arity),
         }
     }
 
     fn invoke(&mut self, name: Obj<Loxtr>, arity: u8) -> Result<(), String> {
         let value = self.peek(arity as usize);
         let instance = Instance::nullable(value).ok_or("Only instances have methods.")?;
-        if let Some(property) = instance.properties.get(&name) {
-            self.values[self.stack_top - arity as usize - 1] = *property;
-            self.call_value(*property, arity)
+        if let Some(property) = instance.properties.get(name) {
+            self.values[self.stack_top - arity as usize - 1] = property;
+            self.call_value(property, arity)
         } else {
             self.invoke_from_class(instance.class, name, arity)
         }
     }
 
     fn bind_method(&mut self, class: Obj<Class>, name: Obj<Loxtr>) -> Result<(), String> {
-        match class.methods.get(&name) {
+        match class.methods.get(name) {
             None => err!("Undefined property '{}'.", *name),
             Some(method) => {
                 let instance = Obj::from(self.peek(0));
-                let bm = self.new_obj(BoundMethod::new(instance, *method));
+                let bm = self.new_obj(BoundMethod::new(instance, method));
                 self.pop();
                 self.push(Value::from(bm));
                 Ok(())
@@ -336,7 +332,7 @@ impl VM {
         if let Ok(&[a, method]) = self.tail(2) {
             let mut class = Obj::<Class>::from(a);
             let before_count = class.byte_count();
-            class.methods.insert(name, Obj::from(method));
+            class.methods.set(name, Obj::from(method));
             self.heap
                 .increase_byte_count(class.byte_count() - before_count);
             self.pop();
@@ -444,7 +440,7 @@ impl VM {
                 }
                 Op::DefineGlobal => {
                     let name = self.top_frame().read_string()?;
-                    self.globals.insert(name, self.peek(0));
+                    self.globals.set(name, self.peek(0));
                     self.pop();
                 }
                 Op::Divide => binary_op!(self, a, b, a / b),
@@ -456,8 +452,8 @@ impl VM {
                 Op::False => self.push(Value::False),
                 Op::GetGlobal => {
                     let name = self.top_frame().read_string()?;
-                    if let Some(value) = self.globals.get(&name) {
-                        self.push(*value);
+                    if let Some(value) = self.globals.get(name) {
+                        self.push(value);
                     } else {
                         return err!("Undefined variable '{}'.", *name);
                     }
@@ -471,7 +467,7 @@ impl VM {
                     let instance = Instance::nullable(value)
                         .ok_or(String::from("Only instances have properties."))?;
                     let name = self.top_frame().read_string()?;
-                    if let Some(&value) = instance.properties.get(&name) {
+                    if let Some(value) = instance.properties.get(name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
                     } else {
@@ -500,9 +496,7 @@ impl VM {
                         let mut sub_class =
                             Class::nullable(b).ok_or(String::from("Sub class must be a class."))?;
                         let bytes_before = sub_class.byte_count();
-                        for (&k, &v) in &super_class.methods {
-                            sub_class.methods.insert(k, v);
-                        }
+                        sub_class.methods.set_all(&super_class.methods);
                         self.heap
                             .increase_byte_count(sub_class.byte_count() - bytes_before);
                         self.pop();
@@ -558,8 +552,8 @@ impl VM {
                 }
                 Op::SetGlobal => {
                     let name = self.top_frame().read_string()?;
-                    if self.globals.insert(name, self.peek(0)).is_none() {
-                        self.globals.remove(&name);
+                    if self.globals.set(name, self.peek(0)) {
+                        self.globals.delete(name);
                         return err!("Undefined variable '{}'.", *name);
                     }
                 }
@@ -572,9 +566,7 @@ impl VM {
                         let mut instance = Instance::nullable(a)
                             .ok_or(String::from("Only instances have fields."))?;
                         let before_count = instance.byte_count();
-                        instance
-                            .properties
-                            .insert(self.top_frame().read_string()?, b);
+                        instance.properties.set(self.top_frame().read_string()?, b);
                         self.heap
                             .increase_byte_count(instance.byte_count() - before_count);
                         self.stack_top -= 2;

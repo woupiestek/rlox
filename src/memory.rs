@@ -1,7 +1,6 @@
 use std::{
     alloc::alloc,
     alloc::Layout,
-    collections::HashSet,
     fmt::Display,
     ops::{Deref, DerefMut},
     ptr,
@@ -10,6 +9,7 @@ use std::{
 use crate::{
     loxtr::Loxtr,
     object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
+    table::Table,
 };
 
 // note that usually 8 byte is allocated for this due to alignment, so plenty of space!
@@ -88,7 +88,7 @@ pub struct Obj<Body: Traceable> {
 }
 
 impl<T: Traceable> Obj<T> {
-    fn is_marked(&self) -> bool {
+    pub fn is_marked(&self) -> bool {
         unsafe { (*self.ptr).0.is_marked }
     }
 
@@ -153,8 +153,10 @@ impl<T: Traceable> From<T> for Obj<T> {
     }
 }
 
-pub trait Tracer {
-    type Target;
+impl<T: Traceable> PartialEq for Obj<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr
+    }
 }
 
 pub trait Traceable
@@ -195,7 +197,7 @@ impl<T: Traceable> From<Value> for Obj<T> {
 
 pub struct Heap {
     handles: Vec<Handle>,
-    string_pool: HashSet<Obj<Loxtr>>,
+    string_pool: Table<()>,
     byte_count: usize,
 }
 
@@ -203,7 +205,7 @@ impl Heap {
     pub fn new() -> Self {
         Self {
             handles: Vec::with_capacity(1 << 12),
-            string_pool: HashSet::new(),
+            string_pool: Table::new(),
             byte_count: 0,
         }
     }
@@ -217,18 +219,14 @@ impl Heap {
     }
 
     pub fn intern(&mut self, name: &str) -> Obj<Loxtr> {
-        let new_str = Obj::from(Loxtr::copy(name));
-        match self.string_pool.get(&new_str) {
-            Some(obj) => {
-                new_str.free();
-                *obj
-            }
-            None => {
-                self.string_pool.insert(new_str);
-                self.handles.push(Handle::from(new_str));
-                self.byte_count += new_str.byte_count();
-                new_str
-            }
+        if let Some(obj) = self.string_pool.find_key(name) {
+            obj
+        } else {
+            let new_str = Obj::from(Loxtr::copy(name));
+            self.string_pool.set(new_str, ());
+            self.handles.push(Handle::from(new_str));
+            self.byte_count += new_str.byte_count();
+            new_str
         }
     }
 
@@ -276,7 +274,7 @@ impl Heap {
             println!("Start sweeping.");
         }
         // first clean up the string pool
-        self.string_pool.retain(|v| v.is_marked());
+        self.string_pool.sweep();
         let mut index: usize = 0;
         let mut len: usize = self.handles.len();
         let mut byte_count: usize = 0;
