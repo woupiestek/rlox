@@ -2,11 +2,11 @@
 
 ## 2023-06-08
 
-- add README
+- ~~add README~~
 - add to munificents list
 - reddit?
 - one stack of locals
-- & mut instead of Box for compilers
+- ~~& mut instead of Box for compilers~~
 
 ### gc thoughts
 
@@ -23,6 +23,9 @@ resize, added extra garbage pauses, when it doesn't collect anything. Maybe the
 trigger should be a combination: either reach a number of objects or a number of
 bytes, and then use the sweep in place or on resize.
 
+### ending this project
+
+I think I am done. Learned a lot to use in another project.
 
 ## 2023-06-07
 

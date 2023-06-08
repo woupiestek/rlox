@@ -27,17 +27,17 @@ pub enum Kind {
 // struct -> seg fault
 type Obj<T> = (Kind, bool, T);
 
-macro_rules! as_traceable {
+macro_rules! as_gc {
     ($handle:expr, $method:ident($($args:tt)*)) => {
         match $handle.kind() {
-            Kind::BoundMethod => BoundMethod::cast(&$handle).$method($($args)*),
-            Kind::Class => Class::cast(&$handle).$method($($args)*),
-            Kind::Closure => Closure::cast(&$handle).$method($($args)*),
-            Kind::Function => Function::cast(&$handle).$method($($args)*),
-            Kind::Instance => Instance::cast(&$handle).$method($($args)*),
-            Kind::Native => Native::cast(&$handle).$method($($args)*),
-            Kind::String => Loxtr::cast(&$handle).$method($($args)*),
-            Kind::Upvalue => Upvalue::cast(&$handle).$method($($args)*),
+            Kind::BoundMethod => BoundMethod::as_gc(&$handle).$method($($args)*),
+            Kind::Class => Class::as_gc(&$handle).$method($($args)*),
+            Kind::Closure => Closure::as_gc(&$handle).$method($($args)*),
+            Kind::Function => Function::as_gc(&$handle).$method($($args)*),
+            Kind::Instance => Instance::as_gc(&$handle).$method($($args)*),
+            Kind::Native => Native::as_gc(&$handle).$method($($args)*),
+            Kind::String => Loxtr::as_gc(&$handle).$method($($args)*),
+            Kind::Upvalue => Upvalue::as_gc(&$handle).$method($($args)*),
         }
     };
 }
@@ -62,14 +62,11 @@ impl Handle {
         }
         unsafe { (*self.ptr).1 = value }
     }
-    fn free(&self) -> usize {
-        as_traceable!(self, free())
-    }
 }
 
 impl Display for Handle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        as_traceable!(self, fmt(f))
+        as_gc!(self, fmt(f))
     }
 }
 
@@ -143,7 +140,7 @@ where
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
-    fn cast(handle: &Handle) -> GC<Self> {
+    fn as_gc(handle: &Handle) -> GC<Self> {
         GC {
             ptr: handle.ptr as *mut Obj<Self>,
         }
@@ -151,7 +148,7 @@ where
     fn nullable(value: Value) -> Option<GC<Self>> {
         if let Value::Object(handle) = value {
             if handle.kind() == Self::KIND {
-                Some(Self::cast(&handle))
+                Some(Self::as_gc(&handle))
             } else {
                 None
             }
@@ -166,7 +163,7 @@ impl<T: Traceable> From<Value> for GC<T> {
     fn from(value: Value) -> Self {
         if let Value::Object(handle) = value {
             assert_eq!(handle.kind(), T::KIND);
-            T::cast(&handle)
+            T::as_gc(&handle)
         } else {
             panic!("cannot cast {} to {:?}", value, T::KIND)
         }
@@ -205,7 +202,7 @@ impl Heap {
     }
 
     pub fn needs_gc(&self) -> bool {
-        self.byte_count > self.next_gc
+        self.byte_count > self.next_gc || self.handles.capacity() == self.handles.len()
     }
 
     pub fn store<T: Traceable>(&mut self, t: T) -> GC<T> {
@@ -222,7 +219,7 @@ impl Heap {
         obj
     }
 
-    pub fn collect_garbage(&mut self, roots: Vec<Handle>) {
+    pub fn retain(&mut self, roots: Vec<Handle>) {
         #[cfg(feature = "log_gc")]
         let before = self.byte_count;
         #[cfg(feature = "log_gc")]
@@ -231,7 +228,11 @@ impl Heap {
             println!("byte count: {}", before);
         }
         self.mark(roots);
-        self.sweep();
+        if self.handles.len() == self.handles.capacity() {
+            self.sweep_at_capacity()
+        } else {
+            self.sweep_in_place();
+        }
         self.next_gc *= 2;
         #[cfg(feature = "log_gc")]
         {
@@ -261,7 +262,7 @@ impl Heap {
                 continue;
             }
             handle.mark(true);
-            as_traceable!(handle, trace(&mut roots));
+            as_gc!(handle, trace(&mut roots));
         }
 
         #[cfg(feature = "log_gc")]
@@ -269,7 +270,21 @@ impl Heap {
             println!("Done with mark & trace");
         }
     }
-    fn sweep(&mut self) {
+
+    fn sweep_at_capacity(&mut self) {
+        let mut handles = Vec::with_capacity(self.handles.capacity() * 2);
+        for handle in self.handles.iter_mut() {
+            if handle.is_marked() {
+                handle.mark(false);
+                handles.push(*handle);
+            } else {
+                as_gc!(handle, free());
+            }
+        }
+        self.handles = handles;
+    }
+
+    fn sweep_in_place(&mut self) {
         #[cfg(feature = "log_gc")]
         {
             println!("Start sweeping.");
@@ -287,7 +302,7 @@ impl Heap {
                     break 'a;
                 }
             }
-            self.byte_count -= self.handles[index].free();
+            self.byte_count -= as_gc!(self.handles[index], free());
             // look for live object from other end
             loop {
                 len -= 1;
@@ -297,7 +312,7 @@ impl Heap {
                 if self.handles[len].is_marked() {
                     break;
                 }
-                self.byte_count -= self.handles[len].free();
+                self.byte_count -= as_gc!(self.handles[len], free());
             }
             // swap
             self.handles[index] = self.handles[len];
@@ -313,7 +328,7 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         while let Some(handle) = self.handles.pop() {
-            handle.free();
+            as_gc!(handle, free());
         }
     }
 }

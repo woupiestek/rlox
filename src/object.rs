@@ -51,8 +51,8 @@ impl Display for Value {
         match self {
             Value::False => write!(f, "false"),
             Value::Nil => write!(f, "nil"),
-            Value::Number(a) => write!(f, "{}", a),
-            Value::Object(a) => write!(f, "{}", a),
+            Value::Number(a) => a.fmt(f),
+            Value::Object(a) => a.fmt(f),
             Value::True => write!(f, "true"),
         }
     }

@@ -152,7 +152,7 @@ impl VM {
     fn new_obj<T: Traceable>(&mut self, t: T) -> GC<T> {
         if self.heap.needs_gc() {
             let roots = self.roots();
-            self.heap.collect_garbage(roots);
+            self.heap.retain(roots);
         }
         self.heap.store(t)
     }
@@ -239,12 +239,12 @@ impl VM {
         if let Value::Object(handle) = callee {
             match handle.kind() {
                 Kind::BoundMethod => {
-                    let bm = BoundMethod::cast(&handle);
+                    let bm = BoundMethod::as_gc(&handle);
                     self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
                     return self.call(bm.method, arity);
                 }
                 Kind::Class => {
-                    let obj = Class::cast(&handle);
+                    let obj = Class::as_gc(&handle);
                     let instance = self.new_obj(Instance::new(obj));
                     self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
                     if let Some(init) = obj.methods.get(self.init_string) {
@@ -256,10 +256,10 @@ impl VM {
                     }
                 }
                 Kind::Closure => {
-                    return self.call(Closure::cast(&handle), arity);
+                    return self.call(Closure::as_gc(&handle), arity);
                 }
                 Kind::Native => {
-                    let result = Native::cast(&handle).0(self.tail(arity as usize)?)?;
+                    let result = Native::as_gc(&handle).0(self.tail(arity as usize)?)?;
                     self.stack_top -= arity as usize + 1;
                     self.push(result);
                     return Ok(());

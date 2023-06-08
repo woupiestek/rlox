@@ -2,7 +2,6 @@ use std::{mem, time::Instant};
 
 use crate::{
     chunk::{Chunk, Op},
-    common::U8_COUNT,
     memory::{Heap, Traceable, GC},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
@@ -73,10 +72,8 @@ enum FunctionType {
 struct Compiler<'src> {
     function_type: FunctionType,
     function: GC<Function>,
-    // same idea?
     upvalues: Vec<Upvalue>,
     scope_depth: u16,
-    // have one local vec, the compiler just keeping offsets?
     locals: Vec<Local<'src>>,
     enclosing: Option<Box<Compiler<'src>>>,
 }
@@ -124,7 +121,7 @@ impl<'src> Compiler<'src> {
     }
 
     fn add_local(&mut self, name: Token<'src>) -> Result<(), String> {
-        if self.locals.len() > U8_COUNT {
+        if self.locals.len() > u8::MAX as usize {
             return err!("Too many local variables in function.");
         }
         self.locals.push(Local::new(name));
@@ -543,7 +540,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         self.source
             .consume(TokenType::Dot, "Expect '.' after 'super'.")?;
         let index = self.identifier_constant("Expect superclass method name.")?;
-        self.variable("this", false)?; // and it doesn't friggin' work!
+        self.variable("this", false)?;
         if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
             self.variable("super", false)?;
@@ -723,7 +720,7 @@ impl<'src, 'hp> Parser<'src, 'hp> {
             .current_chunk()
             .add_constant(Value::from(obj_function))?;
         self.emit_bytes(&[Op::Closure as u8, index]);
-        // I don't get this yet
+
         for upvalue in upvalues {
             self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
         }
@@ -749,7 +746,6 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         Ok(())
     }
 
-    //classDecl      → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
     fn class(&mut self) -> Result<(), String> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
@@ -967,8 +963,6 @@ impl<'src, 'hp> Parser<'src, 'hp> {
         };
 
         if let Err(msg) = result {
-            // I know, don't log & throw
-            // also: what about an actual logger?
             println!(
                 "[line: {}, column: {}, lexeme: {}] {}",
                 self.source.previous_token.line,
