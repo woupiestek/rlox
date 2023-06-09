@@ -348,11 +348,11 @@ impl VM {
                 }
                 println!("");
 
-                print!("globals: ");
-                for (k, v) in &self.globals {
-                    print!("{}:{};", **k, v)
-                }
-                println!("");
+                // print!("globals: ");
+                // for (k, v) in &self.globals {
+                //     print!("{}:{};", **k, v)
+                // }
+                // println!("");
 
                 let ip = self.top_frame().ip;
                 println!("ip: {}", ip);

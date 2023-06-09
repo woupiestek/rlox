@@ -1,12 +1,38 @@
 # Rlox
 
+## 2023-06-09
+
+- one stack of locals
+- & mut instead of Box for compilers
+
+### thoughs on recursive descent
+
+The attraction is that the grammar froms a rought outline for the functions that
+make up the parser. Each nonterminal a function, calling other functions in
+branches and sequences as the grammer dictates. This is good enough for
+producing the abstract syntax tree, but a single pass compiler needs to peek
+down the stack for information, in particular which variables are in scope.
+
+Options:
+
+- reify the stack: store data on the heap that represents the context
+- variable passing: pass the information allong with every function call
+
+The latter can be simplified with object oriented syntax. The objects can
+contain objects lower on the stack, but not the other way around. This means the
+links is the wrong way around now.
+
+### result
+
+Made it work with unsafe pointers. O well.
+
 ## 2023-06-08
 
 - ~~add README~~
-- add to munificents list
+- ~~add to munificents list~~
 - reddit?
 - one stack of locals
-- ~~& mut instead of Box for compilers~~
+- & mut instead of Box for compilers
 
 ### gc thoughts
 
