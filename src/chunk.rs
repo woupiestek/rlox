@@ -150,6 +150,30 @@ impl Chunk {
             Ok(i as u8)
         }
     }
+
+    pub fn write_byte_op(&mut self, op: Op, byte: u8, line: u16) {
+        self.code.push(op as u8);
+        self.code.push(byte);
+        self.lines.push(line);
+        self.lines.push(line);
+    }
+    pub fn write_invoke_op(&mut self, op: Op, constant: u8, arity: u8, line: u16) {
+        self.code.push(op as u8);
+        self.code.push(constant);
+        self.code.push(arity);
+        self.lines.push(line);
+        self.lines.push(line);
+        self.lines.push(line);
+    }
+    pub fn write_short_op(&mut self, op: Op, short: u16, line: u16) {
+        self.code.push(op as u8);
+        self.code.push((short >> 8) as u8);
+        self.code.push(short as u8);
+        self.lines.push(line);
+        self.lines.push(line);
+        self.lines.push(line);
+    }
+
     pub fn read_byte(&self, index: usize) -> u8 {
         self.code[index]
     }

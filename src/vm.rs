@@ -91,7 +91,7 @@ pub struct VM {
 
 impl VM {
     pub fn new(mut heap: Heap) -> Self {
-        let init_string = heap.intern("init");
+        let init_string = heap.intern_copy("init");
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
@@ -197,7 +197,7 @@ impl VM {
     }
 
     fn define_native(&mut self, name: &str, native_fn: Native) {
-        let key = self.heap.intern(name);
+        let key = self.heap.intern_copy(name);
         self.push(Value::from(key));
         let value = Value::from(self.new_obj(native_fn));
         self.globals.set(key, value);
@@ -322,7 +322,7 @@ impl VM {
         let mut c = String::new();
         c.push_str(a);
         c.push_str(b);
-        Value::from(self.heap.intern(&c))
+        Value::from(self.heap.intern(c))
     }
 
     // combined to avoid gc errors

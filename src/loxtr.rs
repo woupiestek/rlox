@@ -21,6 +21,12 @@ impl Loxtr {
             chars: Box::from(str),
         }
     }
+    pub fn take(str: String) -> Self {
+        Self {
+            hash: hash_str(&str),
+            chars: Box::from(str),
+        }
+    }
     pub fn hash_code(&self) -> u64 {
         self.hash
     }
@@ -57,6 +63,6 @@ mod tests {
         let value = table.find_key("str");
         assert!(value.is_some());
         assert_eq!(value.unwrap(), key);
-        assert_eq!(heap.intern("str"), heap.intern("str"));
+        assert_eq!(heap.intern_copy("str"), heap.intern_copy("str"));
     }
 }

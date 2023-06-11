@@ -1,5 +1,13 @@
 # Rlox
 
+## 2023-06-11
+
+### globals and repls
+
+Globals could simply be kept on the stack, and subsequent scripts compiled to rever to 
+those entries. So the stack is not entirely cleaned between repl entries, and accessing globals
+gives a compile time error, instead of a run time error. Dry solutions.
+
 ## 2023-06-09
 
 - one stack of locals
@@ -30,9 +38,9 @@ Made it work with unsafe pointers. O well.
 
 - ~~add README~~
 - ~~add to munificents list~~
-- reddit?
+- ~~reddit?~~
 - one stack of locals
-- & mut instead of Box for compilers
+- ~~& mut instead of Box for compilers~~
 
 ### gc thoughts
 

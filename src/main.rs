@@ -53,7 +53,7 @@ fn main() {
         1 => repl(&mut vm),
         2 => run_file(&args[1], &mut vm),
         _ => {
-            eprintln!("Usage: clox [path]\n");
+            eprintln!("Usage: rlox [path]\n");
             exit(64);
         }
     }

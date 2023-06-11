@@ -5,4 +5,3 @@ edition = "2021"
 [features]
 trace = []
 log_gc = []
-check_byte_count = []

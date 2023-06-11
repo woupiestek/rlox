@@ -186,7 +186,7 @@ mod tests {
     pub fn set_and_get() {
         let mut heap = Heap::new();
         let mut table = Table::new();
-        let key = heap.intern("name");
+        let key = heap.intern_copy("name");
         let handle = Handle::from(key);
         assert_eq!(handle.kind(), Kind::String);
         assert_eq!(key.is_marked(), false);

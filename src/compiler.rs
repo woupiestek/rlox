@@ -249,15 +249,27 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_return(&mut self) {
         if self.function_type == FunctionType::Initializer {
-            self.emit_bytes(&[Op::GetLocal as u8, 0, Op::Return as u8]);
+            self.emit_byte_op(Op::GetLocal, 0);
         } else {
-            self.emit_bytes(&[Op::Nil as u8, Op::Return as u8]);
+            self.emit_op(Op::Nil);
         }
+        self.emit_op(Op::Return);
     }
 
-    fn emit_bytes(&mut self, bytes: &[u8]) {
+    fn emit_byte_op(&mut self, op: Op, byte: u8) {
         let line = self.source.previous_token.line;
-        self.current_chunk().write(bytes, line);
+        self.current_chunk().write_byte_op(op, byte, line);
+    }
+
+    fn emit_short_op(&mut self, op: Op, short: u16) {
+        let line = self.source.previous_token.line;
+        self.current_chunk().write_short_op(op, short, line);
+    }
+
+    fn emit_invoke_op(&mut self, op: Op, constant: u8, arity: u8) {
+        let line = self.source.previous_token.line;
+        self.current_chunk()
+            .write_invoke_op(op, constant, arity, line);
     }
 
     fn emit_op(&mut self, op: Op) {
@@ -270,19 +282,19 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if offset > u16::MAX as usize {
             err!("loop size to large")
         } else {
-            self.emit_bytes(&[Op::Loop as u8, (offset >> 8) as u8, offset as u8]);
+            self.emit_short_op(Op::Loop, offset as u16);
             Ok(())
         }
     }
 
     fn emit_jump(&mut self, instruction: Op) -> usize {
-        self.emit_bytes(&[instruction as u8, 0xff, 0xff]);
+        self.emit_short_op(instruction, 0xffff);
         self.current_chunk().count() - 2
     }
 
     fn emit_constant(&mut self, value: Value) -> Result<(), String> {
         let make_constant = self.current_chunk().add_constant(value)?;
-        self.emit_bytes(&[Op::Constant as u8, make_constant]);
+        self.emit_byte_op(Op::Constant, make_constant);
         Ok(())
     }
 
@@ -304,11 +316,11 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                     }
                 }
             };
-            self.emit_bytes(&[if is_captured {
+            self.emit_op(if is_captured {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
-            } as u8]);
+            });
             self.locals.pop();
         }
     }
@@ -346,7 +358,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         match self.source.previous_token_type() {
             TokenType::BangEqual => {
                 self.parse_precedence(Prec::Equality)?;
-                self.emit_bytes(&[Op::Equal as u8, Op::Not as u8])
+                self.emit_op(Op::Equal);
+                self.emit_op(Op::Not);
             }
             TokenType::EqualEqual => {
                 self.parse_precedence(Prec::Equality)?;
@@ -358,7 +371,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             }
             TokenType::GreaterEqual => {
                 self.parse_precedence(Prec::Equality)?;
-                self.emit_bytes(&[Op::Less as u8, Op::Not as u8])
+                self.emit_op(Op::Less);
+                self.emit_op(Op::Not);
             }
             TokenType::Less => {
                 self.parse_precedence(Prec::Equality)?;
@@ -366,7 +380,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             }
             TokenType::LessEqual => {
                 self.parse_precedence(Prec::Equality)?;
-                self.emit_bytes(&[Op::Greater as u8, Op::Not as u8])
+                self.emit_op(Op::Greater);
+                self.emit_op(Op::Not);
             }
             TokenType::Plus => {
                 self.parse_precedence(Prec::Factor)?;
@@ -391,7 +406,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn call(&mut self) -> Result<(), String> {
         let arity = self.argument_list()?;
-        self.emit_bytes(&[Op::Call as u8, arity]);
+        self.emit_byte_op(Op::Call, arity);
         Ok(())
     }
 
@@ -399,12 +414,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let index = self.identifier_constant("Expect property name after '.'.")?;
         if can_assign && self.source.match_type(TokenType::Equal) {
             self.expression()?;
-            self.emit_bytes(&[Op::SetProperty as u8, index])
+            self.emit_byte_op(Op::SetProperty, index)
         } else if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
-            self.emit_bytes(&[Op::Invoke as u8, index, arity]);
+            self.emit_invoke_op(Op::Invoke, index, arity);
         } else {
-            self.emit_bytes(&[Op::GetProperty as u8, index]);
+            self.emit_byte_op(Op::GetProperty, index);
         };
         Ok(())
     }
@@ -431,7 +446,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn string(&mut self) -> Result<(), String> {
         let lexeme = self.source.lexeme();
-        let value = Value::from(self.source.heap.intern(&lexeme[1..lexeme.len() - 1]));
+        let value = Value::from(self.source.heap.intern_copy(&lexeme[1..lexeme.len() - 1]));
         self.emit_constant(value)
     }
 
@@ -439,21 +454,21 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn variable(&mut self, name: &'src str, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
             if let Some(arg) = self.resolve_local(name)? {
-                (arg, Op::GetLocal as u8, Op::SetLocal as u8)
+                (arg, Op::GetLocal, Op::SetLocal)
             } else if let Some(arg) = self.resolve_upvalue(name)? {
-                (arg, Op::GetUpvalue as u8, Op::SetUpvalue as u8)
+                (arg, Op::GetUpvalue, Op::SetUpvalue)
             } else {
-                let value = Value::from(self.source.heap.intern(name));
+                let value = Value::from(self.source.heap.intern_copy(name));
                 let arg = self.current_chunk().add_constant(value)?;
-                (arg, Op::GetGlobal as u8, Op::SetGlobal as u8)
+                (arg, Op::GetGlobal, Op::SetGlobal)
             }
         };
 
         if can_assign && self.source.match_type(TokenType::Equal) {
             self.expression()?;
-            self.emit_bytes(&[set, arg]);
+            self.emit_byte_op(set, arg);
         } else {
-            self.emit_bytes(&[get, arg]);
+            self.emit_byte_op(get, arg);
         }
         Ok(())
     }
@@ -472,10 +487,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
             self.variable("super", false)?;
-            self.emit_bytes(&[Op::SuperInvoke as u8, index, arity]);
+            self.emit_invoke_op(Op::SuperInvoke, index, arity);
         } else {
             self.variable("super", false)?;
-            self.emit_bytes(&[Op::GetSuper as u8, index]);
+            self.emit_byte_op(Op::GetSuper, index);
         }
         Ok(())
     }
@@ -572,7 +587,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn define_variable(&mut self, global: u8) {
         if !self.mark_initialized() {
-            self.emit_bytes(&[Op::DefineGlobal as u8, global])
+            self.emit_byte_op(Op::DefineGlobal, global)
         }
     }
 
@@ -583,8 +598,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn grouping(&mut self) -> Result<(), String> {
         self.expression()?;
         self.source
-            .consume(TokenType::RightParen, "Expect ')' after expression.")?;
-        Ok(())
+            .consume(TokenType::RightParen, "Expect ')' after expression.")
     }
 
     fn function_body(&mut self) -> Result<(), String> {
@@ -615,7 +629,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = self.source.lexeme();
-        let name = self.source.heap.intern(name);
+        let name = self.source.heap.intern_copy(name);
         let mut function = self.source.heap.store(Function::new(Some(name)));
         let mut compiler = Compiler::new(function_type, function, self.source.clone());
         compiler.enclosing = StackRef::new(self);
@@ -629,10 +643,11 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .heap
             .increase_byte_count(function.byte_count() - before);
         let index = self.current_chunk().add_constant(Value::from(function))?;
-        self.emit_bytes(&[Op::Closure as u8, index]);
-
+        self.emit_byte_op(Op::Closure, index);
         for upvalue in upvalues {
-            self.emit_bytes(&[upvalue.is_local as u8, upvalue.index]);
+            let line = self.source.previous_token.line;
+            self.current_chunk()
+                .write(&[upvalue.is_local as u8, upvalue.index], line);
         }
         Ok(())
     }
@@ -648,7 +663,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         };
         let intern = self.intern(name)?;
         self.function(function_type)?;
-        self.emit_bytes(&[Op::Method as u8, intern]);
+        self.emit_byte_op(Op::Method, intern);
         Ok(())
     }
 
@@ -658,7 +673,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let class_name = self.source.previous_token;
         self.declare_variable(class_name)?;
         let index = self.intern(class_name.lexeme)?;
-        self.emit_bytes(&[Op::Class as u8, index]);
+        self.emit_byte_op(Op::Class, index);
         self.define_variable(index);
 
         if self.source.class_depth == 127 {
@@ -858,7 +873,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn intern(&mut self, name: &'src str) -> Result<u8, String> {
-        let value = Value::from(self.source.heap.intern(name));
+        let value = Value::from(self.source.heap.intern_copy(name));
         self.current_chunk().add_constant(value)
     }
 
@@ -983,12 +998,12 @@ impl<'src, 'hp> Source<'src, 'hp> {
         }
     }
 
-    fn consume<'b>(&mut self, token_type: TokenType, msg: &'b str) -> Result<(), &'b str> {
+    fn consume<'b>(&mut self, token_type: TokenType, msg: &'b str) -> Result<(), String> {
         if self.check(token_type) {
             self.advance();
             Ok(())
         } else {
-            Err(msg)
+            err!("{}",msg)
         }
     }
 

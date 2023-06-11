@@ -191,11 +191,21 @@ impl Heap {
         self.byte_count += diff;
     }
 
-    pub fn intern(&mut self, name: &str) -> GC<Loxtr> {
+    pub fn intern_copy(&mut self, name: &str) -> GC<Loxtr> {
         if let Some(gc) = self.string_pool.find_key(name) {
             gc
         } else {
             let gc = self.store(Loxtr::copy(name));
+            self.string_pool.set(gc, ());
+            gc
+        }
+    }
+
+    pub fn intern(&mut self, name: String) -> GC<Loxtr> {
+        if let Some(gc) = self.string_pool.find_key(&name) {
+            gc
+        } else {
+            let gc = self.store(Loxtr::take(name));
             self.string_pool.set(gc, ());
             gc
         }
@@ -347,7 +357,7 @@ mod tests {
     #[test]
     fn store_empty_string() {
         let mut heap = Heap::new();
-        heap.intern("");
+        heap.intern_copy("");
     }
 
     fn first(_args: &[Value]) -> Result<Value, String> {
