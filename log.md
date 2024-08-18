@@ -132,13 +132,23 @@ same, carefully adjusted to the needs of the cache.
 
 ### special array support
 
-If ever needed, the object tables support arrays-as-slices again: asumming that 
+If ever needed, the object tables support arrays-as-slices again: asumming that
 and array of objects can always be allocated to have adjacent indices in this
 new style heap, an array just needs a class, a length and a start index.
 
-This an idea about a new kind of object: just have a table of properties, and point to the
-start of the object in that table. It won't work if objects can gain new members, of course.
-It might work for classes in rlox, though, since the list of methods is fixed.
+This an idea about a new kind of object: just have a table of properties, and
+point to the start of the object in that table. It won't work if objects can
+gain new members, of course. It might work for classes in rlox, though, since
+the list of methods is fixed.
+
+### key set class
+
+Perhaps the table should be split into a keyset and an array of values. The
+keyset serves as string pool. The array of values is kind of a side show in most
+cases, and perhaps could benefit from specialization. Like the `table<value>`
+could eventually be a `(keyset, tags, union { pointer, f64, ... })`.
+
+Lox strings are special anyway, so maybe build their memory manager first.
 
 ## 2023-06-11
 

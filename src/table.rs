@@ -4,23 +4,18 @@ use crate::{
     object::{Closure, Value},
 };
 
-#[derive(Clone, Debug)]
-enum Entry<V: Clone> {
+#[derive(Clone, Copy, Debug)]
+enum Key {
     Empty,
-    Taken { key: GC<Loxtr>, value: V },
+    Taken { name: GC<Loxtr> },
     Tombstone,
-}
-
-impl<V: Clone> Entry<V> {
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty | Self::Tombstone)
-    }
 }
 
 pub struct Table<V: Clone> {
     count: usize,
     capacity: usize,
-    entries: Box<[Entry<V>]>,
+    keys: Box<[Key]>,
+    values: Box<[Option<V>]>,
 }
 
 impl<V: Clone> Table<V> {
@@ -29,7 +24,8 @@ impl<V: Clone> Table<V> {
         Self {
             count: 0,
             capacity: 0,
-            entries: Box::from([]),
+            keys: Box::from([]),
+            values: Box::from([]),
         }
     }
 
@@ -37,34 +33,38 @@ impl<V: Clone> Table<V> {
         self.capacity
     }
 
-    fn find(entries: &[Entry<V>], mask: usize, key: GC<Loxtr>) -> usize {
+    fn find(keys: &[Key], mask: usize, key: GC<Loxtr>) -> usize {
         let mut index = key.hash_code() as usize & mask;
         let mut tombstone: Option<usize> = None;
         loop {
-            match entries[index] {
-                Entry::Empty => return tombstone.unwrap_or(index),
-                Entry::Taken { key: k, value: _ } => {
-                    if k == key {
+            match keys[index] {
+                Key::Empty => return tombstone.unwrap_or(index),
+                Key::Taken { name } => {
+                    if name == key {
                         return index;
                     }
                 }
-                Entry::Tombstone => tombstone = Some(index),
+                Key::Tombstone => tombstone = Some(index),
             }
             index = (index + 1) & mask;
         }
     }
 
     fn grow(&mut self, capacity: usize) {
-        let mut entries: Box<[Entry<V>]> = vec![Entry::Empty; capacity].into_boxed_slice();
+        let mut keys: Box<[Key]> = vec![Key::Empty; capacity].into_boxed_slice();
+        let mut values: Box<[Option<V>]> = vec![None; capacity].into_boxed_slice();
         let mask = capacity - 1;
         self.count = 0;
-        for entry in self.entries.iter() {
-            if let Entry::Taken { key, value: _ } = entry {
-                entries[Self::find(&entries, mask, *key)] = entry.clone();
+        for i in 0..self.keys.len() {
+            if let Key::Taken { name } = self.keys[i] {
+                let j = Self::find(&keys, mask, name);
+                keys[j] = self.keys[i];
+                values[j] = self.values[i].clone();
                 self.count += 1;
             }
         }
-        self.entries = entries;
+        self.keys = keys;
+        self.values = values;
         self.capacity = capacity;
     }
 
@@ -72,12 +72,9 @@ impl<V: Clone> Table<V> {
         if self.count == 0 {
             return None;
         }
-        if let Entry::Taken { key: _, value } =
-            &self.entries[Self::find(&self.entries, self.capacity - 1, key)]
-        {
-            Some(value.clone())
-        } else {
-            None
+        match &self.values[Self::find(&self.keys, self.capacity - 1, key)] {
+            Some(v) => Some(v.clone()),
+            None => None
         }
     }
 
@@ -89,12 +86,13 @@ impl<V: Clone> Table<V> {
                 self.capacity * 2
             })
         }
-        let index = Self::find(&self.entries, self.capacity - 1, key);
-        let is_new_key = self.entries[index].is_empty();
+        let index = Self::find(&self.keys, self.capacity - 1, key);
+        let is_new_key = self.values[index].is_none();
+        self.values[index] = Some(value);
         if is_new_key {
+            self.keys[index] = Key::Taken { name: key };
             self.count += 1;
         }
-        self.entries[index] = Entry::Taken { key, value };
         is_new_key
     }
 
@@ -102,41 +100,44 @@ impl<V: Clone> Table<V> {
         if self.count == 0 {
             return false;
         }
-        let index = Self::find(&self.entries, self.capacity - 1, key);
-        let key_existed = !self.entries[index].is_empty();
-        self.entries[index] = Entry::Tombstone;
-        key_existed
+        let index = Self::find(&self.keys, self.capacity - 1, key);
+        if self.values[index].is_none() {
+            return false;
+        }
+        self.keys[index] = Key::Tombstone;
+        self.values[index] = None;
+        true
     }
 
     pub fn set_all(&mut self, other: &Table<V>) {
         if self.capacity < other.capacity {
             self.grow(other.capacity)
         }
-        for entry in other.entries.iter() {
-            if let Entry::Taken { key, value } = entry {
-                self.set(*key, value.clone());
+        for i in 0..other.keys.len() {
+            if let Key::Taken { name } = other.keys[i] {
+                if let Some(v) = &other.values[i] {
+                    self.set(name, v.clone());
+                }
             }
         }
     }
 }
 
 impl Table<GC<Closure>> {
+    // trace: and keys have no properties to trace
     pub fn trace(&self, collector: &mut Vec<Handle>) {
-        for entry in self.entries.iter() {
-            if let Entry::Taken { key: _, value } = entry {
+        for value in self.values.iter() {
+            if let Some(value) = value {
                 collector.push(Handle::from(*value))
             }
         }
     }
 }
 impl Table<Value> {
+    // trace: and keys have no properties to trace
     pub fn trace(&self, collector: &mut Vec<Handle>) {
-        for entry in self.entries.iter() {
-            if let Entry::Taken {
-                key: _,
-                value: Value::Object(handle),
-            } = entry
-            {
+        for value in self.values.iter() {
+            if let Some(Value::Object(handle)) = value {
                 collector.push(*handle)
             }
         }
@@ -146,9 +147,10 @@ impl Table<Value> {
 impl Table<()> {
     pub fn sweep(&mut self) {
         for index in 0..self.capacity {
-            if let Entry::Taken { key, value: _ } = self.entries[index] {
-                if !key.is_marked() {
-                    self.entries[index] = Entry::Tombstone
+            if let Key::Taken { name } = self.keys[index] {
+                if !name.is_marked() {
+                    self.keys[index] = Key::Tombstone;
+                    self.values[index] = None;
                 }
             }
         }
@@ -162,14 +164,14 @@ impl Table<()> {
         let mask = self.capacity - 1;
         let mut index = hash as usize & mask;
         loop {
-            match self.entries[index] {
-                Entry::Empty => return None,
-                Entry::Taken { key, value: _ } => {
-                    if key.as_ref() == str {
-                        return Some(key);
+            match self.keys[index] {
+                Key::Empty => return None,
+                Key::Taken { name } => {
+                    if name.as_ref() == str {
+                        return Some(name);
                     }
                 }
-                Entry::Tombstone => (),
+                Key::Tombstone => (),
             }
             index = (index + 1) & mask;
         }
