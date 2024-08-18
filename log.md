@@ -1,12 +1,96 @@
 # Rlox
 
+## 2024-08-18
+
+Some fresh ideas:
+
+- https://www.youtube.com/watch?v=IroPQ150F6c
+- https://floooh.github.io/2018/06/17/handles-vs-pointers.html#:~:text=Handles%20are%20the%20better%20pointers%201%20Move%20memory,Some%20real-world%20examples%20...%207%20Update%2028-Nov-2018%20
+
+Instead of allocating many small objects, allocate an array for each field of
+each class. Indices are used as pointers, so it is important that by class the
+fields of each object are stored at the same index.
+
+Interesting to consider how memory could be managed by class: garbage collection
+happens for a speciifc class when its field tables run out of memory, instead of
+for all objects at once. Moving object to a new table is natural, changing the
+index is not, but perhaps 'freed memory' could just be stored in a stack by
+class, and be used for new allocations. Reference counting might be easier as
+well...
+
+This inspires a language feature to indicate an allocation limit per class: a
+singleton does not need a table, and if only a small number of allocations are
+expected, the system could produce smaller pointers for such objects and smaller
+tables.
+
+Hashes instead of indices? Hashes are only nice for immutable objects! Even
+then, the indices would change if the tables had to grow in size.
+
+Of course, arrays as data types become a different matter: and array valued
+field would still contain actual pointers. I suppose the fat pointer idea
+applies here: the field would actually be stored as two fields, one for
+array_size and another for array_content. Similarly, generic fields could be
+broken down into a class and an instance field, and tagged unions into a tag and
+a data field. Dependent type style implementation.
+
+If this was a good idea, then has nobody tried it yet? Perhaps functional
+programming is better served this way.
+
+What about the stacks? In particular the call stack can be broken up into
+seperate arrays of instruction and stack pointers.
+
+Rlox values are tagged unions! So have two operand stacks, one for the tags and
+one for the data. Perhaps give another shot to using tags for different kinds of
+object in rlox: the data array could be a unions of different types, and be 8
+bytes, while the tags are 1 byte, and sometimes contain more relevant data in
+that one byte.
+
+Note: the compiler now allocates seperate chunks of code. It could also be just
+one big array of 'instructions'... that would make instruction pointers longer,
+though.
+
+The string pool feels like a justification for just putting every type into its
+own pool.
+
+I get the feeling this may be a way out of much unsafe code, and the tangle of
+dependencies inherited from clox.
+
+### details
+
+To get an indication of the tables that need to be build:
+
+- BoundMethod: instance: Instance, method: Closure
+- Class: name: String, methods: Table<Closure>
+- Closure: function: Function, upvalues: Vec<Upvalue>
+- Function: name: String, arity: int, upvalue_count: number, chunk: chunk
+- Instance: class: Class, properties: Table<Value>
+- Native: function_pointer: usize
+- String: hash: int64, content: Box<str>
+- Open Upvalue: stack pointer + pointer to next open upvalue (because a linked
+  list is used here)
+- Closed Upvalue: value
+
+- Value: tag: Nil, True, False, Number, Object... value: f64|usize
+-
+
+Upvalues are tricky. Perhaps a different set up could lead to a simpler
+solution. using a bit to decide between stack and heap pointer might work.
+
+So one set of tags for values, with all cases getting their own stack pointer
+variant, a only one separate tag for open upvalues, as the stack pointer tells
+the tag of the value there.
+
+One more thing. Apply this to collections, and the result get weird. A table for
+the 5th element would have many empty slots. That is not the way.
+
 ## 2023-06-11
 
 ### globals and repls
 
-Globals could simply be kept on the stack, and subsequent scripts compiled to rever to 
-those entries. So the stack is not entirely cleaned between repl entries, and accessing globals
-gives a compile time error, instead of a run time error. Dry solutions.
+Globals could simply be kept on the stack, and subsequent scripts compiled to
+rever to those entries. So the stack is not entirely cleaned between repl
+entries, and accessing globals gives a compile time error, instead of a run time
+error. Dry solutions.
 
 ## 2023-06-09
 
@@ -649,7 +733,7 @@ though. Ok, don't register the ids, put them in the Traceble trait, perhaps
 check that there are no duplicates.
 
 Dispatch is unavoidable, since we need to map the reified types back to their
-originals, with .is_<type> and .as_<type> methods. maybe we can do that with a
+originals, with .is*<type> and .as*<type> methods. maybe we can do that with a
 table lookup once, and just generate the code for each type.
 
 Where would be put this? `register!(kind, Type, is_type, as_type)`

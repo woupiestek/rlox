@@ -275,7 +275,7 @@ impl Display for BoundMethod {
         self.method.fmt(f)
     }
 }
-// perhaps Native should
+
 #[derive(Copy, Clone)]
 pub struct Native(pub fn(args: &[Value]) -> Result<Value, String>);
 
