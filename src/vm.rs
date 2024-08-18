@@ -1,7 +1,8 @@
 use std::time;
 
 use crate::{
-    chunk::{Chunk, Op},
+    call_stack::{CallStack, MAX_FRAMES},
+    chunk::Op,
     common::U8_COUNT,
     compiler::compile,
     loxtr::Loxtr,
@@ -10,7 +11,6 @@ use crate::{
     table::Table,
 };
 
-const MAX_FRAMES: usize = 0x40;
 const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
 
 fn clock_native(_args: &[Value]) -> Result<Value, String> {
@@ -21,52 +21,6 @@ fn clock_native(_args: &[Value]) -> Result<Value, String> {
 }
 
 const CLOCK_NATIVE: Native = Native(clock_native);
-
-struct CallFrame {
-    ip: isize,
-    slots: usize,
-    closure: GC<Closure>,
-}
-
-impl CallFrame {
-    fn new(slots: usize, closure: GC<Closure>) -> Self {
-        Self {
-            ip: -1,
-            slots,
-            closure,
-        }
-    }
-    fn chunk(&self) -> &Chunk {
-        &self.closure.function.chunk
-    }
-    fn read_byte(&mut self) -> u8 {
-        self.ip += 1;
-        self.chunk().read_byte(self.ip as usize)
-    }
-
-    fn jump_forward(&mut self) {
-        self.ip += self.chunk().read_short(self.ip as usize + 1) as isize;
-    }
-
-    fn jump_back(&mut self) {
-        self.ip -= self.chunk().read_short(self.ip as usize + 1) as isize;
-    }
-
-    fn read_constant(&mut self) -> Value {
-        self.ip += 1;
-        self.chunk().read_constant(self.ip as usize)
-    }
-
-    fn read_string(&mut self) -> Result<GC<Loxtr>, String> {
-        let value = self.read_constant();
-        Loxtr::nullable(value).ok_or_else(|| format!("'{}' is not a string", value))
-    }
-
-    fn read_upvalue(&mut self) -> GC<Upvalue> {
-        let read_byte = self.read_byte() as usize;
-        self.closure.upvalues[read_byte]
-    }
-}
 
 macro_rules! binary_op {
     ($self:ident, $a:ident, $b:ident, $value:expr) => {{
@@ -82,7 +36,7 @@ macro_rules! binary_op {
 pub struct VM {
     values: [Value; STACK_SIZE],
     stack_top: usize,
-    frames: Vec<CallFrame>,
+    call_stack: CallStack,
     open_upvalues: Option<GC<Upvalue>>,
     globals: Table<Value>,
     init_string: GC<Loxtr>,
@@ -95,7 +49,8 @@ impl VM {
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
-            frames: Vec::with_capacity(MAX_FRAMES),
+            call_stack: CallStack::new(),
+            // frames: Vec::with_capacity(MAX_FRAMES),
             open_upvalues: None,
             globals: Table::new(),
             init_string,
@@ -172,8 +127,10 @@ impl VM {
         {
             println!("collect frames");
         }
-        for frame in &self.frames {
-            collector.push(Handle::from(frame.closure))
+        for option in &self.call_stack.closures {
+            if let Some(closure) = option {
+                collector.push(Handle::from(*closure))
+            };
         }
         #[cfg(feature = "log_gc")]
         {
@@ -226,13 +183,8 @@ impl VM {
                 arity
             );
         }
-
-        if self.frames.len() == MAX_FRAMES {
-            return err!("Stack overflow.");
-        }
-        self.frames
-            .push(CallFrame::new(self.stack_top - arity as usize - 1, closure));
-        Ok(())
+        self.call_stack
+            .push(self.stack_top - arity as usize - 1, closure)
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
@@ -332,14 +284,9 @@ impl VM {
         obj
     }
 
-    fn top_frame(&mut self) -> &mut CallFrame {
-        let index = self.frames.len() - 1;
-        &mut self.frames[index]
-    }
-
     fn run(&mut self) -> Result<(), String> {
         loop {
-            let instruction = Op::try_from(self.top_frame().read_byte())?;
+            let instruction = Op::try_from(self.call_stack.read_byte())?;
             #[cfg(feature = "trace")]
             {
                 print!("stack: ");
@@ -384,11 +331,11 @@ impl VM {
                     }
                 }
                 Op::Call => {
-                    let arity = self.top_frame().read_byte();
+                    let arity = self.call_stack.read_byte();
                     self.call_value(self.peek(arity as usize), arity)?;
                 }
                 Op::Class => {
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     self.push_traceable(Class::new(name));
                 }
                 Op::CloseUpvalue => {
@@ -396,28 +343,28 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = GC::from(self.top_frame().read_constant());
+                    let function = GC::from(self.call_stack.read_constant());
                     let mut closure = self.push_traceable(Closure::new(function));
                     let before_count = closure.byte_count();
                     for _ in 0..function.upvalue_count {
-                        let is_local = self.top_frame().read_byte();
-                        let index = self.top_frame().read_byte() as usize;
+                        let is_local = self.call_stack.read_byte();
+                        let index = self.call_stack.read_byte() as usize;
                         closure.upvalues.push(if is_local > 0 {
-                            let location = self.top_frame().slots + index;
+                            let location = self.call_stack.slot() + index;
                             self.capture_upvalue(location)
                         } else {
-                            self.top_frame().closure.upvalues[index]
+                            self.call_stack.upvalue(index)?
                         })
                     }
                     self.heap
                         .increase_byte_count(closure.byte_count() - before_count)
                 }
                 Op::Constant => {
-                    let value = self.top_frame().read_constant();
+                    let value = self.call_stack.read_constant();
                     self.push(value)
                 }
                 Op::DefineGlobal => {
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     self.globals.set(name, self.peek(0));
                     self.pop();
                 }
@@ -429,7 +376,7 @@ impl VM {
                 }
                 Op::False => self.push(Value::False),
                 Op::GetGlobal => {
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     if let Some(value) = self.globals.get(name) {
                         self.push(value);
                     } else {
@@ -437,14 +384,14 @@ impl VM {
                     }
                 }
                 Op::GetLocal => {
-                    let index = self.top_frame().slots + self.top_frame().read_byte() as usize;
+                    let index = self.call_stack.slot() + self.call_stack.read_byte() as usize;
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
                     let value = self.peek(0);
                     let instance = Instance::nullable(value)
                         .ok_or(String::from("Only instances have properties."))?;
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     if let Some(value) = instance.properties.get(name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
@@ -453,12 +400,12 @@ impl VM {
                     }
                 }
                 Op::GetSuper => {
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     let super_class = GC::from(self.pop());
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
-                    let value = match *self.top_frame().read_upvalue() {
+                    let value = match *(self.call_stack.read_upvalue()?) {
                         Upvalue::Open(index, _) => self.values[index],
                         Upvalue::Closed(value) => value,
                     };
@@ -481,22 +428,22 @@ impl VM {
                     }
                 }
                 Op::Invoke => {
-                    let name = self.top_frame().read_string()?;
-                    let arity = self.top_frame().read_byte();
+                    let name = self.call_stack.read_string()?;
+                    let arity = self.call_stack.read_byte();
                     self.invoke(name, arity)?;
                 }
-                Op::Jump => self.top_frame().jump_forward(),
+                Op::Jump => self.call_stack.jump_forward(),
                 Op::JumpIfFalse => {
                     if self.peek(0).is_falsey() {
-                        self.top_frame().jump_forward();
+                        self.call_stack.jump_forward();
                     } else {
-                        self.top_frame().ip += 2;
+                        self.call_stack.skip();
                     }
                 }
                 Op::Less => binary_op!(self, a, b, a < b),
-                Op::Loop => self.top_frame().jump_back(),
+                Op::Loop => self.call_stack.jump_back(),
                 Op::Method => {
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     self.define_method(name)?
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
@@ -518,10 +465,10 @@ impl VM {
                 Op::Print => println!("{}", self.pop()),
                 Op::Return => {
                     let result = self.pop();
-                    let location = self.top_frame().slots;
+                    let location = self.call_stack.slot();
                     self.close_upvalues(location);
-                    self.frames.pop();
-                    if self.frames.is_empty() {
+                    self.call_stack.pop();
+                    if self.call_stack.is_empty() {
                         self.pop();
                         return Ok(());
                     }
@@ -529,22 +476,22 @@ impl VM {
                     self.push(result);
                 }
                 Op::SetGlobal => {
-                    let name = self.top_frame().read_string()?;
+                    let name = self.call_stack.read_string()?;
                     if self.globals.set(name, self.peek(0)) {
                         self.globals.delete(name);
                         return err!("Undefined variable '{}'.", *name);
                     }
                 }
                 Op::SetLocal => {
-                    let index = self.top_frame().read_byte() as usize;
-                    self.values[self.top_frame().slots + index] = self.peek(0);
+                    let index = self.call_stack.read_byte() as usize;
+                    self.values[self.call_stack.slot() + index] = self.peek(0);
                 }
                 Op::SetProperty => {
                     if let &[a, b] = self.tail(2)? {
                         let mut instance = Instance::nullable(a)
                             .ok_or(String::from("Only instances have fields."))?;
                         let before_count = instance.byte_count();
-                        instance.properties.set(self.top_frame().read_string()?, b);
+                        instance.properties.set(self.call_stack.read_string()?, b);
                         self.heap
                             .increase_byte_count(instance.byte_count() - before_count);
                         self.stack_top -= 2;
@@ -552,7 +499,7 @@ impl VM {
                     }
                 }
                 Op::SetUpvalue => {
-                    let mut upvalue = self.top_frame().read_upvalue();
+                    let mut upvalue = self.call_stack.read_upvalue()?;
                     match *upvalue {
                         Upvalue::Closed(_) => *upvalue = Upvalue::Closed(self.peek(0)),
                         Upvalue::Open(index, _) => self.values[index] = self.peek(0),
@@ -560,8 +507,8 @@ impl VM {
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
-                    let name = self.top_frame().read_string()?;
-                    let arity = self.top_frame().read_byte();
+                    let name = self.call_stack.read_string()?;
+                    let arity = self.call_stack.read_byte();
                     let super_class = GC::from(self.pop());
                     self.invoke_from_class(super_class, name, arity)?;
                 }
@@ -592,12 +539,14 @@ impl VM {
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
-            while let Some(frame) = &self.frames.pop() {
-                eprintln!(
-                    "  at {} line {}",
-                    *frame.closure.function,
-                    frame.chunk().lines[frame.ip as usize]
-                )
+            for i in 0..self.call_stack.top {
+                if let Some(closure) = self.call_stack.closures[i as usize] {
+                    eprintln!(
+                        "  at {} line {}",
+                        *closure.function,
+                        closure.function.chunk.lines[self.call_stack.ips[i as usize] as usize]
+                    )
+                }
             }
             self.reset_stack();
             err!("Runtime error!")

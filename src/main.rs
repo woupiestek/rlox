@@ -17,6 +17,7 @@ mod table;
 mod memory;
 mod object;
 mod scanner;
+mod call_stack;
 mod vm;
 
 fn repl(vm: &mut VM) {
