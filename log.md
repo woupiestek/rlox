@@ -83,6 +83,63 @@ the tag of the value there.
 One more thing. Apply this to collections, and the result get weird. A table for
 the 5th element would have many empty slots. That is not the way.
 
+### garbage collection
+
+Note: clox has all memory would be managed explicitly, and builds a system that
+does that for all memory including compile time objects. Rlox uses both the
+compile time management, and the stuff present in collections. The cycle
+ultimately works like this:
+
+- the vm asks needs_gc, which is based on a rising threshold for allocated bytes
+- if yes, a mark and sweep is done to free up memory.
+
+The data oriented system would have preallocated space for each object, so a
+quick response with any unused row should be possible. When no unused rows are
+left a bulk optimisation is done. When does actual garbage collection happen
+then?
+
+If any of the class tables is full, the first step may still be a mark & sweep,
+that results in a list of free rows for each class. Afterwards, new allocations
+go into these free rows: the indices can be stored in a 'freed' list, that is
+exhausted before using new rows. Only if mark and sweep does not help here, then
+a new table is allocated and all objects are moved. Is that the way?
+
+Note how mark and sweep needs to go through all memory anyway, even if only one
+type of object is full. And it can fail to free memory, at which point a huge
+chunk of memory needs to be moved.
+
+Perhaps it is beter to change the indices: to mark objects, copy them into new
+tables, while keeping track of the changes in indices.
+
+Stick closer to the original: have an extra column to tell which rows are empty.
+Then when space is needed, use this column to find it. There could be a cursor,
+to keep track of promising places to look for space, or maybe a smart search
+function (bloom filter?), that doesn't have to check each indivual row to find
+an empty one.
+
+Scattering data may decrease searches for free space, but increase cache misses.
+I have no idea how to test either.
+
+Note the new issue, which is that we need to move an entire table on some
+cycles, reallocating all object of a class. Instead,
+
+Instead of doing by object allocation, the system does a big allocation upfront
+and again when capacity runs out. Of course, it could still be incremental: the
+top level could just be a list of tables that maybe double in size. Allocating
+extra space just means allocating an extra table. No objects actually move. The
+resolution used a two part pointer. The size of the tables could also be the
+same, carefully adjusted to the needs of the cache.
+
+### special array support
+
+If ever needed, the object tables support arrays-as-slices again: asumming that 
+and array of objects can always be allocated to have adjacent indices in this
+new style heap, an array just needs a class, a length and a start index.
+
+This an idea about a new kind of object: just have a table of properties, and point to the
+start of the object in that table. It won't work if objects can gain new members, of course.
+It might work for classes in rlox, though, since the list of methods is fixed.
+
 ## 2023-06-11
 
 ### globals and repls
