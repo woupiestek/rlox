@@ -1,5 +1,82 @@
 # Rlox
 
+## 2024-08-19
+
+### Trying strings
+
+Whatever service controle string allocations, will need to be passed around a
+lot. Rust will add a lot of pain to this.
+
+Loxtrs should have:
+
+- hashes
+- the string content
+- the copy and hash stuff
+- a way to sweep for garbage collection, likely including some collection of
+  either free or taken slots. o/c
+- a way to prevent allocating the same string twice, based on hash code.
+- a way to grow if more strings are added than can currently fit.
+
+Note that a string is a collection, so slices, as already popular in Rust, could
+be used: Just allocate a big array if byte, and copy each string into it as
+needed. The _fat_ handle would hold the starting point and length.
+
+Loxtrs should produce a stable index for each string, so hash code is a good
+starting point. But there could be collissions, so add a counter just in case.
+Why not just use the counter?
+
+It could be a hash table like design, where one first searches the unstable
+current index for the stable hash code.
+
+Advantages of integrating the hash: no need to compute it everywhere the string
+is used as key or comparison. Since Loxtrs would be a hashset of strings,
+finding collidings strings should be fast (shouldn't it?) Disadvantages:
+actually accessing string content is indirect. Anything from printing to adding
+strings together would involve extra steps.
+
+The empty slots in the table are the points at which searching for matches
+stops. That makes it strangely essential that some space remains unused.
+
+Now about the second part: when two strings actually have the same hash code,
+some extra counter has to go up and tell the difference, right? Is this counter
+affected by entries being sweeped? I guess the same string could just returns
+with another handle. The main concerns is that the counter runs out, if the same
+string is created and destroyed too many times. opportunity to use a huge
+counter, I guess, and not to sweep too often.
+
+Note that we have options to
+
+1. never evict
+2. only evict right before growing the string pool. I.e. mark strings as unused,
+   but only actually clean up when running out of space. That way it may be
+   possible to resurrect strings that normally would be garbage collected.
+
+Not the indenpendence here: the service receive information about sweeps, but
+uses that information only when it needs to. Should it trigger sweeps?
+
+Reference counting may be an alternative: this would require calling Loxtrs when
+handles get dropped, and I don't see Rust collaborating there.
+
+### how about
+
+Doing the simpler case of native functions first? Such an improvement already...
+
+### one more thing
+
+1. Build the keyset construct--which is a collection of string handles
+2. Build all tables as keys sets with arrays of values attached
+3. Let the string pool be a privileged table with &str in it, and maybe some
+   other stuff.
+
+Hashes are still pretty long, so we may not be saving much spaces this way.
+Wait...
+
+If a collision occurs, why not just take hash + 1? Just think about what the
+index would be if we could just have a table with 2^32 rows: the second string
+with the same hash code would receive hash+1 as index. Back to the keysets: they
+fold this into a smaller range to safe space, and may have to shift the keys
+again. This is fine.
+
 ## 2024-08-18
 
 Some fresh ideas:
@@ -62,7 +139,7 @@ To get an indication of the tables that need to be build:
 - BoundMethod: instance: Instance, method: Closure
 - Class: name: String, methods: Table<Closure>
 - Closure: function: Function, upvalues: Vec<Upvalue>
-- Function: name: String, arity: int, upvalue_count: number, chunk: chunk
+- Function: name: String, arity: int, upvalue_count: number, chunk: Chunk
 - Instance: class: Class, properties: Table<Value>
 - Native: function_pointer: usize
 - String: hash: int64, content: Box<str>
@@ -71,7 +148,10 @@ To get an indication of the tables that need to be build:
 - Closed Upvalue: value
 
 - Value: tag: Nil, True, False, Number, Object... value: f64|usize
--
+- Chunk: code: Vec<u8>, lines: Vec<u16>, constants: Vec<Value>
+
+Note: constants can be numbers, strings, maybe functions, but not every type of
+value.
 
 Upvalues are tricky. Perhaps a different set up could lead to a simpler
 solution. using a bit to decide between stack and heap pointer might work.

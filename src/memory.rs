@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     loxtr::Loxtr,
-    object::{BoundMethod, Class, Closure, Function, Instance, Native, Upvalue, Value},
+    object::{BoundMethod, Class, Closure, Function, Instance, Upvalue, Value},
     table::Table,
 };
 
@@ -19,7 +19,6 @@ pub enum Kind {
     Closure,
     Function,
     Instance,
-    Native,
     String,
     Upvalue,
 }
@@ -35,7 +34,6 @@ macro_rules! as_gc {
             Kind::Closure => Closure::as_gc(&$handle).$method($($args)*),
             Kind::Function => Function::as_gc(&$handle).$method($($args)*),
             Kind::Instance => Instance::as_gc(&$handle).$method($($args)*),
-            Kind::Native => Native::as_gc(&$handle).$method($($args)*),
             Kind::String => Loxtr::as_gc(&$handle).$method($($args)*),
             Kind::Upvalue => Upvalue::as_gc(&$handle).$method($($args)*),
         }
@@ -345,8 +343,6 @@ impl Drop for Heap {
 
 #[cfg(test)]
 mod tests {
-    use crate::object::Value;
-
     use super::*;
 
     #[test]
@@ -358,19 +354,5 @@ mod tests {
     fn store_empty_string() {
         let mut heap = Heap::new();
         heap.intern_copy("");
-    }
-
-    fn first(_args: &[Value]) -> Result<Value, String> {
-        if _args.len() > 0 {
-            Ok(_args[0])
-        } else {
-            err!("Too few arguments.")
-        }
-    }
-
-    #[test]
-    fn store_native_function() {
-        let mut heap = Heap::new();
-        heap.store(Native(first));
     }
 }

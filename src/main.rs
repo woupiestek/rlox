@@ -13,6 +13,7 @@ mod chunk;
 mod compiler;
 mod loxtr;
 mod table;
+mod natives;
 
 mod memory;
 mod object;

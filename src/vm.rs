@@ -1,14 +1,7 @@
 use std::time;
 
 use crate::{
-    call_stack::{CallStack, MAX_FRAMES},
-    chunk::Op,
-    common::U8_COUNT,
-    compiler::compile,
-    loxtr::Loxtr,
-    memory::{Handle, Heap, Kind, Traceable, GC},
-    object::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value},
-    table::Table,
+    call_stack::{CallStack, MAX_FRAMES}, chunk::Op, common::U8_COUNT, compiler::compile, loxtr::Loxtr, memory::{Handle, Heap, Kind, Traceable, GC}, natives::Natives, object::{BoundMethod, Class, Closure, Instance, Upvalue, Value}, table::Table
 };
 
 const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
@@ -19,8 +12,6 @@ fn clock_native(_args: &[Value]) -> Result<Value, String> {
         Err(x) => Err(x.to_string()),
     }
 }
-
-const CLOCK_NATIVE: Native = Native(clock_native);
 
 macro_rules! binary_op {
     ($self:ident, $a:ident, $b:ident, $value:expr) => {{
@@ -41,6 +32,7 @@ pub struct VM {
     globals: Table<Value>,
     init_string: GC<Loxtr>,
     heap: Heap,
+    natives: Natives
 }
 
 impl VM {
@@ -50,13 +42,13 @@ impl VM {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
             call_stack: CallStack::new(),
-            // frames: Vec::with_capacity(MAX_FRAMES),
             open_upvalues: None,
             globals: Table::new(),
             init_string,
             heap,
+           natives: Natives::new()
         };
-        s.define_native("clock", CLOCK_NATIVE);
+        s.define_native("clock", clock_native);
         s
     }
     pub fn capture_upvalue(&mut self, location: usize) -> GC<Upvalue> {
@@ -153,11 +145,11 @@ impl VM {
         collector
     }
 
-    fn define_native(&mut self, name: &str, native_fn: Native) {
+    fn define_native(&mut self, name: &str, native_fn: fn(args: &[Value]) -> Result<Value, String>) {
         let key = self.heap.intern_copy(name);
-        self.push(Value::from(key));
-        let value = Value::from(self.new_obj(native_fn));
-        self.globals.set(key, value);
+        // are the protections still needed?
+        self.push(Value::from(key)); 
+        self.globals.set(key, Value::Native(self.natives.store(native_fn)));
         self.pop();
     }
 
@@ -210,14 +202,14 @@ impl VM {
                 Kind::Closure => {
                     return self.call(Closure::as_gc(&handle), arity);
                 }
-                Kind::Native => {
-                    let result = Native::as_gc(&handle).0(self.tail(arity as usize)?)?;
-                    self.stack_top -= arity as usize + 1;
-                    self.push(result);
-                    return Ok(());
-                }
                 _ => (),
             }
+        }
+        if let Value::Native(handle) = callee {
+            let result = self.natives.call(handle, self.tail(arity as usize)?)?;
+            self.stack_top -= arity as usize + 1;
+            self.push(result);
+            return Ok(());
         }
         err!("Can only call functions and classes, not '{}'", callee)
     }
@@ -517,7 +509,7 @@ impl VM {
         }
     }
 
-    fn tail(&mut self, n: usize) -> Result<&[Value], String> {
+    fn tail(&self, n: usize) -> Result<&[Value], String> {
         if n <= self.stack_top {
             Ok(&self.values[self.stack_top - n..self.stack_top])
         } else {

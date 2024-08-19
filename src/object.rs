@@ -3,10 +3,7 @@
 use std::fmt::Display;
 
 use crate::{
-    chunk::Chunk,
-    loxtr::Loxtr,
-    memory::{Handle, Kind, Traceable, GC},
-    table::Table,
+    chunk::Chunk, loxtr::Loxtr, memory::{Handle, Kind, Traceable, GC}, natives::NativeHandle, table::Table
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -14,6 +11,7 @@ pub enum Value {
     Nil,
     True,
     False,
+    Native(NativeHandle),
     Number(f64),
     Object(Handle),
 }
@@ -54,6 +52,7 @@ impl Display for Value {
             Value::Number(a) => a.fmt(f),
             Value::Object(a) => a.fmt(f),
             Value::True => write!(f, "true"),
+            Value::Native(_) => write!(f, "<native function>"),
         }
     }
 }
@@ -273,30 +272,5 @@ impl Traceable for BoundMethod {
 impl Display for BoundMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.method.fmt(f)
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct Native(pub fn(args: &[Value]) -> Result<Value, String>);
-
-impl std::fmt::Debug for Native {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<native function>")
-    }
-}
-
-impl Traceable for Native {
-    const KIND: Kind = Kind::Native;
-
-    fn byte_count(&self) -> usize {
-        8
-    }
-
-    fn trace(&self, _collector: &mut Vec<Handle>) {}
-}
-
-impl Display for Native {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<native>")
     }
 }
