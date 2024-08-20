@@ -3,9 +3,7 @@ use crate::object::Value;
 pub struct Natives(Vec<fn(args: &[Value]) -> Result<Value, String>>);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct NativeHandle {
-    index: u8, // More than enough for now...
-}
+pub struct NativeHandle(u8);     // More than enough for now...
 
 // All natives are collected on shut down.
 impl Natives {
@@ -16,11 +14,11 @@ impl Natives {
     pub fn store(&mut self, f: fn(args: &[Value]) -> Result<Value, String>) -> NativeHandle {
         let index = self.0.len();
         self.0.push(f);
-        NativeHandle { index: index as u8 }
+        NativeHandle (index as u8)
     }
 
     pub fn call(&self, handle: NativeHandle, args: &[Value]) -> Result<Value, String> {
-        self.0[handle.index as usize](args)
+        self.0[handle.0 as usize](args)
     }
 }
 
