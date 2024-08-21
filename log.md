@@ -1,5 +1,69 @@
 # Rlox
 
+## 2024-08-21
+
+### tokens
+
+Munificent reduces the tokenizer ot an iterator, so none of the token are
+stored. Andrew Kelley now reduced token to a 'tag' and an offset into the
+source, as other properties can be computed. Of course, not storing a list of
+the tokens reduces the space benefits form making them smaller, but it would
+help against the lifetimes, and where tokens are stored in the compiler, the
+tags aren't always necessary.
+
+Consider:
+
+- error token: just run the scanner from offset to see what the problem is
+- line and column: go to the scanner, scan for newlines from the beginning. Much
+  easier, and since this is mainly needed for error messages, why not take some
+  extra time? Put offsets instead of lines into the chunks as well: how much
+  help are specific numbers if you cannot access the source code anyway?
+- lexeme: if you know the type, just run the tokenizer from offset.
+- Kelly notes that 4GB is a reasonable limitation on source files, so the
+  offsets can be u32, taking up as much space as line and column numbers now,
+  but con
+
+In any case, this seems simpler and easier to test than the new string stuff.
+
+## 2024-08-20
+
+### generations and handles
+
+Idea: always create unique handles When growing storage space, merge generations
+together. How does this work? After filling the last slot, a new table is
+created that is twice as big The handle determines the position in the new
+table, with the even generation ending up in the lower half. Generation
+automatically split in two.
+
+There are some functionalities:
+
+- new entry
+- mark
+- sweep
+- grow
+
+I need to work out the new mark-and-sweep mechanism: when is is triggered? how
+are the marks stored? how are the sweeps done? when is space actually allocated
+and freed?
+
+### strings
+
+Focus on this now, and keep close to the original where you can. perhaps doing
+the mark and sweep by rebuilding the keyset of all strings is a good approach.
+
+### fighting the compiler again
+
+Munificents linked list of compliers is not cooperating. This was part of the
+reason data orietations intersted me: the talk was about imporivng the zig
+compiler by following these principles. And the ideas seem Rust friendly.
+Instead of appeasing the compiler somehpw, why not start the refactor? Either
+way, I am a long way from testing anything.
+
+Yep, compiler warning are gone. The trick seems to be to avoid references if not
+self args.
+
+Well at least I could test & debug the scanner again.
+
 ## 2024-08-19
 
 ### Trying strings

@@ -53,36 +53,10 @@ pub enum TokenType {
 
     End,
 }
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Token<'src> {
-    pub token_type: TokenType,
-    pub lexeme: &'src str,
-    pub line: u16,
-    pub column: u16,
-}
-
-impl<'src> Token<'src> {
-    pub fn nil() -> Self {
-        Self::synthetic("")
-    }
-    pub fn synthetic(lexeme: &'src str) -> Self {
-        Self {
-            token_type: TokenType::Error,
-            lexeme,
-            line: 0,
-            column: 0,
-        }
-    }
-}
 pub struct Scanner<'src> {
     source: &'src str,
     current: usize,
-    line: u16,
-    column: u16,
     token_start: usize,
-    token_line: u16,
-    token_column: u16,
 }
 
 impl<'src> Scanner<'src> {
@@ -90,16 +64,95 @@ impl<'src> Scanner<'src> {
         Self {
             source,
             current: 0,
-            line: 1,
-            column: 1,
             token_start: 0,
-            token_line: 1,
-            token_column: 1,
         }
     }
 
+    pub fn line_and_column(&self, offset: usize) -> (u16, u16) {
+        assert!((offset as usize) <= self.source.len());
+        let mut line = 1;
+        let mut column = 1;
+        let mut index = 0;
+        loop {
+            if index >= offset {
+                return (line, column);
+            }
+            let byte = self.get_byte(index);
+            if byte == b'\n' {
+                line += 1;
+                column = 1;
+            } else if byte != b'\r' {
+                column += 1;
+            }
+            index = self.next_utf8(index);
+        }
+    }
+
+    fn next_utf8(&self, index: usize) -> usize {
+        let mut next = index;
+        loop {
+            next += 1;
+            if next == self.source.len() || (self.get_byte(next) as i8) >= -64 { return next; }
+        }
+    }
+
+    pub fn get_str(&self, offset: usize) -> Result<&str, String> {
+        if self.get_byte(offset) != b'\"' {
+            let (l, c) = self.line_and_column(offset);
+            return err!("No string at ({l},{c})");
+        }
+        let mut end = offset + 1;
+        loop {
+            if end >= self.source.len() {
+                let (l, c) = self.line_and_column(offset);
+                return err!("Unterminated string at ({l},{c})");
+            }
+            let byte = self.get_byte(end);
+            if byte == b'\"' {
+                return Ok(&self.source[offset + 1..end]);
+            }
+            end = self.next_utf8(end);
+        }
+    }
+
+    pub fn get_identifier_name(&self, offset: usize) -> Result<&str, String> {
+        let id_start = self.get_byte(offset);
+        if id_start != b'_' && !id_start.is_ascii_alphabetic() {
+            let (l, c) = self.line_and_column(offset);
+            return err!("No identifier at ({l},{c})");
+        }
+        let mut end = offset + 1;
+        loop {
+            if end >= self.source.len() {
+                return Ok(&self.source[offset..]);
+            }
+            let id_part = self.get_byte(end);
+            if id_part != b'_' && !id_part.is_ascii_alphanumeric() {
+                return Ok(&self.source[offset..end]);
+            }
+            end += 1;
+        }
+    }
+
+    pub fn get_number(&self, offset: usize) -> Result<f64, String> {
+        let mut index = offset;
+        while self.get_byte(index).is_ascii_digit() {
+            index += 1;
+        }
+        if self.get_byte(index) == b'.' {
+            index += 1;
+            while self.get_byte(index).is_ascii_digit() {
+                index += 1;
+            }
+        }
+        self.source[offset..index].parse::<f64>().map_err(|_| {
+            let (l, c) = self.line_and_column(offset);
+            format!("No number at ({l},{c})")
+        })
+    }
+
     fn is_at_end(&self) -> bool {
-        self.source.len() <= self.current
+        self.source.len() <= self.current as usize
     }
 
     fn get_byte(&self, index: usize) -> u8 {
@@ -126,19 +179,8 @@ impl<'src> Scanner<'src> {
             return 0;
         }
         let ch = self.get_byte(self.current);
-        if ch == b'\n' {
-            self.line += 1;
-            self.column = 1;
-        } else if ch != b'\r' {
-            self.column += 1;
-        }
-        // for unicode
-        loop {
-            self.current += 1;
-            if self.is_at_end() || self.get_byte(self.current) as i8 >= -64 {
-                return ch;
-            }
-        }
+        self.current = self.next_utf8(self.current);
+        return ch;
     }
 
     fn match_eq(&mut self) -> bool {
@@ -150,17 +192,8 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    fn lexeme(&self) -> &'src str {
-        &self.source[self.token_start..self.current]
-    }
-
-    fn token(&self, typ: TokenType) -> Token<'src> {
-        Token {
-            token_type: typ,
-            lexeme: self.lexeme(),
-            line: self.token_line,
-            column: self.token_column,
-        }
+    fn token(&self, typ: TokenType) -> (TokenType, usize) {
+        (typ, self.token_start)
     }
 
     fn skip_whitespace(&mut self) {
@@ -191,8 +224,8 @@ impl<'src> Scanner<'src> {
     }
 
     fn check_keyword(&self, word: &str, typ: TokenType) -> TokenType {
-        let start = self.current - word.len();
-        if self.source[start..self.current] == *word {
+        let start = self.current as usize - word.len();
+        if self.source[start as usize..self.current as usize] == *word {
             return typ;
         }
         TokenType::Identifier
@@ -239,14 +272,15 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    fn identifier(&mut self) -> Token<'src> {
+    fn identifier(&mut self) -> (TokenType, usize) {
         while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
             self.advance();
         }
-        self.token(self.identifier_type())
+
+        (self.identifier_type(), self.token_start)
     }
 
-    fn number(&mut self) -> Token<'src> {
+    fn number(&mut self) -> (TokenType, usize) {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
@@ -259,7 +293,7 @@ impl<'src> Scanner<'src> {
         self.token(TokenType::Number)
     }
 
-    fn string(&mut self) -> Token<'src> {
+    fn string(&mut self) -> (TokenType, usize) {
         loop {
             if self.is_at_end() {
                 return self.token(TokenType::Error);
@@ -270,11 +304,9 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    pub fn next(&mut self) -> Token<'src> {
+    pub fn next(&mut self) -> (TokenType, usize) {
         self.skip_whitespace();
         self.token_start = self.current;
-        self.token_line = self.line;
-        self.token_column = self.column;
         if self.is_at_end() {
             return self.token(TokenType::End);
         }
@@ -338,83 +370,28 @@ mod tests {
     #[test]
     fn print_string() {
         let mut scanner = Scanner::new("print \"one 😲\";");
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Print,
-                lexeme: "print",
-                line: 1,
-                column: 1
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::String,
-                lexeme: "\"one 😲\"",
-                line: 1,
-                column: 7
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Semicolon,
-                lexeme: ";",
-                line: 1,
-                column: 14
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            Token {
-                token_type: TokenType::End,
-                lexeme: "",
-                line: 1,
-                column: 15
-            }
-        );
+        assert_eq!(scanner.next(), (TokenType::Print, 0));
+        assert_eq!(scanner.line_and_column(0), (1, 1));
+        assert_eq!(scanner.next(), (TokenType::String, 6));
+        assert_eq!(scanner.get_str(6).unwrap(), "one 😲");
+        assert_eq!(scanner.line_and_column(6), (1, 7));
+        // some differences expected because of the smiley
+        assert_eq!(scanner.next(), (TokenType::Semicolon, 16));
+        assert_eq!(scanner.line_and_column(16), (1, 14));
+        assert_eq!(scanner.next(), (TokenType::End, 17));
+        assert_eq!(scanner.line_and_column(17), (1, 15));
     }
 
     #[test]
     fn var_a_is_true() {
         let mut scanner = Scanner::new("var a = true;");
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Var,
-                lexeme: "var",
-                line: 1,
-                column: 1
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Identifier,
-                lexeme: "a",
-                line: 1,
-                column: 5
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Equal,
-                lexeme: "=",
-                line: 1,
-                column: 7
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::True,
-                lexeme: "true",
-                line: 1,
-                column: 9
-            })
-        );
+        assert_eq!(scanner.next(), (TokenType::Var, 0));
+        assert_eq!(scanner.get_identifier_name(0).unwrap(), "var");
+        assert_eq!(scanner.next(), (TokenType::Identifier, 4));
+        assert_eq!(scanner.get_identifier_name(4).unwrap(), "a");
+        assert_eq!(scanner.next(), (TokenType::Equal, 6));
+        assert_eq!(scanner.next(), (TokenType::True, 8));
+        assert_eq!(scanner.get_identifier_name(8).unwrap(), "true");
     }
 
     #[test]
@@ -424,59 +401,13 @@ mod tests {
             // let's make this more interesting 😉
             1 + 2; }",
         );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::LeftBrace,
-                lexeme: "{",
-                line: 1,
-                column: 1
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Number,
-                lexeme: "1",
-                line: 3,
-                column: 13
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Plus,
-                lexeme: "+",
-                line: 3,
-                column: 15
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Number,
-                lexeme: "2",
-                line: 3,
-                column: 17
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::Semicolon,
-                lexeme: ";",
-                line: 3,
-                column: 18
-            })
-        );
-        assert_eq!(
-            scanner.next(),
-            (Token {
-                token_type: TokenType::RightBrace,
-                lexeme: "}",
-                line: 3,
-                column: 20
-            })
-        );
+        assert_eq!(scanner.next(), (TokenType::LeftBrace, 0));
+        assert_eq!(scanner.next(), (TokenType::Number, 68));
+        assert_eq!(scanner.get_number(68).unwrap(), 1.);
+        assert_eq!(scanner.next(), (TokenType::Plus, 70));
+        assert_eq!(scanner.next(), (TokenType::Number, 72));
+        assert_eq!(scanner.get_number(72).unwrap(), 2.);
+        assert_eq!(scanner.next(), (TokenType::Semicolon, 73));
+        assert_eq!(scanner.next(), (TokenType::RightBrace, 75));
     }
 }
