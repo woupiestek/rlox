@@ -2,6 +2,14 @@
 
 ## 2024-08-21
 
+### more data orienting
+
+First store identifier names in the heap, then use the handles for computations.
+Up to now, I've always had problems with lifetimes and such. This is gone now.
+Some easy things to change in the compiler: collections of locals and upvalues.
+
+## 2024-08-21
+
 ### tokens
 
 Munificent reduces the tokenizer ot an iterator, so none of the token are

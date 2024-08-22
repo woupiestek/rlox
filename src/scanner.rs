@@ -1,6 +1,6 @@
 use std::str;
 
-#[repr(u8)]
+#[repr(u8)] // what was this for again?
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TokenType {
     // Single-character tokens.
@@ -49,10 +49,18 @@ pub enum TokenType {
     Var,
     While,
 
-    Error,
+    // Error
+    EndlessString,
+    BadTokenStart,
 
+    // Virtual tokens
+    Begin,
     End,
 }
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Token(pub TokenType, pub usize);
+
 pub struct Scanner<'src> {
     source: &'src str,
     current: usize,
@@ -192,10 +200,6 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    fn token(&self, typ: TokenType) -> (TokenType, usize) {
-        (typ, self.token_start)
-    }
-
     fn skip_whitespace(&mut self) {
         loop {
             let ch = self.peek();
@@ -272,15 +276,15 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    fn identifier(&mut self) -> (TokenType, usize) {
+    fn identifier(&mut self) -> Token {
         while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
             self.advance();
         }
 
-        (self.identifier_type(), self.token_start)
+        Token(self.identifier_type(), self.token_start)
     }
 
-    fn number(&mut self) -> (TokenType, usize) {
+    fn number(&mut self) -> Token {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
@@ -290,25 +294,41 @@ impl<'src> Scanner<'src> {
                 self.advance();
             }
         }
-        self.token(TokenType::Number)
+        {
+            let this = &self;
+            let typ = TokenType::Number;
+            Token(typ, this.token_start)
+        }
     }
 
-    fn string(&mut self) -> (TokenType, usize) {
+    fn string(&mut self) -> Token {
         loop {
             if self.is_at_end() {
-                return self.token(TokenType::Error);
+                return {
+                    let this = &self;
+                    let typ = TokenType::EndlessString;
+                    Token(typ, this.token_start)
+                };
             }
             if self.advance() == b'"' {
-                return self.token(TokenType::String);
+                return {
+                    let this = &self;
+                    let typ = TokenType::String;
+                    Token(typ, this.token_start)
+                };
             }
         }
     }
 
-    pub fn next(&mut self) -> (TokenType, usize) {
+    pub fn next(&mut self) -> Token {
         self.skip_whitespace();
         self.token_start = self.current;
         if self.is_at_end() {
-            return self.token(TokenType::End);
+            return {
+                let this = &self;
+                let typ = TokenType::End;
+                Token(typ, this.token_start)
+            };
         }
         let ch = self.advance();
         if ch.is_ascii_digit() {
@@ -318,47 +338,127 @@ impl<'src> Scanner<'src> {
             return self.identifier();
         }
         match ch {
-            b'(' => self.token(TokenType::LeftParen),
-            b')' => self.token(TokenType::RightParen),
-            b'{' => self.token(TokenType::LeftBrace),
-            b'}' => self.token(TokenType::RightBrace),
-            b';' => self.token(TokenType::Semicolon),
-            b',' => self.token(TokenType::Comma),
-            b'.' => self.token(TokenType::Dot),
-            b'-' => self.token(TokenType::Minus),
-            b'+' => self.token(TokenType::Plus),
-            b'/' => self.token(TokenType::Slash),
-            b'*' => self.token(TokenType::Star),
+            b'(' => {
+                let this = &self;
+                let typ = TokenType::LeftParen;
+                Token(typ, this.token_start)
+            },
+            b')' => {
+                let this = &self;
+                let typ = TokenType::RightParen;
+                Token(typ, this.token_start)
+            },
+            b'{' => {
+                let this = &self;
+                let typ = TokenType::LeftBrace;
+                Token(typ, this.token_start)
+            },
+            b'}' => {
+                let this = &self;
+                let typ = TokenType::RightBrace;
+                Token(typ, this.token_start)
+            },
+            b';' => {
+                let this = &self;
+                let typ = TokenType::Semicolon;
+                Token(typ, this.token_start)
+            },
+            b',' => {
+                let this = &self;
+                let typ = TokenType::Comma;
+                Token(typ, this.token_start)
+            },
+            b'.' => {
+                let this = &self;
+                let typ = TokenType::Dot;
+                Token(typ, this.token_start)
+            },
+            b'-' => {
+                let this = &self;
+                let typ = TokenType::Minus;
+                Token(typ, this.token_start)
+            },
+            b'+' => {
+                let this = &self;
+                let typ = TokenType::Plus;
+                Token(typ, this.token_start)
+            },
+            b'/' => {
+                let this = &self;
+                let typ = TokenType::Slash;
+                Token(typ, this.token_start)
+            },
+            b'*' => {
+                let this = &self;
+                let typ = TokenType::Star;
+                Token(typ, this.token_start)
+            },
             b'!' => {
                 if self.match_eq() {
-                    self.token(TokenType::BangEqual)
+                    {
+                        let this = &self;
+                        let typ = TokenType::BangEqual;
+                        Token(typ, this.token_start)
+                    }
                 } else {
-                    self.token(TokenType::Bang)
+                    {
+                        let this = &self;
+                        let typ = TokenType::Bang;
+                        Token(typ, this.token_start)
+                    }
                 }
             }
             b'=' => {
                 if self.match_eq() {
-                    self.token(TokenType::EqualEqual)
+                    {
+                        let this = &self;
+                        let typ = TokenType::EqualEqual;
+                        Token(typ, this.token_start)
+                    }
                 } else {
-                    self.token(TokenType::Equal)
+                    {
+                        let this = &self;
+                        let typ = TokenType::Equal;
+                        Token(typ, this.token_start)
+                    }
                 }
             }
             b'<' => {
                 if self.match_eq() {
-                    self.token(TokenType::LessEqual)
+                    {
+                        let this = &self;
+                        let typ = TokenType::LessEqual;
+                        Token(typ, this.token_start)
+                    }
                 } else {
-                    self.token(TokenType::Less)
+                    {
+                        let this = &self;
+                        let typ = TokenType::Less;
+                        Token(typ, this.token_start)
+                    }
                 }
             }
             b'>' => {
                 if self.match_eq() {
-                    self.token(TokenType::GreaterEqual)
+                    {
+                        let this = &self;
+                        let typ = TokenType::GreaterEqual;
+                        Token(typ, this.token_start)
+                    }
                 } else {
-                    self.token(TokenType::Greater)
+                    {
+                        let this = &self;
+                        let typ = TokenType::Greater;
+                        Token(typ, this.token_start)
+                    }
                 }
             }
             b'"' => self.string(),
-            _ => self.token(TokenType::Error),
+            _ => {
+                let this = &self;
+                let typ = TokenType::BadTokenStart;
+                Token(typ, this.token_start)
+            },
         }
     }
 }
@@ -370,27 +470,27 @@ mod tests {
     #[test]
     fn print_string() {
         let mut scanner = Scanner::new("print \"one 😲\";");
-        assert_eq!(scanner.next(), (TokenType::Print, 0));
+        assert_eq!(scanner.next(), Token(TokenType::Print, 0));
         assert_eq!(scanner.line_and_column(0), (1, 1));
-        assert_eq!(scanner.next(), (TokenType::String, 6));
+        assert_eq!(scanner.next(), Token(TokenType::String, 6));
         assert_eq!(scanner.get_str(6).unwrap(), "one 😲");
         assert_eq!(scanner.line_and_column(6), (1, 7));
         // some differences expected because of the smiley
-        assert_eq!(scanner.next(), (TokenType::Semicolon, 16));
+        assert_eq!(scanner.next(), Token(TokenType::Semicolon, 16));
         assert_eq!(scanner.line_and_column(16), (1, 14));
-        assert_eq!(scanner.next(), (TokenType::End, 17));
+        assert_eq!(scanner.next(), Token(TokenType::End, 17));
         assert_eq!(scanner.line_and_column(17), (1, 15));
     }
 
     #[test]
     fn var_a_is_true() {
         let mut scanner = Scanner::new("var a = true;");
-        assert_eq!(scanner.next(), (TokenType::Var, 0));
+        assert_eq!(scanner.next(), Token(TokenType::Var, 0));
         assert_eq!(scanner.get_identifier_name(0).unwrap(), "var");
-        assert_eq!(scanner.next(), (TokenType::Identifier, 4));
+        assert_eq!(scanner.next(), Token(TokenType::Identifier, 4));
         assert_eq!(scanner.get_identifier_name(4).unwrap(), "a");
-        assert_eq!(scanner.next(), (TokenType::Equal, 6));
-        assert_eq!(scanner.next(), (TokenType::True, 8));
+        assert_eq!(scanner.next(), Token(TokenType::Equal, 6));
+        assert_eq!(scanner.next(), Token(TokenType::True, 8));
         assert_eq!(scanner.get_identifier_name(8).unwrap(), "true");
     }
 
@@ -401,13 +501,13 @@ mod tests {
             // let's make this more interesting 😉
             1 + 2; }",
         );
-        assert_eq!(scanner.next(), (TokenType::LeftBrace, 0));
-        assert_eq!(scanner.next(), (TokenType::Number, 68));
+        assert_eq!(scanner.next(), Token(TokenType::LeftBrace, 0));
+        assert_eq!(scanner.next(), Token(TokenType::Number, 68));
         assert_eq!(scanner.get_number(68).unwrap(), 1.);
-        assert_eq!(scanner.next(), (TokenType::Plus, 70));
-        assert_eq!(scanner.next(), (TokenType::Number, 72));
+        assert_eq!(scanner.next(), Token(TokenType::Plus, 70));
+        assert_eq!(scanner.next(), Token(TokenType::Number, 72));
         assert_eq!(scanner.get_number(72).unwrap(), 2.);
-        assert_eq!(scanner.next(), (TokenType::Semicolon, 73));
-        assert_eq!(scanner.next(), (TokenType::RightBrace, 75));
+        assert_eq!(scanner.next(), Token(TokenType::Semicolon, 73));
+        assert_eq!(scanner.next(), Token(TokenType::RightBrace, 75));
     }
 }

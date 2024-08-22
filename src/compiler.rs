@@ -5,7 +5,7 @@ use crate::{
     loxtr::Loxtr,
     memory::{Heap, Traceable, GC},
     object::{Function, Value},
-    scanner::{Scanner, TokenType},
+    scanner::{Scanner, Token, TokenType},
 };
 
 #[derive(PartialEq, PartialOrd)]
@@ -41,15 +41,15 @@ impl TokenType {
 }
 
 struct Local {
-    offset: usize,
+    name: GC<Loxtr>,
     depth: Option<u16>,
     is_captured: bool,
 }
 
 impl Local {
-    fn new(offset: usize) -> Self {
+    fn new(name: GC<Loxtr>) -> Self {
         Self {
-            offset,
+            name,
             depth: None,
             is_captured: false,
         }
@@ -76,92 +76,40 @@ struct CompileData {
     upvalues: Vec<Upvalue>,
     scope_depth: u16,
     locals: Vec<Local>,
+    enclosing: Option<Box<CompileData>>,
 }
 
 impl CompileData {
-    fn new(function_type: FunctionType, function: GC<Function>) -> Self {
-        let mut first_local = Local::new(THIS_OFFSET);
-        first_local.depth = Some(0);
+    fn new(
+        function_type: FunctionType,
+        function: GC<Function>,
+        enclosing: Option<Box<CompileData>>,
+        first_local: Local,
+    ) -> Self {
         Self {
             function,
             upvalues: Vec::new(),
             function_type,
             scope_depth: 0,
             locals: vec![first_local],
-        }
-    }
-}
-
-struct Compiler<'src, 'hp> {
-    head: CompileData,
-    tail: Vec<CompileData>,
-    source: Source<'src>,
-    heap: &'hp mut Heap,
-}
-
-const THIS_OFFSET: usize = usize::MAX;
-const SUPER_OFFSET: usize = THIS_OFFSET - 1;
-
-impl<'src, 'hp> Compiler<'src, 'hp> {
-    fn new(
-        function_type: FunctionType,
-        function: GC<Function>,
-        source: Source<'src>,
-        heap: &'hp mut Heap,
-    ) -> Self {
-        Self {
-            head: CompileData::new(function_type, function),
-            tail: Vec::new(),
-            source,
-            heap,
+            enclosing,
         }
     }
 
-    fn get_offset_name(&self, offset: usize) -> Result<&str, String> {
-        if offset == THIS_OFFSET {
-            if self.head.function_type == FunctionType::Function {
-                return Ok("");
-            }
-            return Ok("this");
-        }
-        if offset == SUPER_OFFSET {
-            return Ok("super");
-        }
-        self.source.scanner.get_identifier_name(offset)
-    }
-
-    fn data(&self, depth: usize) -> &CompileData {
-        if depth == 0 {
-            &self.head
-        } else {
-            &self.tail[self.tail.len() - depth]
-        }
-    }
-
-    fn mut_data(&mut self, depth: usize) -> &mut CompileData {
-        if depth == 0 {
-            &mut self.head
-        } else {
-            let index = self.tail.len() - depth;
-            &mut self.tail[index]
-        }
-    }
-
-    fn resolve_local(&self, depth: usize, offset: usize) -> Result<Option<u8>, String> {
-        let mut i = self.data(depth).locals.len();
+    fn resolve_local(&self, name: GC<Loxtr>) -> Result<Option<u8>, String> {
+        let mut i = self.locals.len();
         loop {
             if i == 0 {
                 return Ok(None);
             } else {
                 i -= 1;
             }
-            let local = &self.head.locals[i];
-            let local_name = self.get_offset_name(local.offset)?;
-            if local_name == self.get_offset_name(offset)? {
+            let local = &self.locals[i];
+            if local.name == name {
                 return if local.depth.is_none() {
                     err!(
                         "Can't read local variable '{}' in its own initializer.",
-                        local_name
+                        local.name.as_ref()
                     )
                 } else {
                     Ok(Some(i as u8))
@@ -170,27 +118,24 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn add_local(&mut self, name: usize) -> Result<(), String> {
-        if self.head.locals.len() > u8::MAX as usize {
-            return err!("Too many local variables in function.");
-        }
-        self.head.locals.push(Local::new(name));
-        Ok(())
-    }
+    fn resolve_upvalue(&mut self, name: GC<Loxtr>) -> Result<Option<u8>, String> {
+        if let Some(enclosing) = &mut self.enclosing {
+            if let Some(index) = enclosing.resolve_local(name)? {
+                enclosing.locals[index as usize].is_captured = true;
+                return Ok(Some(self.add_upvalue(index, true)?));
+            }
 
-    fn mark_initialized(&mut self) -> bool {
-        if self.head.scope_depth == 0 {
-            return false;
+            if let Some(upvalue) = enclosing.resolve_upvalue(name)? {
+                return Ok(Some(self.add_upvalue(upvalue, false)?));
+            }
         }
-        let i = self.head.locals.len() - 1;
-        self.head.locals[i].depth = Some(self.head.scope_depth);
-        true
+        Ok(None)
     }
 
     fn add_upvalue(&mut self, index: u8, is_local: bool) -> Result<u8, String> {
-        let count = self.head.upvalues.len();
+        let count = self.upvalues.len();
         for i in 0..count {
-            let upvalue = &self.head.upvalues[i];
+            let upvalue = &self.upvalues[i];
             if upvalue.is_local == is_local && upvalue.index == index {
                 return Ok(i as u8);
             }
@@ -198,58 +143,82 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if count > u8::MAX as usize {
             return err!("Too many closure variables in function.");
         }
-        self.head.upvalues.push(Upvalue { index, is_local });
+        self.upvalues.push(Upvalue { index, is_local });
         Ok(count as u8)
     }
+}
 
-    fn resolve_upvalue(&mut self, depth: usize, offset: usize) -> Result<Option<u8>, String> {
-        if self.tail.len() < depth {
-            return Ok(None);
-        }
+struct Compiler<'src, 'hp> {
+    data: Box<CompileData>,
+    source: Source<'src>,
+    heap: &'hp mut Heap,
+    this_name: GC<Loxtr>,
+    super_name: GC<Loxtr>,
+}
 
-        if let Some(index) = self.resolve_local(depth + 1, offset)? {
-            self.mut_data(depth + 1).locals[index as usize].is_captured = true;
-            return Ok(Some(self.add_upvalue(index, true)?));
+impl<'src, 'hp> Compiler<'src, 'hp> {
+    fn new(
+        function_type: FunctionType,
+        function: GC<Function>,
+        source: Source<'src>,
+        heap: &'hp mut Heap,
+    ) -> Self {
+        let this_name = heap.intern_copy("this");
+        let super_name = heap.intern_copy("super");
+        let mut first_local = Local::new(this_name);
+        first_local.depth = Some(0);
+        Self {
+            data: Box::from(CompileData::new(function_type, function, None, first_local)),
+            source,
+            heap,
+            this_name,
+            super_name,
         }
-
-        if let Some(upvalue) = self.resolve_upvalue(depth + 1, offset)? {
-            return Ok(Some(self.add_upvalue(upvalue, false)?));
-        }
-        Ok(None)
     }
 
-    fn declare_variable(&mut self, name: usize) -> Result<(), String> {
-        if self.head.scope_depth == 0 {
+    fn add_local(&mut self, name: GC<Loxtr>) -> Result<(), String> {
+        if self.data.locals.len() > u8::MAX as usize {
+            return err!("Too many local variables in function.");
+        }
+        self.data.locals.push(Local::new(name));
+        Ok(())
+    }
+
+    fn mark_initialized(&mut self) -> bool {
+        if self.data.scope_depth == 0 {
+            return false;
+        }
+        let i = self.data.locals.len() - 1;
+        self.data.locals[i].depth = Some(self.data.scope_depth);
+        true
+    }
+
+    fn declare_variable(&mut self, name: GC<Loxtr>) -> Result<(), String> {
+        if self.data.scope_depth == 0 {
             return Ok(());
         }
-        let mut i = self.head.locals.len();
+        let mut i = self.data.locals.len();
         while i > 0 {
             i -= 1;
-            let local = &self.head.locals[i];
+            let local = &self.data.locals[i];
             if let Some(depth) = local.depth {
-                if depth < self.head.scope_depth {
+                if depth < self.data.scope_depth {
                     break;
                 }
             }
-            let local_name = self.get_offset_name(local.offset)?;
-            let identifier_name = self.source.scanner.get_identifier_name(name)?;
-            if local_name == identifier_name {
-                let (l, c) = self.source.scanner.line_and_column(local.offset);
-                return Err(format!(
-                    "Already a variable with this name in this scope. See line {}, column {}",
-                    l, c
-                ));
+            if local.name == name {
+                return Err(format!("Already a variable with this name in this scope."));
             }
         }
         self.add_local(name)
     }
 
     fn current_chunk(&mut self) -> &mut Chunk {
-        &mut self.head.function.chunk
+        &mut self.data.function.chunk
     }
 
     fn emit_return(&mut self) {
-        if self.head.function_type == FunctionType::Initializer {
+        if self.data.function_type == FunctionType::Initializer {
             self.emit_byte_op(Op::GetLocal, 0);
         } else {
             self.emit_op(Op::Nil);
@@ -258,23 +227,23 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn emit_byte_op(&mut self, op: Op, byte: u8) {
-        let line = self.previous_token_line();
+        let line = self.line_and_column().0;
         self.current_chunk().write_byte_op(op, byte, line);
     }
 
     fn emit_short_op(&mut self, op: Op, short: u16) {
-        let line = self.previous_token_line();
+        let line = self.line_and_column().0;
         self.current_chunk().write_short_op(op, short, line);
     }
 
     fn emit_invoke_op(&mut self, op: Op, constant: u8, arity: u8) {
-        let line = self.previous_token_line();
+        let line = self.line_and_column().0;
         self.current_chunk()
             .write_invoke_op(op, constant, arity, line);
     }
 
     fn emit_op(&mut self, op: Op) {
-        let line = self.previous_token_line();
+        let line = self.line_and_column().0;
         self.current_chunk().write(&[op as u8], line);
     }
 
@@ -300,14 +269,14 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn begin_scope(&mut self) {
-        self.head.scope_depth += 1;
+        self.data.scope_depth += 1;
     }
 
     fn end_scope(&mut self) {
-        self.head.scope_depth -= 1;
-        let scope_depth = self.head.scope_depth;
+        self.data.scope_depth -= 1;
+        let scope_depth = self.data.scope_depth;
         loop {
-            let is_captured = match self.head.locals.last() {
+            let is_captured = match self.data.locals.last() {
                 None => return,
                 Some(local) => {
                     if local.depth.is_none() || local.depth.unwrap() <= scope_depth {
@@ -322,7 +291,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             } else {
                 Op::Pop
             });
-            self.head.locals.pop();
+            self.data.locals.pop();
         }
     }
 
@@ -356,7 +325,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn binary(&mut self) -> Result<(), String> {
-        match self.source.previous_type {
+        match self.source.previous.0 {
             TokenType::BangEqual => {
                 self.parse_precedence(Prec::Equality)?;
                 self.emit_op(Op::Equal);
@@ -426,7 +395,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn number(&mut self) -> Result<(), String> {
-        match self.source.scanner.get_number(self.source.previous_token) {
+        match self.source.scanner.get_number(self.source.previous.1) {
             Ok(number) => self.emit_constant(Value::from(number)),
             Err(err) => Err(err.to_string()),
         }
@@ -448,20 +417,19 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn string(&mut self) -> Result<(), String> {
         let value = self
             .heap
-            .intern_copy(self.source.scanner.get_str(self.source.previous_token)?);
+            .intern_copy(self.source.scanner.get_str(self.source.previous.1)?);
         self.emit_constant(Value::from(value))
     }
 
     // admit code for variable access
-    fn variable(&mut self, offset: usize, can_assign: bool) -> Result<(), String> {
+    fn variable(&mut self, name: GC<Loxtr>, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
-            if let Some(arg) = self.resolve_local(0, offset)? {
+            if let Some(arg) = self.data.resolve_local(name)? {
                 (arg, Op::GetLocal, Op::SetLocal)
-            } else if let Some(arg) = self.resolve_upvalue(0, offset)? {
+            } else if let Some(arg) = self.data.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue, Op::SetUpvalue)
             } else {
-                let value = self.heap.intern(self.get_offset_name(offset)?.to_owned());
-                let arg = self.current_chunk().add_constant(Value::from(value))?;
+                let arg = self.current_chunk().add_constant(Value::from(name))?;
                 (arg, Op::GetGlobal, Op::SetGlobal)
             }
         };
@@ -485,13 +453,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source
             .consume(TokenType::Dot, "Expect '.' after 'super'.")?;
         let index = self.identifier_constant("Expect superclass method name.")?;
-        self.variable(THIS_OFFSET, false)?;
+        self.variable(self.this_name, false)?;
         if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
-            self.variable(SUPER_OFFSET, false)?;
+            self.variable(self.super_name, false)?;
             self.emit_invoke_op(Op::SuperInvoke, index, arity);
         } else {
-            self.variable(SUPER_OFFSET, false)?;
+            self.variable(self.super_name, false)?;
             self.emit_byte_op(Op::GetSuper, index);
         }
         Ok(())
@@ -501,12 +469,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.class_depth == 0 {
             return err!("Can't use 'this' outside of a class.");
         }
-        self.variable(THIS_OFFSET, can_assign)
+        self.variable(self.this_name, can_assign)
     }
 
-    fn unary(&mut self, token_type: TokenType) -> Result<(), String> {
+    fn unary(&mut self) -> Result<(), String> {
         self.parse_precedence(Prec::Unary)?;
-        match token_type {
+        match self.source.previous.0 {
             TokenType::Bang => self.emit_op(Op::Not),
             TokenType::Minus => self.emit_op(Op::Negative),
             _ => panic!(),
@@ -514,8 +482,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn parse_infix(&mut self, token_type: TokenType, can_assign: bool) -> Result<(), String> {
-        match token_type {
+    fn parse_infix(&mut self, can_assign: bool) -> Result<(), String> {
+        match self.source.previous.0 {
             TokenType::LeftParen => self.call(),
             TokenType::Dot => self.dot(can_assign),
             TokenType::Minus
@@ -534,11 +502,19 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn parse_prefix(&mut self, token_type: TokenType, can_assign: bool) -> Result<(), String> {
-        match token_type {
+    fn store_identifier(&mut self) -> Result<GC<Loxtr>, String> {
+        let str = self.source.identifier_name()?;
+        Ok(self.heap.intern_copy(str))
+    }
+
+    fn parse_prefix(&mut self, can_assign: bool) -> Result<(), String> {
+        match self.source.previous.0 {
             TokenType::LeftParen => self.grouping(),
-            TokenType::Minus | TokenType::Bang => self.unary(token_type),
-            TokenType::Identifier => self.variable(self.source.previous_token, can_assign),
+            TokenType::Minus | TokenType::Bang => self.unary(),
+            TokenType::Identifier => {
+                let name = self.store_identifier()?;
+                self.variable(name, can_assign)
+            }
             TokenType::String => self.string(),
             TokenType::Number => self.number(),
             TokenType::False => {
@@ -555,18 +531,18 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             }
             TokenType::Super => self.super_(),
             TokenType::This => self.this(can_assign),
-            _ => err!("Expect expression."),
+            _ => err!("Expect expression, found {:?}.", self.source.previous.0),
         }
     }
 
     fn parse_precedence(&mut self, precedence: Prec) -> Result<(), String> {
         self.source.advance();
         let can_assign = precedence <= Prec::Assignment;
-        self.parse_prefix(self.source.previous_type, can_assign)?;
+        self.parse_prefix(can_assign)?;
 
-        while precedence <= self.source.current_type.precedence() {
+        while precedence <= self.source.current.0.precedence() {
             self.source.advance();
-            self.parse_infix(self.source.previous_type, can_assign)?;
+            self.parse_infix(can_assign)?;
         }
 
         if can_assign && self.source.match_type(TokenType::Equal) {
@@ -576,20 +552,14 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn intern_identifier_at(&mut self, offset: usize) -> Result<u8, String> {
-        let name = self.source.scanner.get_identifier_name(offset)?;
-        let heap = self.heap.intern_copy(name);
-        self.intern(heap)
-    }
-
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        let name = self.source.previous_token;
+        let name = self.store_identifier()?;
         self.declare_variable(name)?;
-        if self.head.scope_depth > 0 {
+        if self.data.scope_depth > 0 {
             Ok(0)
         } else {
-            self.intern_identifier_at(name)
+            self.intern(name)
         }
     }
 
@@ -615,10 +585,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                if self.head.function.arity == u8::MAX {
+                if self.data.function.arity == u8::MAX {
                     return err!("Can't have more than 255 parameters.");
                 }
-                (self.head.function).arity += 1;
+                (self.data.function).arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index);
                 if !self.source.match_type(TokenType::Comma) {
@@ -635,35 +605,41 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn previous_token_line(&self) -> u16 {
+    fn line_and_column(&self) -> (u16,u16) {
         self.source
             .scanner
-            .line_and_column(self.source.previous_token)
-            .0
+            .line_and_column(self.source.previous.1)
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
-        let name = self
-            .source
-            .scanner
-            .get_identifier_name(self.source.previous_token)?;
+        let name = self.source.identifier_name()?;
         let name = self.heap.intern_copy(name);
         let mut function = self.heap.store(Function::new(Some(name)));
         let before = function.byte_count();
-        self.tail.push(mem::replace(
-            &mut self.head,
-            CompileData::new(function_type, function),
-        ));
-        self.function_body()?;
-        self.head = self.tail.pop().unwrap();
 
-        let upvalues = CompileData::new(function_type, function).upvalues;
+        let mut first_local = Local::new(self.this_name);
+        first_local.depth = Some(0);
+
+        // do the head of the linked list thing
+        let enclosing = mem::replace(
+            &mut self.data,
+            Box::from(CompileData::new(function_type, function, None, first_local)),
+        );
+        self.data.enclosing = Some(enclosing);
+
+        // the recursive call
+        self.function_body()?;
+
+        // another trick
+        let upvalues = mem::replace(&mut self.data.upvalues, Vec::new());
+        self.data = self.data.enclosing.take().unwrap();
+
         function.upvalue_count = upvalues.len() as u8;
         self.heap
             .increase_byte_count(function.byte_count() - before);
         let index = self.current_chunk().add_constant(Value::from(function))?;
         self.emit_byte_op(Op::Closure, index);
-        let line = self.previous_token_line();
+        let line = self.line_and_column().0;
         for upvalue in upvalues {
             self.current_chunk()
                 .write(&[upvalue.is_local as u8, upvalue.index], line);
@@ -690,9 +666,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn class(&mut self) -> Result<(), String> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
-        let class_offset = self.source.previous_token;
-        self.declare_variable(class_offset)?;
-        let index = self.intern_identifier_at(class_offset)?;
+        let class_name = self.store_identifier()?;
+        self.declare_variable(class_name)?;
+        let index = self.intern(class_name)?;
         self.emit_byte_op(Op::Class, index);
         self.define_variable(index);
 
@@ -706,22 +682,21 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.match_type(TokenType::Less) {
             self.source
                 .consume(TokenType::Identifier, "Expect superclass name.")?;
-            self.variable(SUPER_OFFSET, false)?;
-            if self.source.scanner.get_identifier_name(class_offset)?
-                == self.source.identifier_name()?
-            {
+            let super_name = self.store_identifier()?;
+            self.variable(super_name, false)?;
+            if class_name == super_name {
                 return err!("A class can't inherit from itself.");
             }
             self.begin_scope();
-            self.add_local(SUPER_OFFSET)?;
+            self.add_local(self.super_name)?;
             self.define_variable(0);
-            self.variable(class_offset, false)?;
+            self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
             self.source.has_super |= 1;
         }
 
         // why this again?
-        self.variable(class_offset, false)?;
+        self.variable(class_name, false)?;
 
         // class body
         self.source
@@ -855,7 +830,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn return_statement(&mut self) -> Result<(), String> {
-        if self.head.function_type == FunctionType::Script {
+        if self.data.function_type == FunctionType::Script {
             return err!("Can't return from top-level code.");
         }
 
@@ -863,7 +838,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.emit_return();
             Ok(())
         } else {
-            if self.head.function_type == FunctionType::Initializer {
+            if self.data.function_type == FunctionType::Initializer {
                 return err!("Can't return a value from an initializer.");
             }
 
@@ -899,7 +874,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        self.intern_identifier_at(self.source.previous_token)
+        let name = self.store_identifier()?;
+        self.intern(name)
     }
 
     fn declaration(&mut self) {
@@ -914,10 +890,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         };
 
         if let Err(msg) = result {
-            let (l, c) = self
-                .source
-                .scanner
-                .line_and_column(self.source.previous_token);
+            let (l, c) = self.line_and_column();
             println!("[line: {}, column: {}] {}", l, c, msg);
             self.source.error_count += 1;
             self.source.synchronize();
@@ -946,12 +919,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn script(&mut self) -> Result<GC<Function>, String> {
-        let before = self.head.function.byte_count();
+        let before = self.data.function.byte_count();
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
         self.emit_return();
-        let replace = self.head.function;
+        let replace = self.data.function;
         self.heap.increase_byte_count(replace.byte_count() - before);
         Ok(replace)
     }
@@ -968,17 +941,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
 pub struct Source<'src> {
     scanner: Scanner<'src>,
-    current_type: TokenType,
-    current_token: usize,
-    previous_type: TokenType,
-    previous_token: usize,
-
+    current: Token,
+    previous: Token,
     has_super: u128,
     class_depth: u8,
-
-    // helper service
-    // heap: &'hp mut Heap,
-
     // status
     error_count: u8,
 }
@@ -986,13 +952,11 @@ pub struct Source<'src> {
 impl<'src> Source<'src> {
     pub fn new(source: &'src str) -> Self {
         let mut scanner = Scanner::new(source);
-        let (current_type, current_token) = scanner.next();
+        let current = scanner.next();
         Self {
             scanner,
-            current_token,
-            current_type,
-            previous_token: usize::MAX,
-            previous_type: TokenType::Error,
+            current,
+            previous: Token(TokenType::Begin, usize::MAX),
             has_super: 0,
             class_depth: 0,
             error_count: 0,
@@ -1000,12 +964,12 @@ impl<'src> Source<'src> {
     }
 
     fn advance(&mut self) {
-        self.previous_token = self.current_token;
-        (self.current_type, self.current_token) = self.scanner.next();
+        self.previous = self.current;
+        self.current = self.scanner.next();
     }
 
     fn check(&self, token_type: TokenType) -> bool {
-        self.current_type == token_type
+        self.current.0 == token_type
     }
 
     fn match_type(&mut self, token_type: TokenType) -> bool {
@@ -1028,7 +992,7 @@ impl<'src> Source<'src> {
 
     fn synchronize(&mut self) {
         loop {
-            match self.current_type {
+            match self.current.0 {
                 TokenType::Class
                 | TokenType::End
                 | TokenType::Fun
@@ -1053,7 +1017,7 @@ impl<'src> Source<'src> {
     }
 
     fn identifier_name(&self) -> Result<&str, String> {
-        self.scanner.get_identifier_name(self.previous_token)
+        self.scanner.get_identifier_name(self.previous.1)
     }
 }
 
