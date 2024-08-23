@@ -9,6 +9,17 @@ Ideas:
 - replace `Local` with `Locals` and `Upvalue` with `Upvalues`
 - same treament for `CompileData` into a collection
 
+Currently the chunks store line numbers. Computing these number requires the
+source string. This is an issue because I want to move the code out. Suppose we
+store the token offsets instead... Can we compress them? Sure, store the
+differences! Can we limit the range of differences? Hard to do because of
+whitespace, strings, etc. Have a table for them.
+
+Messing with locations, how nice is it, doesn't realy help with anything.
+
+- emit functions cannot move, since we still need the source
+- the vm does not have the sources.
+
 ## 2024-08-22
 
 ### more data orienting
