@@ -1,6 +1,15 @@
 # Rlox
 
-## 2024-08-21
+## 2024-08-23
+
+### more data orienting
+
+Ideas:
+
+- replace `Local` with `Locals` and `Upvalue` with `Upvalues`
+- same treament for `CompileData` into a collection
+
+## 2024-08-22
 
 ### more data orienting
 

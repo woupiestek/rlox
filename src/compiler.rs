@@ -84,8 +84,10 @@ impl CompileData {
         function_type: FunctionType,
         function: GC<Function>,
         enclosing: Option<Box<CompileData>>,
-        first_local: Local,
+        this_name: GC<Loxtr>,
     ) -> Self {
+        let mut first_local = Local::new(this_name);
+        first_local.depth = Some(0);
         Self {
             function,
             upvalues: Vec::new(),
@@ -146,6 +148,42 @@ impl CompileData {
         self.upvalues.push(Upvalue { index, is_local });
         Ok(count as u8)
     }
+
+    fn add_local(&mut self, name: GC<Loxtr>) -> Result<(), String> {
+        if self.locals.len() > u8::MAX as usize {
+            return err!("Too many local variables in function.");
+        }
+        self.locals.push(Local::new(name));
+        Ok(())
+    }
+
+    fn mark_initialized(&mut self) -> bool {
+        if self.scope_depth == 0 {
+            return false;
+        }
+        self.locals.last_mut().unwrap().depth = Some(self.scope_depth);
+        true
+    }
+
+    fn declare_variable(&mut self, name: GC<Loxtr>) -> Result<(), String> {
+        if self.scope_depth == 0 {
+            return Ok(());
+        }
+        let mut i = self.locals.len();
+        while i > 0 {
+            i -= 1;
+            let local = &self.locals[i];
+            if let Some(depth) = local.depth {
+                if depth < self.scope_depth {
+                    break;
+                }
+            }
+            if local.name == name {
+                return Err(format!("Already a variable with this name in this scope."));
+            }
+        }
+        self.add_local(name)
+    }
 }
 
 struct Compiler<'src, 'hp> {
@@ -165,52 +203,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     ) -> Self {
         let this_name = heap.intern_copy("this");
         let super_name = heap.intern_copy("super");
-        let mut first_local = Local::new(this_name);
-        first_local.depth = Some(0);
         Self {
-            data: Box::from(CompileData::new(function_type, function, None, first_local)),
+            data: Box::from(CompileData::new(function_type, function, None, this_name)),
             source,
             heap,
             this_name,
             super_name,
         }
-    }
-
-    fn add_local(&mut self, name: GC<Loxtr>) -> Result<(), String> {
-        if self.data.locals.len() > u8::MAX as usize {
-            return err!("Too many local variables in function.");
-        }
-        self.data.locals.push(Local::new(name));
-        Ok(())
-    }
-
-    fn mark_initialized(&mut self) -> bool {
-        if self.data.scope_depth == 0 {
-            return false;
-        }
-        let i = self.data.locals.len() - 1;
-        self.data.locals[i].depth = Some(self.data.scope_depth);
-        true
-    }
-
-    fn declare_variable(&mut self, name: GC<Loxtr>) -> Result<(), String> {
-        if self.data.scope_depth == 0 {
-            return Ok(());
-        }
-        let mut i = self.data.locals.len();
-        while i > 0 {
-            i -= 1;
-            let local = &self.data.locals[i];
-            if let Some(depth) = local.depth {
-                if depth < self.data.scope_depth {
-                    break;
-                }
-            }
-            if local.name == name {
-                return Err(format!("Already a variable with this name in this scope."));
-            }
-        }
-        self.add_local(name)
     }
 
     fn current_chunk(&mut self) -> &mut Chunk {
@@ -555,7 +554,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name = self.store_identifier()?;
-        self.declare_variable(name)?;
+        self.data.declare_variable(name)?;
         if self.data.scope_depth > 0 {
             Ok(0)
         } else {
@@ -564,7 +563,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn define_variable(&mut self, global: u8) {
-        if !self.mark_initialized() {
+        if !self.data.mark_initialized() {
             self.emit_byte_op(Op::DefineGlobal, global)
         }
     }
@@ -605,10 +604,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn line_and_column(&self) -> (u16,u16) {
-        self.source
-            .scanner
-            .line_and_column(self.source.previous.1)
+    fn line_and_column(&self) -> (u16, u16) {
+        self.source.scanner.line_and_column(self.source.previous.1)
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
@@ -616,14 +613,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let name = self.heap.intern_copy(name);
         let mut function = self.heap.store(Function::new(Some(name)));
         let before = function.byte_count();
-
-        let mut first_local = Local::new(self.this_name);
-        first_local.depth = Some(0);
-
         // do the head of the linked list thing
         let enclosing = mem::replace(
             &mut self.data,
-            Box::from(CompileData::new(function_type, function, None, first_local)),
+            Box::from(CompileData::new(
+                function_type,
+                function,
+                None,
+                self.this_name,
+            )),
         );
         self.data.enclosing = Some(enclosing);
 
@@ -631,16 +629,16 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.function_body()?;
 
         // another trick
-        let upvalues = mem::replace(&mut self.data.upvalues, Vec::new());
-        self.data = self.data.enclosing.take().unwrap();
+        let enclosing = self.data.enclosing.take().unwrap();
+        let enclosed = mem::replace(&mut self.data, enclosing);
 
-        function.upvalue_count = upvalues.len() as u8;
+        function.upvalue_count = enclosed.upvalues.len() as u8;
         self.heap
             .increase_byte_count(function.byte_count() - before);
         let index = self.current_chunk().add_constant(Value::from(function))?;
         self.emit_byte_op(Op::Closure, index);
         let line = self.line_and_column().0;
-        for upvalue in upvalues {
+        for upvalue in enclosed.upvalues {
             self.current_chunk()
                 .write(&[upvalue.is_local as u8, upvalue.index], line);
         }
@@ -667,7 +665,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
-        self.declare_variable(class_name)?;
+        self.data.declare_variable(class_name)?;
         let index = self.intern(class_name)?;
         self.emit_byte_op(Op::Class, index);
         self.define_variable(index);
@@ -688,7 +686,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                 return err!("A class can't inherit from itself.");
             }
             self.begin_scope();
-            self.add_local(self.super_name)?;
+            self.data.add_local(self.super_name)?;
             self.define_variable(0);
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
@@ -723,7 +721,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn fun_declaration(&mut self) -> Result<(), String> {
         let index = self.parse_variable("Expect function name.")?;
-        self.mark_initialized();
+        self.data.mark_initialized();
         self.function(FunctionType::Function)?;
         self.define_variable(index);
         Ok(())
