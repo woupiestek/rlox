@@ -1,9 +1,11 @@
 // run time data structures
 
-use std::fmt::Display;
-
 use crate::{
-    chunk::Chunk, loxtr::Loxtr, memory::{Handle, Kind, Traceable, GC}, natives::NativeHandle, table::Table
+    chunk::Chunk,
+    heap::{Handle, Heap, Kind, Traceable},
+    loxtr::Loxtr,
+    natives::NativeHandle,
+    table::Table,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -32,8 +34,8 @@ impl From<f64> for Value {
     }
 }
 
-impl<T: Traceable> From<GC<T>> for Value {
-    fn from(value: GC<T>) -> Self {
+impl From<Handle> for Value {
+    fn from(value: Handle) -> Self {
         Value::Object(Handle::from(value))
     }
 }
@@ -42,17 +44,23 @@ impl Value {
     pub fn is_falsey(&self) -> bool {
         matches!(self, Value::Nil | Value::False)
     }
-}
 
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub fn to_handle(&self) -> Result<Handle, String> {
+        if let &Value::Object(handle) = self {
+            Ok(handle)
+        } else {
+            err!("Not an object")
+        }
+    }
+
+    pub fn to_string(&self, heap: &Heap) -> String {
         match self {
-            Value::False => write!(f, "false"),
-            Value::Nil => write!(f, "nil"),
-            Value::Number(a) => a.fmt(f),
-            Value::Object(a) => a.fmt(f),
-            Value::True => write!(f, "true"),
-            Value::Native(_) => write!(f, "<native function>"),
+            Value::False => format!("false"),
+            Value::Nil => format!("nil"),
+            Value::Number(a) => format!("{}", a),
+            Value::Object(a) => heap.to_string(*a),
+            Value::True => format!("true"),
+            Value::Native(_) => format!("<native function>"),
         }
     }
 }
@@ -67,29 +75,19 @@ impl Traceable for Loxtr {
 }
 
 pub struct Function {
-    pub name: Option<GC<Loxtr>>,
+    pub name: Option<Handle>,
     pub arity: u8,
     pub upvalue_count: u8,
     pub chunk: Chunk,
 }
 
 impl Function {
-    pub fn new(name: Option<GC<Loxtr>>) -> Self {
+    pub fn new(name: Option<Handle>) -> Self {
         Self {
             name,
             arity: 0,
             upvalue_count: 0,
             chunk: Chunk::new(),
-        }
-    }
-}
-
-impl Display for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(str) = self.name {
-            write!(f, "<fn {}({}/{})>", *str, self.arity, self.upvalue_count)
-        } else {
-            write!(f, "<script>")
         }
     }
 }
@@ -114,13 +112,13 @@ impl Traceable for Function {
 }
 
 pub struct Class {
-    pub name: GC<Loxtr>,
+    pub name: Handle,
     // heap allocated
-    pub methods: Table<GC<Closure>>,
+    pub methods: Table<Handle>,
 }
 
 impl Class {
-    pub fn new(name: GC<Loxtr>) -> Self {
+    pub fn new(name: Handle) -> Self {
         Self {
             name,
             methods: Table::new(),
@@ -143,14 +141,8 @@ impl Traceable for Class {
     }
 }
 
-impl Display for Class {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<class {}>", *self.name)
-    }
-}
-
 pub enum Upvalue {
-    Open(usize, Option<GC<Upvalue>>),
+    Open(usize, Option<Handle>),
     Closed(Value),
 }
 
@@ -170,22 +162,16 @@ impl Traceable for Upvalue {
     }
 }
 
-impl Display for Upvalue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<upvalue>")
-    }
-}
-
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
 pub struct Closure {
-    pub function: GC<Function>,
+    pub function: Handle,
     // heap allocated
-    pub upvalues: Vec<GC<Upvalue>>,
+    pub upvalues: Vec<Handle>,
 }
 
 impl Closure {
-    pub fn new(function: GC<Function>) -> Self {
+    pub fn new(function: Handle) -> Self {
         Self {
             function,
             upvalues: Vec::new(),
@@ -207,14 +193,9 @@ impl Traceable for Closure {
         }
     }
 }
-impl Display for Closure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.function.fmt(f)
-    }
-}
 
 pub struct Instance {
-    pub class: GC<Class>,
+    pub class: Handle,
     // heap allocated
     pub properties: Table<Value>,
 }
@@ -233,7 +214,7 @@ impl Traceable for Instance {
 }
 
 impl Instance {
-    pub fn new(class: GC<Class>) -> Self {
+    pub fn new(class: Handle) -> Self {
         Self {
             class,
             properties: Table::new(),
@@ -241,18 +222,13 @@ impl Instance {
     }
 }
 
-impl Display for Instance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{} instance>", *self.class)
-    }
-}
 pub struct BoundMethod {
-    pub receiver: GC<Instance>,
-    pub method: GC<Closure>,
+    pub receiver: Handle,
+    pub method: Handle,
 }
 
 impl BoundMethod {
-    pub fn new(receiver: GC<Instance>, method: GC<Closure>) -> Self {
+    pub fn new(receiver: Handle, method: Handle) -> Self {
         Self { receiver, method }
     }
 }
@@ -267,10 +243,5 @@ impl Traceable for BoundMethod {
     fn trace(&self, collector: &mut Vec<Handle>) {
         collector.push(Handle::from(self.receiver));
         collector.push(Handle::from(self.method));
-    }
-}
-impl Display for BoundMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.method.fmt(f)
     }
 }

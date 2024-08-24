@@ -1,6 +1,6 @@
 use std::{env, fs, io, process::exit};
 
-use memory::Heap;
+use heap::Heap;
 
 use crate::vm::VM;
 
@@ -10,13 +10,15 @@ mod debug;
 #[macro_use]
 mod common;
 mod chunk;
+mod bitarray;
 mod compiler;
 // mod strings;
 mod loxtr;
 mod table;
 mod natives;
 
-mod memory;
+mod heap;
+// mod memory;
 mod object;
 mod scanner;
 mod call_stack;

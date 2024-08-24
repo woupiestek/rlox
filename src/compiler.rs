@@ -2,8 +2,7 @@ use std::{mem, time::Instant, usize};
 
 use crate::{
     chunk::{Chunk, Op},
-    loxtr::Loxtr,
-    memory::{Heap, Traceable, GC},
+    heap::{Handle, Heap, Traceable},
     object::{Function, Value},
     scanner::{Scanner, Token, TokenType},
 };
@@ -41,13 +40,13 @@ impl TokenType {
 }
 
 struct Local {
-    name: GC<Loxtr>,
+    name: Handle,
     depth: Option<u16>,
     is_captured: bool,
 }
 
 impl Local {
-    fn new(name: GC<Loxtr>) -> Self {
+    fn new(name: Handle) -> Self {
         Self {
             name,
             depth: None,
@@ -72,7 +71,7 @@ enum FunctionType {
 
 struct CompileData {
     function_type: FunctionType,
-    function: GC<Function>,
+    function: Handle,
     upvalues: Vec<Upvalue>,
     scope_depth: u16,
     locals: Vec<Local>,
@@ -82,9 +81,9 @@ struct CompileData {
 impl CompileData {
     fn new(
         function_type: FunctionType,
-        function: GC<Function>,
+        function: Handle,
         enclosing: Option<Box<CompileData>>,
-        this_name: GC<Loxtr>,
+        this_name: Handle,
     ) -> Self {
         let mut first_local = Local::new(this_name);
         first_local.depth = Some(0);
@@ -98,7 +97,7 @@ impl CompileData {
         }
     }
 
-    fn resolve_local(&self, name: GC<Loxtr>) -> Result<Option<u8>, String> {
+    fn resolve_local(&self, name: Handle) -> Result<Option<u8>, String> {
         let mut i = self.locals.len();
         loop {
             if i == 0 {
@@ -109,10 +108,7 @@ impl CompileData {
             let local = &self.locals[i];
             if local.name == name {
                 return if local.depth.is_none() {
-                    err!(
-                        "Can't read local variable '{}' in its own initializer.",
-                        local.name.as_ref()
-                    )
+                    err!("Can't read local variable in its own initializer.")
                 } else {
                     Ok(Some(i as u8))
                 };
@@ -120,7 +116,7 @@ impl CompileData {
         }
     }
 
-    fn resolve_upvalue(&mut self, name: GC<Loxtr>) -> Result<Option<u8>, String> {
+    fn resolve_upvalue(&mut self, name: Handle) -> Result<Option<u8>, String> {
         if let Some(enclosing) = &mut self.enclosing {
             if let Some(index) = enclosing.resolve_local(name)? {
                 enclosing.locals[index as usize].is_captured = true;
@@ -149,7 +145,7 @@ impl CompileData {
         Ok(count as u8)
     }
 
-    fn add_local(&mut self, name: GC<Loxtr>) -> Result<(), String> {
+    fn add_local(&mut self, name: Handle) -> Result<(), String> {
         if self.locals.len() > u8::MAX as usize {
             return err!("Too many local variables in function.");
         }
@@ -165,7 +161,7 @@ impl CompileData {
         true
     }
 
-    fn declare_variable(&mut self, name: GC<Loxtr>) -> Result<(), String> {
+    fn declare_variable(&mut self, name: Handle) -> Result<(), String> {
         if self.scope_depth == 0 {
             return Ok(());
         }
@@ -190,14 +186,14 @@ struct Compiler<'src, 'hp> {
     data: Box<CompileData>,
     source: Source<'src>,
     heap: &'hp mut Heap,
-    this_name: GC<Loxtr>,
-    super_name: GC<Loxtr>,
+    this_name: Handle,
+    super_name: Handle,
 }
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(
         function_type: FunctionType,
-        function: GC<Function>,
+        function: Handle,
         source: Source<'src>,
         heap: &'hp mut Heap,
     ) -> Self {
@@ -213,7 +209,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn current_chunk(&mut self) -> &mut Chunk {
-        &mut self.data.function.chunk
+        &mut self.heap.get_mut::<Function>(self.data.function).chunk
     }
 
     fn emit_return(&mut self) {
@@ -421,7 +417,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     // admit code for variable access
-    fn variable(&mut self, name: GC<Loxtr>, can_assign: bool) -> Result<(), String> {
+    fn variable(&mut self, name: Handle, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
             if let Some(arg) = self.data.resolve_local(name)? {
                 (arg, Op::GetLocal, Op::SetLocal)
@@ -501,7 +497,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn store_identifier(&mut self) -> Result<GC<Loxtr>, String> {
+    fn store_identifier(&mut self) -> Result<Handle, String> {
         let str = self.source.identifier_name()?;
         Ok(self.heap.intern_copy(str))
     }
@@ -584,10 +580,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                if self.data.function.arity == u8::MAX {
+                if self.heap.get_ref::<Function>(self.data.function).arity == u8::MAX {
                     return err!("Can't have more than 255 parameters.");
                 }
-                (self.data.function).arity += 1;
+                self.heap.get_mut::<Function>(self.data.function).arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index);
                 if !self.source.match_type(TokenType::Comma) {
@@ -611,8 +607,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = self.source.identifier_name()?;
         let name = self.heap.intern_copy(name);
-        let mut function = self.heap.store(Function::new(Some(name)));
-        let before = function.byte_count();
+        let function = self.heap.put(Function::new(Some(name)));
+        let before = self.heap.get_ref::<Function>(function).byte_count();
         // do the head of the linked list thing
         let enclosing = mem::replace(
             &mut self.data,
@@ -632,9 +628,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let enclosing = self.data.enclosing.take().unwrap();
         let enclosed = mem::replace(&mut self.data, enclosing);
 
-        function.upvalue_count = enclosed.upvalues.len() as u8;
+        self.heap.get_mut::<Function>(function).upvalue_count = enclosed.upvalues.len() as u8;
         self.heap
-            .increase_byte_count(function.byte_count() - before);
+            .increase_byte_count(self.heap.get_ref::<Function>(function).byte_count() - before);
         let index = self.current_chunk().add_constant(Value::from(function))?;
         self.emit_byte_op(Op::Closure, index);
         let line = self.line_and_column().0;
@@ -866,7 +862,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn intern(&mut self, loxtr: GC<Loxtr>) -> Result<u8, String> {
+    fn intern(&mut self, loxtr: Handle) -> Result<u8, String> {
         self.current_chunk().add_constant(Value::from(loxtr))
     }
 
@@ -916,15 +912,16 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn script(&mut self) -> Result<GC<Function>, String> {
-        let before = self.data.function.byte_count();
+    fn script(&mut self) -> Result<Handle, String> {
+        let before = self.heap.get_ref::<Function>(self.data.function).byte_count();
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
         self.emit_return();
-        let replace = self.data.function;
-        self.heap.increase_byte_count(replace.byte_count() - before);
-        Ok(replace)
+        self.heap.increase_byte_count(
+            self.heap.get_ref::<Function>(self.data.function).byte_count() - before,
+        );
+        Ok(self.data.function)
     }
 
     fn block(&mut self) -> Result<(), String> {
@@ -1019,9 +1016,9 @@ impl<'src> Source<'src> {
     }
 }
 
-pub fn compile(source: &str, heap: &mut Heap) -> Result<GC<Function>, String> {
+pub fn compile(source: &str, heap: &mut Heap) -> Result<Handle, String> {
     let start = Instant::now();
-    let function = heap.store(Function::new(None));
+    let function = heap.put(Function::new(None));
     let source = Source::new(source);
     let mut compiler = Compiler::new(FunctionType::Script, function, source, heap);
     let obj = compiler.script()?;

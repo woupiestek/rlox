@@ -46,23 +46,25 @@ impl Display for Loxtr {
 
 #[cfg(test)]
 mod tests {
-    use crate::{memory::Heap, table::Table};
+    use crate::{
+        heap::Heap,
+        table::Table,
+    };
 
     use super::*;
 
     #[test]
     pub fn loxtr_equality() {
         let mut heap = Heap::new();
-        let key = heap.store(Loxtr::copy("str"));
-        assert_ne!(key, heap.store(Loxtr::copy("str")));
-        assert_eq!(key.as_ref(), "str");
-        assert_eq!(key.hash_code(), hash_str("str"));
+        let key = heap.put(Loxtr::copy("str"));
+        assert_ne!(key, heap.put(Loxtr::copy("str")));
+        assert_eq!(heap.get_ref::<Loxtr>(key).as_ref(), "str");
+        assert_eq!(heap.get_ref::<Loxtr>(key).hash_code(), hash_str("str"));
 
         let mut table = Table::new();
-        table.set(key, ());
-        let value = table.find_key("str");
-        assert!(value.is_some());
-        assert_eq!(value.unwrap(), key);
+        table.set(key, (), &heap);
+        let value = table.add_str("str", &mut heap);
+        assert_eq!(value, key);
         assert_eq!(heap.intern_copy("str"), heap.intern_copy("str"));
     }
 }

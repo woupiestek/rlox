@@ -1,13 +1,14 @@
 use crate::{
+    bitarray::BitArray,
+    heap::{Handle, Heap},
     loxtr::{hash_str, Loxtr},
-    memory::{Handle, GC},
-    object::{Closure, Value},
+    object::Value,
 };
 
 #[derive(Clone, Copy, Debug)]
 enum Key {
     Empty,
-    Taken { name: GC<Loxtr> },
+    Taken { name: Handle },
     Tombstone,
 }
 
@@ -33,8 +34,8 @@ impl<V: Clone> Table<V> {
         self.capacity
     }
 
-    fn find(keys: &[Key], mask: usize, key: GC<Loxtr>) -> usize {
-        let mut index = key.hash_code() as usize & mask;
+    fn find(keys: &[Key], mask: usize, key: Handle, heap: &Heap) -> usize {
+        let mut index = heap.get_ref::<Loxtr>(key).hash_code() as usize & mask;
         let mut tombstone: Option<usize> = None;
         loop {
             match keys[index] {
@@ -50,14 +51,14 @@ impl<V: Clone> Table<V> {
         }
     }
 
-    fn grow(&mut self, capacity: usize) {
+    fn grow(&mut self, capacity: usize, heap: &Heap) {
         let mut keys: Box<[Key]> = vec![Key::Empty; capacity].into_boxed_slice();
-        let mut values: Box<[Option<V>]> = vec![None; capacity].into_boxed_slice();
+        let mut values: Box<[Option<V>]> = vec![None; capacity].into_boxed_slice();        
         let mask = capacity - 1;
         self.count = 0;
         for i in 0..self.keys.len() {
             if let Key::Taken { name } = self.keys[i] {
-                let j = Self::find(&keys, mask, name);
+                let j = Self::find(&keys, mask, name, heap);
                 keys[j] = self.keys[i];
                 values[j] = self.values[i].clone();
                 self.count += 1;
@@ -68,25 +69,28 @@ impl<V: Clone> Table<V> {
         self.capacity = capacity;
     }
 
-    pub fn get(&self, key: GC<Loxtr>) -> Option<V> {
+    pub fn get(&self, key: Handle, heap: &Heap) -> Option<V> {
         if self.count == 0 {
             return None;
         }
-        match &self.values[Self::find(&self.keys, self.capacity - 1, key)] {
+        match &self.values[Self::find(&self.keys, self.capacity - 1, key, heap)] {
             Some(v) => Some(v.clone()),
-            None => None
+            None => None,
         }
     }
 
-    pub fn set(&mut self, key: GC<Loxtr>, value: V) -> bool {
+    pub fn set(&mut self, key: Handle, value: V, heap: &Heap) -> bool {
         if (self.count + 1) as f64 > (self.capacity as f64) * Self::MAX_LOAD {
-            self.grow(if self.capacity < 8 {
-                8
-            } else {
-                self.capacity * 2
-            })
+            self.grow(
+                if self.capacity < 8 {
+                    8
+                } else {
+                    self.capacity * 2
+                },
+                heap,
+            )
         }
-        let index = Self::find(&self.keys, self.capacity - 1, key);
+        let index = Self::find(&self.keys, self.capacity - 1, key, heap);
         let is_new_key = self.values[index].is_none();
         self.values[index] = Some(value);
         if is_new_key {
@@ -96,11 +100,11 @@ impl<V: Clone> Table<V> {
         is_new_key
     }
 
-    pub fn delete(&mut self, key: GC<Loxtr>) -> bool {
+    pub fn delete(&mut self, key: Handle, heap: &Heap) -> bool {
         if self.count == 0 {
             return false;
         }
-        let index = Self::find(&self.keys, self.capacity - 1, key);
+        let index = Self::find(&self.keys, self.capacity - 1, key, heap);
         if self.values[index].is_none() {
             return false;
         }
@@ -109,21 +113,21 @@ impl<V: Clone> Table<V> {
         true
     }
 
-    pub fn set_all(&mut self, other: &Table<V>) {
+    pub fn set_all(&mut self, other: &Table<V>, heap: &Heap) {
         if self.capacity < other.capacity {
-            self.grow(other.capacity)
+            self.grow(other.capacity, heap)
         }
         for i in 0..other.keys.len() {
             if let Key::Taken { name } = other.keys[i] {
                 if let Some(v) = &other.values[i] {
-                    self.set(name, v.clone());
+                    self.set(name, v.clone(), heap);
                 }
             }
         }
     }
 }
 
-impl Table<GC<Closure>> {
+impl Table<Handle> {
     // trace: and keys have no properties to trace
     pub fn trace(&self, collector: &mut Vec<Handle>) {
         for value in self.values.iter() {
@@ -145,10 +149,10 @@ impl Table<Value> {
 }
 
 impl Table<()> {
-    pub fn sweep(&mut self) {
+    pub fn sweep(&mut self, marked: BitArray) {
         for index in 0..self.capacity {
-            if let Key::Taken { name } = self.keys[index] {
-                if !name.is_marked() {
+            if let Key::Taken { name: _ } = self.keys[index] {
+                if !marked.get(index) {
                     self.keys[index] = Key::Tombstone;
                     self.values[index] = None;
                 }
@@ -156,19 +160,30 @@ impl Table<()> {
         }
     }
 
-    pub fn find_key(&self, str: &str) -> Option<GC<Loxtr>> {
-        let hash = hash_str(str);
-        if self.count == 0 {
-            return None;
+    pub fn add_str(&mut self, str: &str, heap: &mut Heap) -> Handle {
+        if (self.count + 1) as f64 > (self.capacity as f64) * Self::MAX_LOAD {
+            self.grow(
+                if self.capacity < 8 {
+                    8
+                } else {
+                    self.capacity * 2
+                },
+                heap,
+            )
         }
+        let hash = hash_str(str);
         let mask = self.capacity - 1;
         let mut index = hash as usize & mask;
         loop {
             match self.keys[index] {
-                Key::Empty => return None,
+                Key::Empty => {
+                    let name = heap.put(Loxtr::copy(str));
+                    self.keys[index] = Key::Taken { name };
+                    return name;
+                }
                 Key::Taken { name } => {
-                    if name.as_ref() == str {
-                        return Some(name);
+                    if heap.get_ref::<Loxtr>(name).as_ref() == str {
+                        return name;
                     }
                 }
                 Key::Tombstone => (),
@@ -180,7 +195,7 @@ impl Table<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::{Heap, Kind};
+    use crate::heap::{Heap, Kind};
 
     use super::*;
 
@@ -190,10 +205,9 @@ mod tests {
         let mut table = Table::new();
         let key = heap.intern_copy("name");
         let handle = Handle::from(key);
-        assert_eq!(handle.kind(), Kind::String);
-        assert_eq!(key.is_marked(), false);
-        assert_eq!(key.as_ref(), "name");
-        assert!(table.set(key, ()));
-        assert!(table.get(key).is_some());
+        assert_eq!(heap.kind(handle), Kind::String);
+        assert_eq!(heap.get_ref::<Loxtr>(handle).as_ref(), "name");
+        assert!(table.set(key, (), &heap));
+        assert!(table.get(key, &heap).is_some());
     }
 }

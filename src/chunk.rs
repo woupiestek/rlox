@@ -144,7 +144,7 @@ impl Chunk {
             }
         }
         if i > u8::MAX as usize {
-            err!("Too many constants in function, {} won't fit.", value)
+            err!("Too many constants in function")
         } else {
             self.constants.push(value);
             Ok(i as u8)
