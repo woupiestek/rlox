@@ -3,9 +3,8 @@
 use crate::{
     chunk::Chunk,
     heap::{Handle, Heap, Kind, Traceable},
-    loxtr::Loxtr,
     natives::NativeHandle,
-    table::Table,
+    strings::{KeySet, Map, StringHandle},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -16,6 +15,13 @@ pub enum Value {
     Native(NativeHandle),
     Number(f64),
     Object(Handle),
+    String(StringHandle),
+}
+
+impl From<StringHandle> for Value {
+    fn from(value: StringHandle) -> Self {
+        Self::String(value)
+    }
 }
 
 impl From<bool> for Value {
@@ -61,28 +67,20 @@ impl Value {
             Value::Object(a) => heap.to_string(*a),
             Value::True => format!("true"),
             Value::Native(_) => format!("<native function>"),
+            Value::String(a) => heap.get_str(*a).to_owned(),
         }
     }
 }
 
-impl Traceable for Loxtr {
-    const KIND: Kind = Kind::String;
-    fn byte_count(&self) -> usize {
-        self.as_ref().len() + 24
-    }
-
-    fn trace(&self, _collector: &mut Vec<Handle>) {}
-}
-
 pub struct Function {
-    pub name: Option<Handle>,
+    pub name: Option<StringHandle>,
     pub arity: u8,
     pub upvalue_count: u8,
     pub chunk: Chunk,
 }
 
 impl Function {
-    pub fn new(name: Option<Handle>) -> Self {
+    pub fn new(name: Option<StringHandle>) -> Self {
         Self {
             name,
             arity: 0,
@@ -99,9 +97,9 @@ impl Traceable for Function {
         60 + self.chunk.byte_increment()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         if let Some(name) = self.name {
-            collector.push(Handle::from(name))
+            key_set.add(name);
         }
         for &value in &self.chunk.constants {
             if let Value::Object(h) = value {
@@ -112,16 +110,16 @@ impl Traceable for Function {
 }
 
 pub struct Class {
-    pub name: Handle,
+    pub name: StringHandle,
     // heap allocated
-    pub methods: Table<Handle>,
+    pub methods: Map<Handle>,
 }
 
 impl Class {
-    pub fn new(name: Handle) -> Self {
+    pub fn new(name: StringHandle) -> Self {
         Self {
             name,
-            methods: Table::new(),
+            methods: Map::new(),
         }
     }
 }
@@ -135,9 +133,9 @@ impl Traceable for Class {
         40 + 16 * self.methods.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
-        collector.push(Handle::from(self.name));
-        self.methods.trace(collector);
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+        key_set.add(self.name);
+        self.methods.trace(collector, key_set);
     }
 }
 
@@ -153,7 +151,7 @@ impl Traceable for Upvalue {
         24
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         match *self {
             Upvalue::Open(_, Some(next)) => collector.push(Handle::from(next)),
             Upvalue::Closed(Value::Object(handle)) => collector.push(handle),
@@ -186,7 +184,7 @@ impl Traceable for Closure {
         16 + self.upvalues.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         collector.push(Handle::from(self.function));
         for upvalue in self.upvalues.iter() {
             collector.push(Handle::from(*upvalue));
@@ -197,7 +195,7 @@ impl Traceable for Closure {
 pub struct Instance {
     pub class: Handle,
     // heap allocated
-    pub properties: Table<Value>,
+    pub properties: Map<Value>,
 }
 
 impl Traceable for Instance {
@@ -207,9 +205,9 @@ impl Traceable for Instance {
         40 + 24 * self.properties.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         collector.push(Handle::from(self.class));
-        self.properties.trace(collector);
+        self.properties.trace(collector, key_set);
     }
 }
 
@@ -217,7 +215,7 @@ impl Instance {
     pub fn new(class: Handle) -> Self {
         Self {
             class,
-            properties: Table::new(),
+            properties: Map::new(),
         }
     }
 }
@@ -240,7 +238,7 @@ impl Traceable for BoundMethod {
         16
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>) {
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         collector.push(Handle::from(self.receiver));
         collector.push(Handle::from(self.method));
     }

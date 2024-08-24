@@ -12,9 +12,9 @@ mod common;
 mod chunk;
 mod bitarray;
 mod compiler;
-// mod strings;
-mod loxtr;
-mod table;
+mod strings;
+// mod loxtr;
+// mod table;
 mod natives;
 
 mod heap;

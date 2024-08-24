@@ -4,7 +4,7 @@ use crate::{
     chunk::{Chunk, Op},
     heap::{Handle, Heap, Traceable},
     object::{Function, Value},
-    scanner::{Scanner, Token, TokenType},
+    scanner::{Scanner, Token, TokenType}, strings::StringHandle,
 };
 
 #[derive(PartialEq, PartialOrd)]
@@ -40,13 +40,13 @@ impl TokenType {
 }
 
 struct Local {
-    name: Handle,
+    name: StringHandle,
     depth: Option<u16>,
     is_captured: bool,
 }
 
 impl Local {
-    fn new(name: Handle) -> Self {
+    fn new(name: StringHandle) -> Self {
         Self {
             name,
             depth: None,
@@ -83,7 +83,7 @@ impl CompileData {
         function_type: FunctionType,
         function: Handle,
         enclosing: Option<Box<CompileData>>,
-        this_name: Handle,
+        this_name: StringHandle,
     ) -> Self {
         let mut first_local = Local::new(this_name);
         first_local.depth = Some(0);
@@ -97,7 +97,7 @@ impl CompileData {
         }
     }
 
-    fn resolve_local(&self, name: Handle) -> Result<Option<u8>, String> {
+    fn resolve_local(&self, name: StringHandle) -> Result<Option<u8>, String> {
         let mut i = self.locals.len();
         loop {
             if i == 0 {
@@ -116,7 +116,7 @@ impl CompileData {
         }
     }
 
-    fn resolve_upvalue(&mut self, name: Handle) -> Result<Option<u8>, String> {
+    fn resolve_upvalue(&mut self, name: StringHandle) -> Result<Option<u8>, String> {
         if let Some(enclosing) = &mut self.enclosing {
             if let Some(index) = enclosing.resolve_local(name)? {
                 enclosing.locals[index as usize].is_captured = true;
@@ -145,7 +145,7 @@ impl CompileData {
         Ok(count as u8)
     }
 
-    fn add_local(&mut self, name: Handle) -> Result<(), String> {
+    fn add_local(&mut self, name: StringHandle) -> Result<(), String> {
         if self.locals.len() > u8::MAX as usize {
             return err!("Too many local variables in function.");
         }
@@ -161,7 +161,7 @@ impl CompileData {
         true
     }
 
-    fn declare_variable(&mut self, name: Handle) -> Result<(), String> {
+    fn declare_variable(&mut self, name: StringHandle) -> Result<(), String> {
         if self.scope_depth == 0 {
             return Ok(());
         }
@@ -186,8 +186,8 @@ struct Compiler<'src, 'hp> {
     data: Box<CompileData>,
     source: Source<'src>,
     heap: &'hp mut Heap,
-    this_name: Handle,
-    super_name: Handle,
+    this_name: StringHandle,
+    super_name: StringHandle,
 }
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
@@ -417,7 +417,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     // admit code for variable access
-    fn variable(&mut self, name: Handle, can_assign: bool) -> Result<(), String> {
+    fn variable(&mut self, name: StringHandle, can_assign: bool) -> Result<(), String> {
         let (arg, get, set) = {
             if let Some(arg) = self.data.resolve_local(name)? {
                 (arg, Op::GetLocal, Op::SetLocal)
@@ -497,7 +497,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn store_identifier(&mut self) -> Result<Handle, String> {
+    fn store_identifier(&mut self) -> Result<StringHandle, String> {
         let str = self.source.identifier_name()?;
         Ok(self.heap.intern_copy(str))
     }
@@ -862,7 +862,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn intern(&mut self, loxtr: Handle) -> Result<u8, String> {
+    fn intern(&mut self, loxtr: StringHandle) -> Result<u8, String> {
         self.current_chunk().add_constant(Value::from(loxtr))
     }
 

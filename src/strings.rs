@@ -1,5 +1,7 @@
 use std::u32;
 
+use crate::{heap::Handle, object::Value};
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct StringHandle(u32);
 
@@ -11,14 +13,12 @@ impl StringHandle {
     }
 }
 
-struct KeySet {
+pub struct KeySet {
     count: usize,
     keys: Box<[StringHandle]>,
 }
 
 impl KeySet {
-    const MAX_LOAD: f64 = 0.75;
-
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(
             capacity == 0 || capacity.is_power_of_two(),
@@ -50,7 +50,8 @@ impl KeySet {
         }
     }
 
-    fn add(&mut self, key: StringHandle) -> usize {
+    // pub for garbage collection purposes...
+    pub fn add(&mut self, key: StringHandle) -> usize {
         let (found, index) = self.find(key);
         if !found {
             self.keys[index] = key;
@@ -79,6 +80,7 @@ pub struct Map<V: Clone> {
     values: Box<[Option<V>]>,
 }
 
+// todo: tracing & sweeping for maps...
 impl<V: Clone> Map<V> {
     pub fn new() -> Self {
         Self {
@@ -96,7 +98,7 @@ impl<V: Clone> Map<V> {
         }
     }
 
-    fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.key_set.keys.len()
     }
 
@@ -143,9 +145,40 @@ impl<V: Clone> Map<V> {
     }
 }
 
+impl Map<Handle> {
+    pub fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+        for i in 0..self.capacity() {
+            if self.key_set.keys[i].is_valid() {
+                key_set.add(self.key_set.keys[i]);
+            }
+
+            if let Some(value) = self.values[i] {
+                collector.push(value)
+            }
+        }
+    }
+}
+
+impl Map<Value> {
+    pub fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+        for i in 0..self.capacity() {
+            if self.key_set.keys[i].is_valid() {
+                key_set.add(self.key_set.keys[i]);
+            }
+
+            match self.values[i] {
+                Some(Value::Object(handle)) => collector.push(handle),
+                Some(Value::String(handle)) => {
+                    key_set.add(handle);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 pub struct Strings {
     key_set: KeySet,
-    // marked: KeySet,
     values: Box<[Option<Box<str>>]>,
 }
 
@@ -155,6 +188,10 @@ impl Strings {
             key_set: KeySet::with_capacity(capacity),
             values: vec![None; capacity].into_boxed_slice(),
         }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.key_set.keys.len()
     }
 
     fn hash(str: &str) -> u32 {
@@ -221,12 +258,12 @@ impl Strings {
         self.grow(2 * self.key_set.keys.len())
     }
 
-    pub fn store(&mut self, str: &str) -> StringHandle {
+    pub fn put(&mut self, str: &str) -> StringHandle {
         self.grow_if_necessary();
         self.intern(str)
     }
 
-    pub fn deref(&self, handle: StringHandle) -> Option<&str> {
+    pub fn get(&self, handle: StringHandle) -> Option<&str> {
         let (found, index) = self.key_set.find(handle);
         if found {
             self.values[index].as_deref()
@@ -246,14 +283,14 @@ mod tests {
     #[test]
     pub fn string_equality() {
         let mut strings = Strings::with_capacity(8);
-        let key = strings.store("str");
-        assert_eq!(key, strings.store("str"));
-        assert_eq!(Some("str"), strings.deref(key));
+        let key = strings.put("str");
+        assert_eq!(key, strings.put("str"));
+        assert_eq!(Some("str"), strings.get(key));
 
-        let key1 = strings.store("one");
-        let key2 = strings.store("two");
-        assert_eq!(key2, strings.store("two"));
-        assert_eq!(Some("one"), strings.deref(key1));
+        let key1 = strings.put("one");
+        let key2 = strings.put("two");
+        assert_eq!(key2, strings.put("two"));
+        assert_eq!(Some("one"), strings.get(key1));
         assert_ne!(key1, key2);
     }
 
@@ -264,11 +301,11 @@ mod tests {
         let mut values: Vec<String> = Vec::new();
         for i in 0..12 {
             let value = "str".to_owned() + &i.to_string();
-            handles.push(strings.store(&value));
+            handles.push(strings.put(&value));
             values.push(value.clone());
         }
         for i in 0..12 {
-            assert_eq!(Some(values[i].as_str()), strings.deref(handles[i]));
+            assert_eq!(Some(values[i].as_str()), strings.get(handles[i]));
         }
     }
 
@@ -276,7 +313,7 @@ mod tests {
     pub fn set_and_get() {
         let mut strings = Strings::with_capacity(8);
         let mut table = Map::new();
-        let key = strings.store("name");
+        let key = strings.put("name");
         table.set(key, ());
         assert_eq!(Some(()), table.get(key));
     }

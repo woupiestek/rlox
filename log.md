@@ -1,5 +1,83 @@
 # Rlox
 
+## 2024-08-24
+
+### the big push?
+
+The list of handles is there anyway. We now need to add a header to each object
+that has the kind (for proper garbage collection) and a marker boolean (to mark
+which objects should be kept.) The difference is that the
+
+How does mark and sweep work now?
+
+- are put on a 'todo' collection
+- one element is taken from the collection, if already marked, stop if not, mark
+  it and put dependencies on todo
+- todo list empty -> start sweeping. To make marking quick and easy, the marks
+  are in the object headers.
+
+Of course, object headers could be stored in a seperate list, as soon as handles
+are used. Changing handles seems expensive. This is done currently to get all
+free slots at the end of the vector of handles. Would it be so bad to just keep
+a list of free slots?
+
+How do we get that list after a sweep? The marks are next to each object. Going
+through the list and storing the free slots seems like the only way.
+
+Count how many object are marked to decide whether to grow the number of slots.
+Use linear search for free slots.
+
+Tombstone kind at sweep. Marked set only has to exist durign mark and sweep.
+
+### requirements
+
+So the idea now is to not do the by class thing now, but to replace the heap
+with one that returns handles.
+
+1. the mapping from handles to pointers should be fast
+2. finding free handles may take some time, but should not rise linearly with
+   the amount of memory used
+
+It seems obvious that there must be a vector of pointers and that part of the
+handle is an index into these. It could be broken up: first half of hanlde is an
+index into the vector,
+
+The free list could just have slices of free memory. Subdivide according to
+size: no matter how much space is asked, always bump up to the next power of
+two, then assign a block of that size.
+
+We could do something with a few large slots and handles that can peek inside. A
+free list would be nice for fast allocation. Free list for elments of differen
+sizes? So the idea would be to allow slices of memory powers of two size.
+
+### what do we need variable allocation sizes for?
+
+Mainly values, upvalues, closures, code, strings and line numbers. For the
+values, the only having power two size options is not limiting, Since that is
+what is used in the table anyway. I.e. we could have a free list with slices,
+and break the slices in two until it fits the requested size. The question then
+becomes if two half of a slice are free, Do we every find out, or will memory
+remain fragmented? Does it matter much if memeory does remain fragmented?
+
+What I am planning here is too complicated.
+
+- just do the list of pointer + list of free indices thing first.
+- free slices might be a good way to make the list of of free incides smaller.
+
+### the tangle
+
+There is now a triangle relation between the heap, the string pool and all table
+shaped objects. Part of the problem is that tables can resize, and the heaps
+needs to know that this has happened because the number of allcated bytes
+determines when it is time to collect the garbage.
+
+- use the new strings, this cuts heap dependencies.
+- refactor tables, to be more specialized, and embrace their dependency on hte
+  heap
+- forget about making garbage collection too nice for now: just come up with a
+  different criterion for running the collector than a guess about allocated
+  bites.
+
 ## 2024-08-23
 
 ### more data orienting

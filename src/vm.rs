@@ -6,10 +6,9 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     heap::{Handle, Heap, Kind, Traceable},
-    loxtr::Loxtr,
     natives::Natives,
     object::{BoundMethod, Class, Closure, Function, Instance, Upvalue, Value},
-    table::Table,
+    strings::{KeySet, Map, StringHandle},
 };
 
 const MAX_FRAMES: usize = 64;
@@ -38,8 +37,8 @@ pub struct VM {
     stack_top: usize,
     call_stack: CallStack<MAX_FRAMES>,
     open_upvalues: Option<Handle>,
-    globals: Table<Value>,
-    init_string: Handle,
+    globals: Map<Value>,
+    init_string: StringHandle,
     heap: Heap,
     natives: Natives,
 }
@@ -52,7 +51,7 @@ impl VM {
             stack_top: 0,
             call_stack: CallStack::new(),
             open_upvalues: None,
-            globals: Table::new(),
+            globals: Map::new(),
             init_string,
             heap,
             natives: Natives::new(),
@@ -107,14 +106,16 @@ impl VM {
 
     fn new_obj<T: Traceable>(&mut self, t: T) -> Handle {
         if self.heap.needs_gc() {
-            let roots = self.roots();
-            self.heap.retain(roots);
+            let (roots, keyset) = self.roots();
+            self.heap.retain(roots, keyset);
         }
         self.heap.put(t)
     }
 
-    fn roots(&mut self) -> Vec<crate::heap::Handle> {
+    fn roots(&mut self) -> (Vec<Handle>, KeySet) {
         let mut collector = Vec::new();
+        // cannot reach capacity
+        let mut key_set = KeySet::with_capacity(1 << 12);
         #[cfg(feature = "log_gc")]
         {
             println!("collect stack objects");
@@ -144,14 +145,14 @@ impl VM {
         {
             println!("collect globals");
         }
-        self.globals.trace(&mut collector);
+        self.globals.trace(&mut collector, &mut key_set);
         // no compiler roots
         #[cfg(feature = "log_gc")]
         {
             println!("collect init string");
         }
-        collector.push(Handle::from(self.init_string));
-        collector
+        key_set.add(self.init_string);
+        (collector, key_set)
     }
 
     fn define_native(
@@ -165,7 +166,6 @@ impl VM {
         self.globals.set(
             key,
             Value::Native(self.natives.store(native_fn)),
-            &self.heap,
         );
         self.pop();
     }
@@ -206,7 +206,7 @@ impl VM {
                     let instance = self.new_obj(Instance::new(handle));
                     self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
                     let obj = self.heap.get_ref::<Class>(handle);
-                    if let Some(init) = obj.methods.get(self.init_string, &self.heap) {
+                    if let Some(init) = obj.methods.get(self.init_string) {
                         return self.call(init, arity);
                     } else if arity > 0 {
                         return err!("Expected no arguments but got {}.", arity);

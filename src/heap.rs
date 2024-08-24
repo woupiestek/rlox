@@ -1,7 +1,7 @@
 use crate::{
     bitarray::BitArray,
-    loxtr::Loxtr,
-    object::{BoundMethod, Class, Closure, Function, Instance, Upvalue, Value}, table::Table,
+    object::{BoundMethod, Class, Closure, Function, Instance, Upvalue, Value},
+    strings::{KeySet, StringHandle, Strings},
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -12,7 +12,6 @@ pub enum Kind {
     Function,
     Free,
     Instance,
-    String,
     Upvalue,
 }
 
@@ -22,7 +21,7 @@ where
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
-    fn trace(&self, collector: &mut Vec<Handle>);
+    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet);
     fn get(heap: &Heap, handle: Handle) -> *mut Self {
         assert_eq!(Self::KIND, heap.kinds[handle.0 as usize]);
         heap.pointers[handle.0 as usize] as *mut Self
@@ -36,7 +35,7 @@ pub struct Heap {
     kinds: Vec<Kind>,
     pointers: Vec<*mut u8>, // why not store lengths?
     free: Vec<Handle>,
-    string_pool: Table<()>,
+    string_pool: Strings,
     byte_count: usize,
     next_gc: usize,
 }
@@ -49,7 +48,7 @@ impl Heap {
             pointers: Vec::with_capacity(Self::INIT_SIZE),
             // lengths? hmmm....
             free: Vec::with_capacity(Self::INIT_SIZE),
-            string_pool: Table::new(),
+            string_pool: Strings::with_capacity(Self::INIT_SIZE),
             byte_count: 0,
             next_gc: 1 << 20,
         }
@@ -106,7 +105,11 @@ impl Heap {
         }
     }
 
-    pub fn retain(&mut self, roots: Vec<Handle>) {
+    pub fn get_str(&self, handle: StringHandle) -> &str {
+        self.string_pool.get(handle).unwrap()
+    }
+
+    pub fn retain(&mut self, roots: Vec<Handle>,key_set: KeySet) {
         #[cfg(feature = "log_gc")]
         let before = self.byte_count;
         #[cfg(feature = "log_gc")]
@@ -114,7 +117,8 @@ impl Heap {
             println!("-- gc begin");
             println!("byte count: {}", before);
         }
-        self.sweep(self.mark(roots));
+        // todo: sweep keyset
+        self.sweep(self.mark(roots,key_set));
         self.next_gc *= 2;
         #[cfg(feature = "log_gc")]
         {
@@ -130,7 +134,7 @@ impl Heap {
         }
     }
 
-    fn mark(&self, mut roots: Vec<Handle>) -> BitArray {
+    fn mark(&self, mut roots: Vec<Handle>, mut key_set: KeySet) -> BitArray {
         let mut marked = BitArray::new(self.pointers.len());
 
         #[cfg(feature = "log_gc")]
@@ -148,14 +152,25 @@ impl Heap {
             }
             marked.add(index);
             match self.kinds[index] {
-                Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(&mut roots),
-                Kind::Class => self.get_ref::<Class>(handle).trace(&mut roots),
-                Kind::Closure => self.get_ref::<Closure>(handle).trace(&mut roots),
-                Kind::Function => self.get_ref::<Function>(handle).trace(&mut roots),
+                Kind::BoundMethod => self
+                    .get_ref::<BoundMethod>(handle)
+                    .trace(&mut roots, &mut key_set),
+                Kind::Class => self
+                    .get_ref::<Class>(handle)
+                    .trace(&mut roots, &mut key_set),
+                Kind::Closure => self
+                    .get_ref::<Closure>(handle)
+                    .trace(&mut roots, &mut key_set),
+                Kind::Function => self
+                    .get_ref::<Function>(handle)
+                    .trace(&mut roots, &mut key_set),
                 Kind::Free => {}
-                Kind::Instance => self.get_ref::<Instance>(handle).trace(&mut roots),
-                Kind::String => {}
-                Kind::Upvalue => self.get_ref::<Upvalue>(handle).trace(&mut roots),
+                Kind::Instance => self
+                    .get_ref::<Instance>(handle)
+                    .trace(&mut roots, &mut key_set),
+                Kind::Upvalue => self
+                    .get_ref::<Upvalue>(handle)
+                    .trace(&mut roots, &mut key_set),
             }
         }
 
@@ -194,11 +209,6 @@ impl Heap {
                 self.byte_count -= &(*ptr).byte_count();
                 drop(Box::from_raw(ptr));
             },
-            Kind::String => unsafe {
-                let ptr = self.pointers[i] as *mut Loxtr;
-                self.byte_count -= &(*ptr).byte_count();
-                drop(Box::from_raw(ptr));
-            },
             Kind::Upvalue => unsafe {
                 let ptr = self.pointers[i] as *mut Upvalue;
                 self.byte_count -= &(*ptr).byte_count();
@@ -219,7 +229,8 @@ impl Heap {
                 self.free(i);
             }
         }
-        self.string_pool.sweep(marked);
+        // todo: clean up the string pool somehow
+        //self.string_pool.sweep(marked);
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -230,12 +241,14 @@ impl Heap {
         self.byte_count += diff;
     }
 
-    pub fn intern_copy(&mut self, name: &str) -> Handle {
-        self.string_pool.add_str(name, self)
+    pub fn intern_copy(&mut self, name: &str) -> StringHandle {
+        self.byte_count += name.len();
+        self.string_pool.put(name)
     }
 
-    pub fn intern(&mut self, name: String) -> Handle {
-        self.string_pool.add_str(&name, self)
+    pub fn intern(&mut self, name: String) -> StringHandle {
+        self.byte_count += name.len();
+        self.string_pool.put(&name)
     }
 
     pub fn needs_gc(&self) -> bool {
@@ -251,8 +264,9 @@ impl Heap {
             Kind::BoundMethod => self.to_string(self.get_ref::<BoundMethod>(handle).method),
             Kind::Class => format!(
                 "<class {}>",
-                self.get_ref::<Loxtr>(self.get_ref::<Class>(handle).name)
-                    .as_ref()
+                self.string_pool
+                    .get(self.get_ref::<Class>(handle).name)
+                    .unwrap_or("???")
             ),
             Kind::Closure => self.to_string(self.get_ref::<Closure>(handle).function),
             Kind::Function => {
@@ -260,7 +274,7 @@ impl Heap {
                 if let Some(str) = function.name {
                     format!(
                         "<fn {} ({}/{})>",
-                        self.get_ref::<Loxtr>(str).as_ref(),
+                        self.string_pool.get(str).unwrap_or("???"),
                         function.arity,
                         function.upvalue_count
                     )
@@ -272,9 +286,8 @@ impl Heap {
             Kind::Instance => {
                 let instance = self.get_ref::<Instance>(handle);
                 let class = self.get_ref::<Class>(instance.class);
-                format!("<{} instance>", self.get_ref::<Loxtr>(class.name).as_ref())
+                format!("<{} instance>", self.string_pool.get(class.name).unwrap())
             }
-            Kind::String => self.get_ref::<Loxtr>(handle).as_ref().to_owned(),
             Kind::Upvalue => format!("<upvalue>"),
         }
     }
