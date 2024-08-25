@@ -83,6 +83,11 @@ Note: technically each type has fixed size. Sure, an object has an array of
 string values pairs, but those are slices of other heaps... I should think more
 about this: arrays of any type, but this require adjacent handles.
 
+Currently data is created on the stack, then moved to the heap. This is not how
+clox does it, but a simpler solution for rust. The benefit of the current
+solution is proper initialization. Also, byte counting is easier when the
+objects contain variable size elements.
+
 ### serious bug
 
 Compute has of 'a', find its position in the string pool taken, but find a space
@@ -97,10 +102,6 @@ the hashcode, move one up. Could this still fail? Yes, because of garbage
 collection: that could remove the other string with the same hash
 
 So, use generations?
-
-    vm::tests::calling
-    vm::tests::for_loop_long
-    vm::tests::stack_types
 
 ## 2024-08-24
 

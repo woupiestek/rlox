@@ -80,9 +80,9 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn new(name: Option<StringHandle>) -> Self {
+    pub fn new() -> Self {
         Self {
-            name,
+            name: None,
             arity: 0,
             upvalue_count: 0,
             chunk: Chunk::new(),

@@ -46,23 +46,12 @@ impl TokenType {
 struct Local {
     name: StringHandle,
     depth: Option<u16>,
-    is_captured: bool,
 }
 
 impl Local {
     fn new(name: StringHandle) -> Self {
-        Self {
-            name,
-            depth: None,
-            is_captured: false,
-        }
+        Self { name, depth: None }
     }
-}
-
-#[derive(Clone, Copy)]
-struct Upvalue {
-    index: u8,
-    is_local: bool,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -76,9 +65,11 @@ enum FunctionType {
 struct CompileData {
     function_type: FunctionType,
     function: Handle,
-    upvalues: Vec<Upvalue>,
+    upvalues: Vec<u8>,
+    local_upvalues: BitArray,
     scope_depth: u16,
     locals: Vec<Local>,
+    captured: BitArray,
     enclosing: Option<Box<CompileData>>,
 }
 
@@ -89,9 +80,11 @@ impl CompileData {
         Self {
             function,
             upvalues: Vec::new(),
+            local_upvalues: BitArray::new(256),
             function_type,
             scope_depth: 0,
             locals: vec![first_local],
+            captured: BitArray::new(256),
             enclosing: None,
         }
     }
@@ -118,7 +111,7 @@ impl CompileData {
     fn resolve_upvalue(&mut self, name: StringHandle) -> Result<Option<u8>, String> {
         if let Some(enclosing) = &mut self.enclosing {
             if let Some(index) = enclosing.resolve_local(name)? {
-                enclosing.locals[index as usize].is_captured = true;
+                enclosing.captured.add(index as usize);
                 return Ok(Some(self.add_upvalue(index, true)?));
             }
 
@@ -132,15 +125,18 @@ impl CompileData {
     fn add_upvalue(&mut self, index: u8, is_local: bool) -> Result<u8, String> {
         let count = self.upvalues.len();
         for i in 0..count {
-            let upvalue = &self.upvalues[i];
-            if upvalue.is_local == is_local && upvalue.index == index {
+            let upvalue = self.upvalues[i];
+            if self.local_upvalues.get(upvalue as usize) && upvalue == index {
                 return Ok(i as u8);
             }
         }
         if count > u8::MAX as usize {
             return err!("Too many closure variables in function.");
         }
-        self.upvalues.push(Upvalue { index, is_local });
+        self.upvalues.push(index);
+        if is_local {
+            self.local_upvalues.add(index as usize);
+        }
         Ok(count as u8)
     }
 
@@ -269,18 +265,17 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn end_scope(&mut self) {
         self.data.scope_depth -= 1;
         let scope_depth = self.data.scope_depth;
+        let mut index = self.data.locals.len();
         loop {
-            let is_captured = match self.data.locals.last() {
-                None => return,
-                Some(local) => {
-                    if local.depth.is_none() || local.depth.unwrap() <= scope_depth {
-                        return;
-                    } else {
-                        local.is_captured
-                    }
-                }
-            };
-            self.emit_op(if is_captured {
+            if index == 0 {
+                return;
+            }
+            index -= 1;
+            let depth = self.data.locals[index].depth;
+            if depth.is_none() || depth.unwrap() <= scope_depth {
+                return;
+            }
+            self.emit_op(if self.data.captured.get(index) {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
@@ -606,7 +601,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = self.source.identifier_name()?;
         let name = self.heap.intern_copy(name);
-        let function = self.heap.put(Function::new(Some(name)));
+        let function = self.heap.put(Function::new());
+        self.heap.get_mut::<Function>(function).name = Some(name);
         let before = self.heap.get_ref::<Function>(function).byte_count();
         // do the head of the linked list thing
         let enclosing = mem::replace(
@@ -628,9 +624,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let index = self.current_chunk().add_constant(Value::from(function))?;
         self.emit_byte_op(Op::Closure, index);
         let line = self.line_and_column().0;
+        // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
-            self.current_chunk()
-                .write(&[upvalue.is_local as u8, upvalue.index], line);
+            self.current_chunk().write(
+                &[enclosed.local_upvalues.get(upvalue as usize) as u8, upvalue],
+                line,
+            );
         }
         Ok(())
     }
@@ -1019,7 +1018,7 @@ impl<'src> Source<'src> {
 
 pub fn compile(source: &str, heap: &mut Heap) -> Result<Handle, String> {
     let start = Instant::now();
-    let function = heap.put(Function::new(None));
+    let function = heap.put(Function::new());
     let source = Source::new(source);
     let mut compiler = Compiler::new(FunctionType::Script, function, source, heap);
     let obj = compiler.script()?;
