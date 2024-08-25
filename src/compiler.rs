@@ -41,13 +41,6 @@ impl TokenType {
     }
 }
 
-// local -> u8, i.e. at most that many in a compile data object
-// what is a normal amount of locals anyway? I guess 16 is above average
-struct Local {
-    name: StringHandle,
-    depth: u16,
-}
-
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum FunctionType {
     Function,
@@ -57,15 +50,15 @@ enum FunctionType {
 }
 
 struct CompileData {
+    enclosing: Option<Box<CompileData>>,
     function_type: FunctionType,
     function: Handle,
+    locals_captured: BitArray,
+    locals_initialized: BitArray,
+    locals: Vec<StringHandle>,
+    scopes: Vec<u8>,
+    upvalues_local: BitArray,
     upvalues: Vec<u8>,
-    local_upvalues: BitArray,
-    scope_depth: u16,
-    locals: Vec<Local>,
-    captured: BitArray,
-    initialized: BitArray,
-    enclosing: Option<Box<CompileData>>,
 }
 
 impl CompileData {
@@ -73,18 +66,15 @@ impl CompileData {
         let mut initialized = BitArray::new(256);
         initialized.add(0); // first local
         Self {
-            function,
-            upvalues: Vec::new(),
-            local_upvalues: BitArray::new(256),
-            function_type,
-            scope_depth: 0,
-            locals: vec![Local {
-                name: this_name,
-                depth: 0,
-            }],
-            captured: BitArray::new(256),
-            initialized,
             enclosing: None,
+            function_type,
+            function,
+            locals_captured: BitArray::new(256),
+            locals_initialized: initialized,
+            locals: vec![this_name],
+            scopes: Vec::new(),
+            upvalues_local: BitArray::new(256),
+            upvalues: Vec::new(),
         }
     }
 
@@ -96,9 +86,8 @@ impl CompileData {
             } else {
                 i -= 1;
             }
-            let local = &self.locals[i];
-            if local.name == name {
-                return if !self.initialized.get(i) {
+            if self.locals[i] == name {
+                return if !self.locals_initialized.get(i) {
                     err!("Can't read local variable in its own initializer.")
                 } else {
                     Ok(Some(i as u8))
@@ -110,7 +99,7 @@ impl CompileData {
     fn resolve_upvalue(&mut self, name: StringHandle) -> Result<Option<u8>, String> {
         if let Some(enclosing) = &mut self.enclosing {
             if let Some(index) = enclosing.resolve_local(name)? {
-                enclosing.captured.add(index as usize);
+                enclosing.locals_captured.add(index as usize);
                 return Ok(Some(self.add_upvalue(index, true)?));
             }
 
@@ -125,7 +114,7 @@ impl CompileData {
         let count = self.upvalues.len();
         for i in 0..count {
             let upvalue = self.upvalues[i];
-            if self.local_upvalues.get(upvalue as usize) && upvalue == index {
+            if self.upvalues_local.get(upvalue as usize) && upvalue == index {
                 return Ok(i as u8);
             }
         }
@@ -134,7 +123,7 @@ impl CompileData {
         }
         self.upvalues.push(index);
         if is_local {
-            self.local_upvalues.add(index as usize);
+            self.upvalues_local.add(index as usize);
         }
         Ok(count as u8)
     }
@@ -143,34 +132,28 @@ impl CompileData {
         if self.locals.len() > u8::MAX as usize {
             return err!("Too many local variables in function.");
         }
-        self.locals.push(Local {
-            name,
-            depth: self.scope_depth,
-        });
+        self.locals.push(name);
         Ok(())
     }
 
     fn mark_initialized(&mut self) -> bool {
-        if self.scope_depth == 0 {
+        if self.scopes.len() == 0 {
             return false;
         }
         let index = self.locals.len() - 1;
-        self.initialized.add(index);
+        self.locals_initialized.add(index);
         true
     }
 
     fn declare_variable(&mut self, name: StringHandle) -> Result<(), String> {
-        if self.scope_depth == 0 {
+        if self.scopes.len() == 0 {
             return Ok(());
         }
+        let l = self.scopes[self.scopes.len() - 1] as usize;
         let mut i = self.locals.len();
-        while i > 0 {
+        while i > l {
             i -= 1;
-            let local = &self.locals[i];
-            if local.depth < self.scope_depth {
-                break;
-            }
-            if local.name == name {
+            if self.locals[i] == name {
                 return Err(format!("Already a variable with this name in this scope."));
             }
         }
@@ -260,21 +243,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn begin_scope(&mut self) {
-        self.data.scope_depth += 1;
+        self.data.scopes.push(self.data.locals.len() as u8);
     }
 
     fn end_scope(&mut self) {
-        self.data.scope_depth -= 1;
+        let l = self.data.scopes.pop().unwrap() as usize;
         let mut index = self.data.locals.len();
-        loop {
-            if index == 0 {
-                return;
-            }
+        while index > l {
             index -= 1;
-            if self.data.locals[index].depth <= self.data.scope_depth {
-                return;
-            }
-            self.emit_op(if self.data.captured.get(index) {
+            self.emit_op(if self.data.locals_captured.get(index) {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
@@ -544,7 +521,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name = self.store_identifier()?;
         self.data.declare_variable(name)?;
-        if self.data.scope_depth > 0 {
+        if self.data.scopes.len() > 0 {
             Ok(0)
         } else {
             self.intern(name)
@@ -626,7 +603,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
             self.current_chunk().write(
-                &[enclosed.local_upvalues.get(upvalue as usize) as u8, upvalue],
+                &[enclosed.upvalues_local.get(upvalue as usize) as u8, upvalue],
                 line,
             );
         }
