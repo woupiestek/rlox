@@ -52,7 +52,7 @@ fn run_file(file_path: &str, vm: &mut VM) {
 }
 
 fn main() {
-    let mut vm = VM::new(Heap::new());
+    let mut vm = VM::new(Heap::new(1<<12));
     let args: Vec<String> = env::args().collect();
     match args.len() {
         1 => repl(&mut vm),

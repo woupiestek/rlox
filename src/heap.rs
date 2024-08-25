@@ -41,14 +41,12 @@ pub struct Heap {
 }
 
 impl Heap {
-    const INIT_SIZE: usize = 1 << 12;
-    pub fn new() -> Self {
+    pub fn new(init_size: usize) -> Self {
         Self {
-            kinds: Vec::with_capacity(Self::INIT_SIZE),
-            pointers: Vec::with_capacity(Self::INIT_SIZE),
-            // lengths? hmmm....
-            free: Vec::with_capacity(Self::INIT_SIZE),
-            string_pool: Strings::with_capacity(Self::INIT_SIZE),
+            kinds: Vec::with_capacity(init_size),
+            pointers: Vec::with_capacity(init_size),
+            free: Vec::with_capacity(init_size),
+            string_pool: Strings::with_capacity(init_size),
             byte_count: 0,
             next_gc: 1 << 20,
         }

@@ -105,6 +105,9 @@ impl Traceable for Function {
             if let Value::Object(h) = value {
                 collector.push(h)
             }
+            if let Value::String(h) = value {
+                key_set.put(h)
+            }
         }
     }
 }

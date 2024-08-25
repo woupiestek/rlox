@@ -41,6 +41,8 @@ impl TokenType {
     }
 }
 
+// local -> u8, i.e. at most that many in a compile data object
+// what is a normal amount of locals anyway? I guess 16 is above average
 struct Local {
     name: StringHandle,
     depth: Option<u16>,
@@ -81,12 +83,7 @@ struct CompileData {
 }
 
 impl CompileData {
-    fn new(
-        function_type: FunctionType,
-        function: Handle,
-        enclosing: Option<Box<CompileData>>,
-        this_name: StringHandle,
-    ) -> Self {
+    fn new(function_type: FunctionType, function: Handle, this_name: StringHandle) -> Self {
         let mut first_local = Local::new(this_name);
         first_local.depth = Some(0);
         Self {
@@ -95,7 +92,7 @@ impl CompileData {
             function_type,
             scope_depth: 0,
             locals: vec![first_local],
-            enclosing,
+            enclosing: None,
         }
     }
 
@@ -202,7 +199,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let this_name = heap.intern_copy("this");
         let super_name = heap.intern_copy("super");
         Self {
-            data: Box::from(CompileData::new(function_type, function, None, this_name)),
+            data: Box::from(CompileData::new(function_type, function, this_name)),
             source,
             heap,
             this_name,
@@ -614,12 +611,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         // do the head of the linked list thing
         let enclosing = mem::replace(
             &mut self.data,
-            Box::from(CompileData::new(
-                function_type,
-                function,
-                None,
-                self.this_name,
-            )),
+            Box::from(CompileData::new(function_type, function, self.this_name)),
         );
         self.data.enclosing = Some(enclosing);
 
@@ -1069,7 +1061,7 @@ mod tests {
 
     #[test]
     fn compile_empty_string() {
-        let result = compile("", &mut Heap::new());
+        let result = compile("", &mut Heap::new(0));
         assert!(result.is_ok());
     }
 
@@ -1088,7 +1080,7 @@ mod tests {
             print b;
             print c;
           }";
-        let result = compile(test, &mut Heap::new());
+        let result = compile(test, &mut Heap::new(0));
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 
@@ -1106,7 +1098,7 @@ mod tests {
           
           print add; // \"<fn add>\".
           ";
-        let result = compile(test, &mut Heap::new());
+        let result = compile(test, &mut Heap::new(0));
         assert!(result.is_ok());
     }
 
@@ -1124,7 +1116,7 @@ mod tests {
         }
         var a = 1;
         ";
-        let result = compile(test, &mut Heap::new());
+        let result = compile(test, &mut Heap::new(0));
         assert!(result.is_ok());
     }
 
@@ -1133,7 +1125,7 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1142,7 +1134,7 @@ mod tests {
     #[test]
     fn printing() {
         let test = "print \"hi\"; // \"hi\".";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1151,7 +1143,7 @@ mod tests {
     #[test]
     fn boolean_logic() {
         let test = "print \"hi\" or 2; // \"hi\".";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1167,7 +1159,7 @@ mod tests {
             temp = a;
             a = b;
         }";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1179,7 +1171,7 @@ mod tests {
         for (var b = 0; b < 10; b = b + 1) {
             print \"test\";
         }";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1188,7 +1180,7 @@ mod tests {
     #[test]
     fn identity_function() {
         let test = "fun id(x) { return x; }";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1209,7 +1201,7 @@ mod tests {
           
           add(1, 2, 3);
         ";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1225,7 +1217,7 @@ mod tests {
             }
           }
                   ";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1255,7 +1247,7 @@ mod tests {
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
         ";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1272,7 +1264,7 @@ mod tests {
         }
         B.f(\"hello\");
         ";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);
@@ -1292,7 +1284,7 @@ mod tests {
         var counter = makeCounter();
         counter();
         ";
-        let mut heap = Heap::new();
+        let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap().chunk);

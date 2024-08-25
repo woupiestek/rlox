@@ -373,7 +373,6 @@ impl VM {
                 Op::DefineGlobal => {
                     let name = self.call_stack.read_string(&self.heap)?;
                     self.globals.set(name, self.peek(0));
-
                     self.pop();
                 }
                 Op::Divide => binary_op!(self, a, b, a / b),
@@ -578,12 +577,12 @@ mod tests {
 
     #[test]
     fn no_error_on_init() {
-        VM::new(Heap::new());
+        VM::new(Heap::new(1 << 8));
     }
 
     #[test]
     fn interpret_empty_string() {
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(1 << 8));
         assert!(vm.interpret("").is_ok())
     }
 
@@ -592,7 +591,7 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -600,7 +599,7 @@ mod tests {
     #[test]
     fn boolean_logic() {
         let test = "print \"hi\" or 2; // \"hi\".";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -615,7 +614,7 @@ mod tests {
             temp = a;
             a = b;
         }";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -626,7 +625,7 @@ mod tests {
         for (var b = 0; b < 10; b = b + 1) {
             print \"test\";
         }";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -640,7 +639,7 @@ mod tests {
             print b;
             temp = b;
         }";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -659,7 +658,7 @@ mod tests {
             showA();
         }
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -673,7 +672,7 @@ mod tests {
           }
           for (var i = 0; i < 20; i = i + 1) { print fib(i); }
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -684,7 +683,7 @@ mod tests {
         if (true) print \"less\";
         print \"more\";
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -703,7 +702,7 @@ mod tests {
         var counter = makeCounter();
         counter();
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -721,7 +720,7 @@ mod tests {
             }
         }
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -732,7 +731,7 @@ mod tests {
         class Bagel { eat() { print \"Crunch crunch crunch!\"; } }
         var bagel = Bagel();
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -742,7 +741,7 @@ mod tests {
         let test = "
         print clock();
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -752,7 +751,7 @@ mod tests {
         let test = "
         print \"x\" == \"x\";
         ";
-        let mut vm = VM::new(Heap::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }

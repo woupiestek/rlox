@@ -25,7 +25,7 @@ Reminder `$env:RUST_BACKTRACE="full"; cargo run -- test.lox`
 - value change: use value arrays that store tags and content separately instead.
 - static/dynamic split: separate memeory managers for such data.
 - call stack changes: don't use the handles to the closures, but copy their
-  content straight into the call stack. Just doing so for the top clsure would
+  content straight into the call stack. Just doing so for the top closure could
   help.
 - numbers: change something fundamental, so the 64 bits of each number are no so
   big and bad anymore.
@@ -48,6 +48,59 @@ independent from a function?
 Note that we now effectively use handles for instruction pointers. I.e. there
 could be an instruction store, that has everthing in it, code, lines, constants.
 Offsets would be needed for each. functions are not that different as it stands.
+
+### numbers
+
+If numbers are somewhat exceptional, then more indirection might work: store all
+numbers on the heap, and use handles for them as well. separate storages for
+numbers might also do some good. A special arithmetic stack or register. o/c the
+vm is gaining multiple repositories that still life in the same underlying
+memory.
+
+### allocators
+
+Clox needs to manage all of its memory without the help of rust's borrow
+checker, In particular the vecs and the boxes I am using would be on the heap in
+those systems. So what about changing that up?
+
+Consider what types en sizes of vec or box<[...]> are used, allocate a big one
+for each, use offsets and lengths as handles. Note: powers of two means the
+length could perhaps recorded in one byte. Also, the stores could keep track of
+this data, instead of the handles, if that makes things easier.
+
+What is going on with the allocator in `RawVec`? Allocator is a trait. It has an
+instance called Global, which is a zero size type, hence the acces to global.
+This is how `Vec` can access an allocator without having to pass a pointer to it
+around.
+
+### multiple heaps
+
+Advantage: by having each control its own type of element, the need for unsafe
+casts disappears. Tracing would be more complicated: each type would need it own
+set of marks.
+
+Note: technically each type has fixed size. Sure, an object has an array of
+string values pairs, but those are slices of other heaps... I should think more
+about this: arrays of any type, but this require adjacent handles.
+
+### serious bug
+
+Compute has of 'a', find its position in the string pool taken, but find a space
+for it 2 positions down. Grow the keyset, now the space of 'a' is free, so 'a'
+receives a second handle, which fails all equaility tests. Of course, this only
+happens with tiny string pools, but I happened to test this out. This is why we
+cannot bump the hash code.
+
+Genuine hash collissions vs accidents like these: how do we solve this?
+Generally handles should be hashcodes. If and only if another string already has
+the hashcode, move one up. Could this still fail? Yes, because of garbage
+collection: that could remove the other string with the same hash
+
+So, use generations?
+
+    vm::tests::calling
+    vm::tests::for_loop_long
+    vm::tests::stack_types
 
 ## 2024-08-24
 

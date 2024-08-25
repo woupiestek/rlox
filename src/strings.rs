@@ -97,7 +97,9 @@ impl<V: Clone> Map<V> {
     }
 
     pub fn get(&self, key: StringHandle) -> Option<V> {
-        if self.key_set.count == 0 { return None; }
+        if self.key_set.count == 0 {
+            return None;
+        }
         let (found, index) = self.key_set.find(key);
         if found {
             self.values[index].clone()
@@ -186,6 +188,7 @@ impl Map<Value> {
 
 pub struct Strings {
     key_set: KeySet,
+    generations: Box<[u8]>,
     values: Box<[Option<Box<str>>]>,
 }
 
@@ -194,6 +197,7 @@ impl Strings {
         Strings {
             key_set: KeySet::with_capacity(capacity),
             values: vec![None; capacity].into_boxed_slice(),
+            generations: vec![0; capacity].into_boxed_slice(),
         }
     }
 
@@ -201,68 +205,88 @@ impl Strings {
         self.key_set.keys.len()
     }
 
+    // 24 bit hash, which leaves 8 generation bits at the top.
     fn hash(str: &str) -> u32 {
         let mut hash = 2166136261u32;
         for &byte in str.as_bytes() {
             hash ^= byte as u32;
             hash = hash.wrapping_mul(16777619u32);
         }
-        hash
+        hash >> 24 ^ hash & 0xFFFFFF
     }
 
     fn intern(&mut self, str: &str) -> StringHandle {
-        let mut index = Self::hash(str);
-        if index == 0 || index == u32::MAX {
-            index = 1;
-        }
+        self.grow_if_necessary();
+        let hash = Self::hash(str);
         let mask = self.key_set.keys.len() - 1;
-        let mut tombstone: Option<u32> = None;
+        let mut generation: u8 = 0;
+        if hash == 0 || hash == u32::MAX {
+            generation = 1;
+        }
+        let mut index = (hash as usize) & mask;
+        let mut tombstone: Option<usize> = None;
         loop {
-            let key = self.key_set.keys[index as usize & mask];
+            let key = self.key_set.keys[index];
             if key == StringHandle::EMPTY {
                 let j = tombstone.unwrap_or(index);
-                let handle = StringHandle(j);
-                self.key_set.keys[j as usize & mask] = handle;
+                // combine generations
+                let handle = StringHandle(hash ^ ((generation as u32) << 24));
+                self.key_set.keys[j] = handle;
+                self.generations[j] = generation;
                 self.key_set.count += 1;
-                self.values[j as usize & mask] = Some(Box::from(str));
+                self.values[j] = Some(Box::from(str));
                 return handle;
             }
             if key == StringHandle::TOMBSTONE {
                 tombstone = Some(index);
                 continue;
             }
-            if key.0 == index {
+            if key.0 as usize == index {
                 if let Some(x) = &self.values[index as usize & mask] {
-                    if x.as_ref() == str {
-                        return key;
+                    if Self::hash(x.as_ref()) == hash {
+                        if x.as_ref() == str {
+                            return key;
+                        }
+                        let g = self.generations[index];
+                        if generation <= g {
+                            assert!(g < u8::MAX, "string pool failed: too many hash collisions");
+                            generation = g + 1;
+                        }
                     }
                 }
             }
             index += 1;
-            if index == u32::MAX {
-                index = 1;
-            }
+            index &= mask;
         }
     }
 
     fn grow(&mut self, capacity: usize) {
         let mut key_set = KeySet::with_capacity(capacity);
         let mut values: Box<[Option<Box<str>>]> = vec![None; capacity].into_boxed_slice();
+        let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
         for i in 0..self.key_set.keys.len() {
             let key = self.key_set.keys[i];
             if key.is_valid() {
-                values[key_set.add(key).1] = self.values[i].take();
+                let j = key_set.add(key).1;
+                values[j] = self.values[i].take();
+                generations[j] = self.generations[i];
             }
         }
         self.key_set = key_set;
         self.values = values;
+        self.generations = generations;
     }
 
     fn grow_if_necessary(&mut self) {
-        if 4 * (self.key_set.count + 1) <= 3 * self.key_set.keys.len() {
+        let capacity = self.capacity();
+        if 4 * (self.key_set.count + 1) <= 3 * capacity {
             return;
         }
-        self.grow(2 * self.key_set.keys.len())
+        self.grow(if capacity < 8 {
+            8
+        } else {
+            2 * self.key_set.keys.len()
+        })
     }
 
     pub fn put(&mut self, str: &str) -> StringHandle {
@@ -297,17 +321,18 @@ impl Strings {
     pub fn sweep(&mut self, key_set: KeySet) {
         let capacity = key_set.keys.len();
         let mut values = vec![None; capacity].into_boxed_slice();
+        let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
         for i in 0..self.key_set.keys.len() {
             let (found, j) = key_set.find(self.key_set.keys[i]);
             if found {
-                values[j] = self.values[i].take()
+                values[j] = self.values[i].take();
+                generations[j] = self.generations[i];
             }
         }
         self.key_set = key_set;
         self.values = values;
+        self.generations = generations;
     }
-
-    // I still imagine that for sweep, we just create a new keyset (mark) and use that to replace the keyset here (sweep)
 }
 
 #[cfg(test)]
