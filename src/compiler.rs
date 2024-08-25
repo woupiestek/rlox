@@ -45,13 +45,7 @@ impl TokenType {
 // what is a normal amount of locals anyway? I guess 16 is above average
 struct Local {
     name: StringHandle,
-    depth: Option<u16>,
-}
-
-impl Local {
-    fn new(name: StringHandle) -> Self {
-        Self { name, depth: None }
-    }
+    depth: u16,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -70,21 +64,26 @@ struct CompileData {
     scope_depth: u16,
     locals: Vec<Local>,
     captured: BitArray,
+    initialized: BitArray,
     enclosing: Option<Box<CompileData>>,
 }
 
 impl CompileData {
     fn new(function_type: FunctionType, function: Handle, this_name: StringHandle) -> Self {
-        let mut first_local = Local::new(this_name);
-        first_local.depth = Some(0);
+        let mut initialized = BitArray::new(256);
+        initialized.add(0); // first local
         Self {
             function,
             upvalues: Vec::new(),
             local_upvalues: BitArray::new(256),
             function_type,
             scope_depth: 0,
-            locals: vec![first_local],
+            locals: vec![Local {
+                name: this_name,
+                depth: 0,
+            }],
             captured: BitArray::new(256),
+            initialized,
             enclosing: None,
         }
     }
@@ -99,7 +98,7 @@ impl CompileData {
             }
             let local = &self.locals[i];
             if local.name == name {
-                return if local.depth.is_none() {
+                return if !self.initialized.get(i) {
                     err!("Can't read local variable in its own initializer.")
                 } else {
                     Ok(Some(i as u8))
@@ -144,7 +143,10 @@ impl CompileData {
         if self.locals.len() > u8::MAX as usize {
             return err!("Too many local variables in function.");
         }
-        self.locals.push(Local::new(name));
+        self.locals.push(Local {
+            name,
+            depth: self.scope_depth,
+        });
         Ok(())
     }
 
@@ -152,7 +154,8 @@ impl CompileData {
         if self.scope_depth == 0 {
             return false;
         }
-        self.locals.last_mut().unwrap().depth = Some(self.scope_depth);
+        let index = self.locals.len() - 1;
+        self.initialized.add(index);
         true
     }
 
@@ -164,10 +167,8 @@ impl CompileData {
         while i > 0 {
             i -= 1;
             let local = &self.locals[i];
-            if let Some(depth) = local.depth {
-                if depth < self.scope_depth {
-                    break;
-                }
+            if local.depth < self.scope_depth {
+                break;
             }
             if local.name == name {
                 return Err(format!("Already a variable with this name in this scope."));
@@ -264,15 +265,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn end_scope(&mut self) {
         self.data.scope_depth -= 1;
-        let scope_depth = self.data.scope_depth;
         let mut index = self.data.locals.len();
         loop {
             if index == 0 {
                 return;
             }
             index -= 1;
-            let depth = self.data.locals[index].depth;
-            if depth.is_none() || depth.unwrap() <= scope_depth {
+            if self.data.locals[index].depth <= self.data.scope_depth {
                 return;
             }
             self.emit_op(if self.data.captured.get(index) {
