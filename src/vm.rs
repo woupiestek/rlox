@@ -11,8 +11,8 @@ use crate::{
     strings::{KeySet, Map, StringHandle},
 };
 
-const MAX_FRAMES: usize = 64;
-const STACK_SIZE: usize = MAX_FRAMES * U8_COUNT;
+const MAX_FRAMES: usize = 64; // > 0, < 2^16 - 1
+const STACK_SIZE: usize = (MAX_FRAMES as usize) * U8_COUNT;
 
 fn clock_native(_args: &[Value]) -> Result<Value, String> {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
@@ -114,8 +114,7 @@ impl VM {
 
     fn roots(&mut self) -> (Vec<Handle>, KeySet) {
         let mut collector = Vec::new();
-        // cannot reach capacity
-        let mut key_set = KeySet::with_capacity(1 << 12);
+        let mut key_set = KeySet::with_capacity(self.heap.string_pool_capacity());
         #[cfg(feature = "log_gc")]
         {
             println!("collect stack objects");
@@ -129,11 +128,7 @@ impl VM {
         {
             println!("collect frames");
         }
-        for option in &self.call_stack.closures {
-            if let Some(closure) = option {
-                collector.push(Handle::from(*closure))
-            };
-        }
+        self.call_stack.trace(&mut collector);
         #[cfg(feature = "log_gc")]
         {
             println!("collect upvalues");
@@ -151,7 +146,7 @@ impl VM {
         {
             println!("collect init string");
         }
-        key_set.add(self.init_string);
+        key_set.put(self.init_string);
         (collector, key_set)
     }
 
@@ -163,10 +158,8 @@ impl VM {
         let key = self.heap.intern_copy(name);
         // are the protections still needed?
         self.push(Value::from(key));
-        self.globals.set(
-            key,
-            Value::Native(self.natives.store(native_fn)),
-        );
+        self.globals
+            .set(key, Value::Native(self.natives.store(native_fn)));
         self.pop();
     }
 
@@ -232,25 +225,25 @@ impl VM {
         )
     }
 
-    fn invoke_from_class(&mut self, class: Handle, name: Handle, arity: u8) -> Result<(), String> {
-        match self
-            .heap
-            .get_ref::<Class>(class)
-            .methods
-            .get(name, &self.heap)
-        {
-            None => err!("Undefined property '{}'", self.heap.to_string(name)),
+    fn invoke_from_class(
+        &mut self,
+        class: Handle,
+        name: StringHandle,
+        arity: u8,
+    ) -> Result<(), String> {
+        match self.heap.get_ref::<Class>(class).methods.get(name) {
+            None => err!("Undefined property '{}'", self.heap.get_str(name)),
             Some(method) => self.call(method, arity),
         }
     }
 
-    fn invoke(&mut self, name: Handle, arity: u8) -> Result<(), String> {
+    fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<(), String> {
         let value = self.peek(arity as usize);
         let instance = self
             .heap
             .try_ref::<Instance>(value)
             .ok_or("Only instances have methods.")?;
-        if let Some(property) = instance.properties.get(name, &self.heap) {
+        if let Some(property) = instance.properties.get(name) {
             self.values[self.stack_top - arity as usize - 1] = property;
             self.call_value(property, arity)
         } else {
@@ -258,14 +251,9 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: Handle, name: Handle) -> Result<(), String> {
-        match self
-            .heap
-            .get_ref::<Class>(class)
-            .methods
-            .get(name, &self.heap)
-        {
-            None => err!("Undefined property '{}'.", self.heap.to_string(name)),
+    fn bind_method(&mut self, class: Handle, name: StringHandle) -> Result<(), String> {
+        match self.heap.get_ref::<Class>(class).methods.get(name) {
+            None => err!("Undefined property '{}'.", self.heap.get_str(name)),
             Some(method) => {
                 if let Value::Object(instance) = self.peek(0) {
                     let bm = self.new_obj(BoundMethod::new(instance, method));
@@ -276,32 +264,25 @@ impl VM {
                     err!(
                         "Cannot bind method {} to {}",
                         self.heap.to_string(method),
-                        self.heap.to_string(name)
+                        self.heap.get_str(name)
                     )
                 }
             }
         }
     }
 
-    fn define_method(&mut self, name: Handle) -> Result<(), String> {
+    fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
         if let Ok(&[Value::Object(class), Value::Object(method)]) = self.tail(2) {
             let class: &mut Class = self.heap.get_mut(class);
             let before_count = class.byte_count();
-            class.methods.set(name, method, &mut self.heap);
-            self.heap
-                .increase_byte_count(class.byte_count() - before_count);
+            class.methods.set(name, method);
+            let after_count = class.byte_count();
+            self.heap.increase_byte_count(after_count - before_count);
             self.pop();
             Ok(())
         } else {
             err!("Method definition failed")
         }
-    }
-
-    fn concatenate(&mut self, a: &str, b: &str) -> Value {
-        let mut c = String::new();
-        c.push_str(a);
-        c.push_str(b);
-        Value::from(self.heap.intern(c))
     }
 
     // combined to avoid gc errors
@@ -312,7 +293,7 @@ impl VM {
 
     fn run(&mut self) -> Result<(), String> {
         loop {
-            let instruction = Op::try_from(self.call_stack.read_byte(&self.heap))?;
+            let instruction = Op::from(self.call_stack.read_byte(&self.heap));
             #[cfg(feature = "trace")]
             {
                 print!("stack: ");
@@ -336,12 +317,10 @@ impl VM {
             match instruction {
                 Op::Add => {
                     if let &[a, b] = self.tail(2)? {
-                        if let (Some(a), Some(b)) =
-                            (self.heap.try_ref::<Loxtr>(a), self.heap.try_ref::<Loxtr>(b))
-                        {
-                            let c = self.concatenate(a.as_ref(), b.as_ref());
+                        if let (Value::String(a), Value::String(b)) = (a, b) {
+                            let c = self.heap.concat(a, b).ok_or("Missing strings")?;
                             self.stack_top -= 2;
-                            self.push(c);
+                            self.push(Value::String(c));
                             continue;
                         }
 
@@ -393,7 +372,8 @@ impl VM {
                 }
                 Op::DefineGlobal => {
                     let name = self.call_stack.read_string(&self.heap)?;
-                    self.globals.set(name, self.peek(0), &self.heap);
+                    self.globals.set(name, self.peek(0));
+
                     self.pop();
                 }
                 Op::Divide => binary_op!(self, a, b, a / b),
@@ -405,10 +385,10 @@ impl VM {
                 Op::False => self.push(Value::False),
                 Op::GetGlobal => {
                     let name = self.call_stack.read_string(&self.heap)?;
-                    if let Some(value) = self.globals.get(name, &self.heap) {
+                    if let Some(value) = self.globals.get(name) {
                         self.push(value);
                     } else {
-                        return err!("Undefined variable '{}'.", self.heap.to_string(name));
+                        return err!("Undefined variable '{}'.", self.heap.get_str(name));
                     }
                 }
                 Op::GetLocal => {
@@ -423,7 +403,7 @@ impl VM {
                         .try_ref::<Instance>(value)
                         .ok_or(String::from("Only instances have properties."))?;
                     let name = self.call_stack.read_string(&self.heap)?;
-                    if let Some(value) = instance.properties.get(name, &self.heap) {
+                    if let Some(value) = instance.properties.get(name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
                     } else {
@@ -459,7 +439,7 @@ impl VM {
                             .try_mut::<Class>(b)
                             .ok_or(String::from("Sub class must be a class."))?;
                         let bytes_before = sub_class.byte_count();
-                        sub_class.methods.set_all(&super_class.methods, &self.heap);
+                        sub_class.methods.set_all(&super_class.methods);
                         self.heap
                             .increase_byte_count(sub_class.byte_count() - bytes_before);
                         self.pop();
@@ -515,9 +495,9 @@ impl VM {
                 }
                 Op::SetGlobal => {
                     let name = self.call_stack.read_string(&self.heap)?;
-                    if self.globals.set(name, self.peek(0), &self.heap) {
-                        self.globals.delete(name, &self.heap);
-                        return err!("Undefined variable '{}'.", self.heap.to_string(name));
+                    if !self.globals.set(name, self.peek(0)) {
+                        self.globals.delete(name);
+                        return err!("Undefined variable '{}'.", self.heap.get_str(name));
                     }
                 }
                 Op::SetLocal => {
@@ -531,11 +511,9 @@ impl VM {
                             .try_mut::<Instance>(a)
                             .ok_or(String::from("Only instances have fields."))?;
                         let before_count = instance.byte_count();
-                        instance.properties.set(
-                            self.call_stack.read_string(&self.heap)?,
-                            b,
-                            &self.heap,
-                        );
+                        instance
+                            .properties
+                            .set(self.call_stack.read_string(&self.heap)?, b);
                         self.heap
                             .increase_byte_count(instance.byte_count() - before_count);
                         self.stack_top -= 2;
@@ -585,17 +563,7 @@ impl VM {
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
-            for i in 0..self.call_stack.top {
-                if let Some(closure) = self.call_stack.closures[i as usize] {
-                    let closure = self.heap.get_ref::<Closure>(closure);
-                    let function: &Function = self.heap.get_ref::<Function>(closure.function);
-                    eprintln!(
-                        "  at {} line {}",
-                        self.heap.to_string(closure.function),
-                        function.chunk.lines[self.call_stack.ips[i as usize] as usize]
-                    )
-                }
-            }
+            self.call_stack.print_stack_trace(&self.heap);
             self.reset_stack();
             err!("Runtime error!")
         } else {

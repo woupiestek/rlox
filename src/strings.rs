@@ -50,17 +50,21 @@ impl KeySet {
         }
     }
 
-    // pub for garbage collection purposes...
-    pub fn add(&mut self, key: StringHandle) -> usize {
+    fn add(&mut self, key: StringHandle) -> (bool, usize) {
         let (found, index) = self.find(key);
         if !found {
             self.keys[index] = key;
             self.count += 1;
         }
-        index
+        (found, index)
     }
 
-    // keyset in map needs to say when a value can be evicted.
+    // pub for garbage collection purposes...
+    pub fn put(&mut self, key: StringHandle) {
+        self.add(key);
+    }
+
+    // keyset in map need to say when a value can be evicted.
     fn delete(&mut self, key: StringHandle) -> Option<usize> {
         if self.count == 0 {
             return None;
@@ -80,7 +84,6 @@ pub struct Map<V: Clone> {
     values: Box<[Option<V>]>,
 }
 
-// todo: tracing & sweeping for maps...
 impl<V: Clone> Map<V> {
     pub fn new() -> Self {
         Self {
@@ -89,7 +92,12 @@ impl<V: Clone> Map<V> {
         }
     }
 
+    pub fn capacity(&self) -> usize {
+        self.key_set.keys.len()
+    }
+
     pub fn get(&self, key: StringHandle) -> Option<V> {
+        if self.key_set.count == 0 { return None; }
         let (found, index) = self.key_set.find(key);
         if found {
             self.values[index].clone()
@@ -98,30 +106,29 @@ impl<V: Clone> Map<V> {
         }
     }
 
-    pub fn capacity(&self) -> usize {
-        self.key_set.keys.len()
-    }
-
     fn grow(&mut self, capacity: usize) {
         let mut key_set = KeySet::with_capacity(capacity);
         let mut values: Box<[Option<V>]> = vec![None; capacity].into_boxed_slice();
         for i in 0..self.capacity() {
             let key = self.key_set.keys[i];
             if key.is_valid() {
-                values[key_set.add(key)] = self.values[i].take();
+                values[key_set.add(key).1] = self.values[i].take();
             }
         }
         self.key_set = key_set;
         self.values = values;
     }
 
-    pub fn set(&mut self, key: StringHandle, value: V) {
+    // returns true if a value is overridden
+    pub fn set(&mut self, key: StringHandle, value: V) -> bool {
         // grow if necessary
         let capacity = self.capacity();
         if 4 * (self.key_set.count + 1) > 3 * capacity {
             self.grow(if capacity < 8 { 8 } else { 2 * capacity });
         }
-        self.values[self.key_set.add(key)] = Some(value);
+        let (found, index) = self.key_set.add(key);
+        self.values[index] = Some(value);
+        return found;
     }
 
     pub fn delete(&mut self, key: StringHandle) {
@@ -130,7 +137,7 @@ impl<V: Clone> Map<V> {
         }
     }
 
-    pub fn set_all(&mut self, other: Self) {
+    pub fn set_all(&mut self, other: &Self) {
         if self.capacity() < other.capacity() {
             self.grow(other.capacity())
         }
@@ -163,13 +170,13 @@ impl Map<Value> {
     pub fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
-                key_set.add(self.key_set.keys[i]);
+                key_set.put(self.key_set.keys[i]);
             }
 
             match self.values[i] {
                 Some(Value::Object(handle)) => collector.push(handle),
                 Some(Value::String(handle)) => {
-                    key_set.add(handle);
+                    key_set.put(handle);
                 }
                 _ => {}
             }
@@ -244,7 +251,7 @@ impl Strings {
         for i in 0..self.key_set.keys.len() {
             let key = self.key_set.keys[i];
             if key.is_valid() {
-                values[key_set.add(key)] = self.values[i].take();
+                values[key_set.add(key).1] = self.values[i].take();
             }
         }
         self.key_set = key_set;
@@ -270,6 +277,34 @@ impl Strings {
         } else {
             None
         }
+    }
+
+    pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> Option<StringHandle> {
+        if let Some(a) = self.get(a) {
+            if let Some(b) = self.get(b) {
+                let mut c = String::new();
+                c.push_str(a);
+                c.push_str(b);
+                Some(self.put(&c))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn sweep(&mut self, key_set: KeySet) {
+        let capacity = key_set.keys.len();
+        let mut values = vec![None; capacity].into_boxed_slice();
+        for i in 0..self.key_set.keys.len() {
+            let (found, j) = key_set.find(self.key_set.keys[i]);
+            if found {
+                values[j] = self.values[i].take()
+            }
+        }
+        self.key_set = key_set;
+        self.values = values;
     }
 
     // I still imagine that for sweep, we just create a new keyset (mark) and use that to replace the keyset here (sweep)
@@ -314,7 +349,9 @@ mod tests {
         let mut strings = Strings::with_capacity(8);
         let mut table = Map::new();
         let key = strings.put("name");
+        let key2 = strings.put("other");
         table.set(key, ());
         assert_eq!(Some(()), table.get(key));
+        assert_eq!(None, table.get(key2));
     }
 }

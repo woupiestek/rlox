@@ -1,5 +1,54 @@
 # Rlox
 
+## 2024-08-25
+
+### big migration
+
+Suprisingly few failing tests after such a big migration.
+
+For strings, reference counting may be a superior strategy, since curcular
+references cannot happen. Trouble: simply dropping string handles must be
+stopped: this can only be done by handing the pointer back over to the the
+stringpool.
+
+Reminder `$env:RUST_BACKTRACE="full"; cargo run -- test.lox`
+
+### now what?
+
+- try building an allocator, i.e. something to actually keep track of allocated
+  space, including what is needed for strings, tables, chunks etc.
+- more subdivisions: seperate pools for every type of data.
+- optimisation/simplification: so many steps are needed for a function call,
+  maybe that can be improved
+- upvalue changes: shouldn't open/closed upvalues simply be differed types of
+  value or kinds of handle?
+- value change: use value arrays that store tags and content separately instead.
+- static/dynamic split: separate memeory managers for such data.
+- call stack changes: don't use the handles to the closures, but copy their
+  content straight into the call stack. Just doing so for the top clsure would
+  help.
+- numbers: change something fundamental, so the 64 bits of each number are no so
+  big and bad anymore.
+
+### upvalues
+
+Upvalues were pointers. The open ones point to values on the stack. The closed
+ones point to values that are moved the heap. To support closures. The move to
+the heap should happen without updating the closures, so once again, the upvalue
+hanlde should not change when the upvalue is closed. Otherwise...
+
+I think we tried this, keep a vector parallel to the operand stack so the open
+upvalues could be stored next to them.
+
+### closures chunks and functions
+
+Looking for optimalisations of the call stack, I wonder: Is a chunk ever really
+independent from a function?
+
+Note that we now effectively use handles for instruction pointers. I.e. there
+could be an instruction store, that has everthing in it, code, lines, constants.
+Offsets would be needed for each. functions are not that different as it stands.
+
 ## 2024-08-24
 
 ### the big push?

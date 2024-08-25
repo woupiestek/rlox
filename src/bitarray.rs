@@ -23,3 +23,22 @@ impl BitArray {
         self.data[index / 8] &= !(1 << (index & 7))
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primes() {
+        let mut bit_array = BitArray::new(10);
+        bit_array.add(2);
+        bit_array.add(3);
+        bit_array.add(5);
+        bit_array.add(7);
+        assert!(!bit_array.get(4));
+        assert!(bit_array.get(5));
+        bit_array.remove(5);
+        assert!(!bit_array.get(5));
+    }
+}

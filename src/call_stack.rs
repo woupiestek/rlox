@@ -2,45 +2,46 @@ use crate::{
     chunk::Chunk,
     heap::{Handle, Heap},
     object::{Closure, Function, Value},
+    strings::StringHandle,
 };
 
 // the top frame should be fast, cannot say it looks that way
-pub struct CallStack<const max_frames: usize> {
+pub struct CallStack<const MAX_SIZE: usize> {
     // current frame
-    pub top: isize,
+    top: i16,
     // instruction pointers
-    pub ips: [isize; max_frames],
+    ips: [isize; MAX_SIZE],
     // offsets into operand stack
-    slots: [usize; max_frames],
+    slots: [u16; MAX_SIZE],
     // called functions
-    pub closures: [Option<Handle>; max_frames],
+    closures: [Option<Handle>; MAX_SIZE],
 }
 
-impl<const max_frames: usize> CallStack<max_frames> {
+impl<const MAX_SIZE: usize> CallStack<MAX_SIZE> {
     pub fn new() -> Self {
         Self {
             top: -1,
-            ips: [-1; max_frames],
-            slots: [0; max_frames],
-            closures: [Option::None; max_frames],
+            ips: [-1; MAX_SIZE],
+            slots: [0; MAX_SIZE],
+            closures: [Option::None; MAX_SIZE],
         }
     }
 
     pub fn push(&mut self, slot: usize, closure: Handle) -> Result<(), String> {
         self.top += 1;
-        if self.top as usize == max_frames {
+        if self.top as usize == MAX_SIZE {
             return err!("Stack overflow.");
         }
         self.ips[self.top as usize] = -1;
         self.closures[self.top as usize] = Some(closure);
-        self.slots[self.top as usize] = slot;
+        self.slots[self.top as usize] = slot as u16;
         Ok(())
     }
 
     fn chunk<'hp>(&self, heap: &'hp Heap) -> Option<&'hp Chunk> {
-        match &self.closures[self.top as usize] {
+        match self.closures[self.top as usize] {
             Some(closure) => {
-                let closure = heap.get_ref::<Closure>(*closure);
+                let closure = heap.get_ref::<Closure>(closure);
                 let function = heap.get_ref::<Function>(closure.function);
                 Some(&function.chunk)
             }
@@ -64,9 +65,9 @@ impl<const max_frames: usize> CallStack<max_frames> {
         }
     }
 
-    pub fn read_string(&mut self, heap: &Heap) -> Result<Handle, String> {
+    pub fn read_string(&mut self, heap: &Heap) -> Result<StringHandle, String> {
         let value = self.read_constant(heap);
-        if let Value::Object(handle) = value {
+        if let Value::String(handle) = value {
             Ok(handle)
         } else {
             err!("'{}' is not a string", value.to_string(heap))
@@ -96,7 +97,7 @@ impl<const max_frames: usize> CallStack<max_frames> {
     }
 
     pub fn slot(&self) -> usize {
-        self.slots[self.top as usize]
+        self.slots[self.top as usize] as usize
     }
 
     pub fn jump_forward(&mut self, heap: &Heap) {
@@ -125,5 +126,27 @@ impl<const max_frames: usize> CallStack<max_frames> {
 
     pub fn is_empty(&self) -> bool {
         self.top < 0
+    }
+
+    pub fn trace(&self, collector:  &mut Vec<Handle>) {
+        for option in &self.closures {
+            if let Some(closure) = option {
+                collector.push(Handle::from(*closure))
+            };
+        }
+    }
+
+    pub fn print_stack_trace(&self, heap: &Heap) {
+        for i in 0..self.top {
+            if let Some(closure) = self.closures[i as usize] {
+                let closure = heap.get_ref::<Closure>(closure);
+                let function: &Function = heap.get_ref::<Function>(closure.function);
+                eprintln!(
+                    "  at {} line {}",
+                    heap.to_string(closure.function),
+                    function.chunk.lines[self.ips[i as usize] as usize]
+                )
+            }
+        }
     }
 }

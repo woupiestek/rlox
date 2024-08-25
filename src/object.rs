@@ -99,7 +99,7 @@ impl Traceable for Function {
 
     fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
         if let Some(name) = self.name {
-            key_set.add(name);
+            key_set.put(name);
         }
         for &value in &self.chunk.constants {
             if let Value::Object(h) = value {
@@ -134,13 +134,15 @@ impl Traceable for Class {
     }
 
     fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
-        key_set.add(self.name);
+        key_set.put(self.name);
         self.methods.trace(collector, key_set);
     }
 }
 
 pub enum Upvalue {
     Open(usize, Option<Handle>),
+    // store any value on the heap...
+    // allow this value to change into other types of value
     Closed(Value),
 }
 
@@ -155,6 +157,7 @@ impl Traceable for Upvalue {
         match *self {
             Upvalue::Open(_, Some(next)) => collector.push(Handle::from(next)),
             Upvalue::Closed(Value::Object(handle)) => collector.push(handle),
+            Upvalue::Closed(Value::String(handle)) => key_set.put(handle),
             _ => (),
         }
     }
@@ -184,10 +187,10 @@ impl Traceable for Closure {
         16 + self.upvalues.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+    fn trace(&self, collector: &mut Vec<Handle>, _key_set: &mut KeySet) {
         collector.push(Handle::from(self.function));
-        for upvalue in self.upvalues.iter() {
-            collector.push(Handle::from(*upvalue));
+        for &upvalue in self.upvalues.iter() {
+            collector.push(Handle::from(upvalue));
         }
     }
 }
@@ -238,7 +241,7 @@ impl Traceable for BoundMethod {
         16
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+    fn trace(&self, collector: &mut Vec<Handle>, _key_set: &mut KeySet) {
         collector.push(Handle::from(self.receiver));
         collector.push(Handle::from(self.method));
     }

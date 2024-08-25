@@ -1,10 +1,12 @@
 use std::{mem, time::Instant, usize};
 
 use crate::{
+    bitarray::BitArray,
     chunk::{Chunk, Op},
     heap::{Handle, Heap, Traceable},
     object::{Function, Value},
-    scanner::{Scanner, Token, TokenType}, strings::StringHandle,
+    scanner::{Scanner, Token, TokenType},
+    strings::StringHandle,
 };
 
 #[derive(PartialEq, PartialOrd)]
@@ -442,7 +444,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.class_depth == 0 {
             return err!("Can't use 'super' outside of a class.");
         }
-        if self.source.has_super & 1 == 0 {
+        if !self.source.has_super.get(self.source.class_depth as usize) {
             return err!("Can't use 'super' in a class with no superclass.");
         }
         self.source
@@ -669,7 +671,6 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.class_depth == 127 {
             return err!("Cannot nest classes that deep");
         }
-        self.source.has_super <<= 1;
         self.source.class_depth += 1;
 
         // super decl
@@ -686,7 +687,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.define_variable(0);
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
-            self.source.has_super |= 1;
+            self.source.has_super.add(self.source.class_depth as usize);
         }
 
         // why this again?
@@ -706,11 +707,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
         self.emit_op(Op::Pop);
 
-        if self.source.has_super & 1 == 1 {
+        if self.source.has_super.get(self.source.class_depth as usize) {
             self.end_scope();
         }
 
-        self.source.has_super >>= 1;
+        self.source
+            .has_super
+            .remove(self.source.class_depth as usize);
         self.source.class_depth -= 1;
         Ok(())
     }
@@ -913,13 +916,19 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn script(&mut self) -> Result<Handle, String> {
-        let before = self.heap.get_ref::<Function>(self.data.function).byte_count();
+        let before = self
+            .heap
+            .get_ref::<Function>(self.data.function)
+            .byte_count();
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
         self.emit_return();
         self.heap.increase_byte_count(
-            self.heap.get_ref::<Function>(self.data.function).byte_count() - before,
+            self.heap
+                .get_ref::<Function>(self.data.function)
+                .byte_count()
+                - before,
         );
         Ok(self.data.function)
     }
@@ -938,7 +947,7 @@ pub struct Source<'src> {
     scanner: Scanner<'src>,
     current: Token,
     previous: Token,
-    has_super: u128,
+    has_super: BitArray,
     class_depth: u8,
     // status
     error_count: u8,
@@ -952,7 +961,7 @@ impl<'src> Source<'src> {
             scanner,
             current,
             previous: Token(TokenType::Begin, usize::MAX),
-            has_super: 0,
+            has_super: BitArray::new(256),
             class_depth: 0,
             error_count: 0,
         }

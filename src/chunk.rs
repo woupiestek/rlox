@@ -83,14 +83,9 @@ const OP_CODES: [Op; OP_COUNT] = [
     Op::Method,
 ];
 
-impl TryFrom<u8> for Op {
-    type Error = String;
-
-    fn try_from(op: u8) -> Result<Self, Self::Error> {
-        if op > Op::Method as u8 {
-            return Err(format!("{op} is not a valid opcode"));
-        }
-        Ok(OP_CODES[op as usize])
+impl From<u8> for Op {
+    fn from(op: u8) -> Self {
+        OP_CODES[op as usize]
     }
 }
 

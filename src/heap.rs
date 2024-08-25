@@ -109,7 +109,11 @@ impl Heap {
         self.string_pool.get(handle).unwrap()
     }
 
-    pub fn retain(&mut self, roots: Vec<Handle>,key_set: KeySet) {
+    pub fn string_pool_capacity(&self) -> usize {
+        self.string_pool.capacity()
+    }
+
+    pub fn retain(&mut self, mut roots: Vec<Handle>, mut key_set: KeySet) {
         #[cfg(feature = "log_gc")]
         let before = self.byte_count;
         #[cfg(feature = "log_gc")]
@@ -117,8 +121,8 @@ impl Heap {
             println!("-- gc begin");
             println!("byte count: {}", before);
         }
-        // todo: sweep keyset
-        self.sweep(self.mark(roots,key_set));
+        self.sweep(self.mark(&mut roots, &mut key_set));
+        self.string_pool.sweep(key_set);
         self.next_gc *= 2;
         #[cfg(feature = "log_gc")]
         {
@@ -134,7 +138,7 @@ impl Heap {
         }
     }
 
-    fn mark(&self, mut roots: Vec<Handle>, mut key_set: KeySet) -> BitArray {
+    fn mark(&self, roots: &mut Vec<Handle>, key_set: &mut KeySet) -> BitArray {
         let mut marked = BitArray::new(self.pointers.len());
 
         #[cfg(feature = "log_gc")]
@@ -152,25 +156,13 @@ impl Heap {
             }
             marked.add(index);
             match self.kinds[index] {
-                Kind::BoundMethod => self
-                    .get_ref::<BoundMethod>(handle)
-                    .trace(&mut roots, &mut key_set),
-                Kind::Class => self
-                    .get_ref::<Class>(handle)
-                    .trace(&mut roots, &mut key_set),
-                Kind::Closure => self
-                    .get_ref::<Closure>(handle)
-                    .trace(&mut roots, &mut key_set),
-                Kind::Function => self
-                    .get_ref::<Function>(handle)
-                    .trace(&mut roots, &mut key_set),
+                Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(roots, key_set),
+                Kind::Class => self.get_ref::<Class>(handle).trace(roots, key_set),
+                Kind::Closure => self.get_ref::<Closure>(handle).trace(roots, key_set),
+                Kind::Function => self.get_ref::<Function>(handle).trace(roots, key_set),
                 Kind::Free => {}
-                Kind::Instance => self
-                    .get_ref::<Instance>(handle)
-                    .trace(&mut roots, &mut key_set),
-                Kind::Upvalue => self
-                    .get_ref::<Upvalue>(handle)
-                    .trace(&mut roots, &mut key_set),
+                Kind::Instance => self.get_ref::<Instance>(handle).trace(roots, key_set),
+                Kind::Upvalue => self.get_ref::<Upvalue>(handle).trace(roots, key_set),
             }
         }
 
@@ -229,8 +221,6 @@ impl Heap {
                 self.free(i);
             }
         }
-        // todo: clean up the string pool somehow
-        //self.string_pool.sweep(marked);
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -246,9 +236,9 @@ impl Heap {
         self.string_pool.put(name)
     }
 
-    pub fn intern(&mut self, name: String) -> StringHandle {
-        self.byte_count += name.len();
-        self.string_pool.put(&name)
+    pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> Option<StringHandle> {
+        // todo: count added bytes somehow
+        self.string_pool.concat(a, b)
     }
 
     pub fn needs_gc(&self) -> bool {
