@@ -1,10 +1,7 @@
 // run time data structures
 
 use crate::{
-    chunk::Chunk,
-    heap::{Handle, Heap, Kind, Traceable},
-    natives::NativeHandle,
-    strings::{KeySet, Map, StringHandle},
+    byte_code::{ByteCode, FunctionHandle},  heap::{Handle, Heap, Kind, Traceable}, natives::NativeHandle, strings::{Map, StringHandle}
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -12,6 +9,7 @@ pub enum Value {
     Nil,
     True,
     False,
+    Function(FunctionHandle),
     Native(NativeHandle),
     Number(f64),
     Object(Handle),
@@ -21,6 +19,12 @@ pub enum Value {
 impl From<StringHandle> for Value {
     fn from(value: StringHandle) -> Self {
         Self::String(value)
+    }
+}
+
+impl From<FunctionHandle> for Value {
+    fn from(value: FunctionHandle) -> Self {
+        Self::Function(value)
     }
 }
 
@@ -59,58 +63,71 @@ impl Value {
         }
     }
 
-    pub fn to_string(&self, heap: &Heap) -> String {
+    pub fn to_string(&self, heap: &Heap, byte_code: &ByteCode) -> String {
         match self {
             Value::False => format!("false"),
             Value::Nil => format!("nil"),
             Value::Number(a) => format!("{}", a),
-            Value::Object(a) => heap.to_string(*a),
+            Value::Object(a) => heap.to_string(*a, byte_code),
             Value::True => format!("true"),
             Value::Native(_) => format!("<native function>"),
             Value::String(a) => heap.get_str(*a).to_owned(),
-        }
-    }
-}
-
-pub struct Function {
-    pub name: Option<StringHandle>,
-    pub arity: u8,
-    pub upvalue_count: u8,
-    pub chunk: Chunk,
-}
-
-impl Function {
-    pub fn new() -> Self {
-        Self {
-            name: None,
-            arity: 0,
-            upvalue_count: 0,
-            chunk: Chunk::new(),
-        }
-    }
-}
-
-impl Traceable for Function {
-    const KIND: Kind = Kind::Function;
-    // just consider initial allocation
-    fn byte_count(&self) -> usize {
-        60 + self.chunk.byte_increment()
-    }
-
-    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
-        if let Some(name) = self.name {
-            key_set.put(name);
-        }
-        for &value in &self.chunk.constants {
-            if let Value::Object(h) = value {
-                collector.push(h)
-            }
-            if let Value::String(h) = value {
-                key_set.put(h)
+            Value::Function(a) => {
+                let function = byte_code.function_ref(*a);
+                if function.name != StringHandle::EMPTY {
+                    format!(
+                        "<fn {} ({}/{})>",
+                        heap.get_str(function.name),
+                        function.arity,
+                        function.upvalue_count
+                    )
+                } else {
+                    format!("<script>")
+                }
             }
         }
     }
 }
+
+// pub struct Function {
+//     pub name: Option<StringHandle>,
+//     pub arity: u8,
+//     pub upvalue_count: u8,
+//     pub chunk: Chunk,
+// }
+
+// impl Function {
+//     pub fn new() -> Self {
+//         Self {
+//             name: None,
+//             arity: 0,
+//             upvalue_count: 0,
+//             chunk: Chunk::new(),
+//         }
+//     }
+// }
+
+// impl Traceable for Function {
+//     const KIND: Kind = Kind::Function;
+//     // just consider initial allocation
+//     fn byte_count(&self) -> usize {
+//         60 + self.chunk.byte_increment()
+//     }
+
+//     fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+//         if let Some(name) = self.name {
+//             key_set.put(name);
+//         }
+//         for &value in &self.chunk.constants {
+//             if let Value::Object(h) = value {
+//                 collector.push(h)
+//             }
+//             if let Value::String(h) = value {
+//                 key_set.put(h)
+//             }
+//         }
+//     }
+// }
 
 pub struct Class {
     pub name: StringHandle,
@@ -136,9 +153,9 @@ impl Traceable for Class {
         40 + 16 * self.methods.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
-        key_set.put(self.name);
-        self.methods.trace(collector, key_set);
+    fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+        strings.push(self.name);
+        self.methods.trace(collector, strings);
     }
 }
 
@@ -156,11 +173,11 @@ impl Traceable for Upvalue {
         24
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+    fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
         match *self {
             Upvalue::Open(_, Some(next)) => collector.push(Handle::from(next)),
             Upvalue::Closed(Value::Object(handle)) => collector.push(handle),
-            Upvalue::Closed(Value::String(handle)) => key_set.put(handle),
+            Upvalue::Closed(Value::String(handle)) => strings.push(handle),
             _ => (),
         }
     }
@@ -169,15 +186,18 @@ impl Traceable for Upvalue {
 // I guess the constructor can own the upvalues,
 // though the class basically already determines how many are needed.
 pub struct Closure {
-    pub function: Handle,
+    pub function: FunctionHandle,
+    // todo: find a better way to stringify closures.
+    pub name: Option<StringHandle>,
     // heap allocated
     pub upvalues: Vec<Handle>,
 }
 
 impl Closure {
-    pub fn new(function: Handle) -> Self {
+    pub fn new(function: FunctionHandle, name: Option<StringHandle>) -> Self {
         Self {
             function,
+            name,
             upvalues: Vec::new(),
         }
     }
@@ -190,8 +210,7 @@ impl Traceable for Closure {
         16 + self.upvalues.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, _key_set: &mut KeySet) {
-        collector.push(Handle::from(self.function));
+    fn trace(&self, collector: &mut Vec<Handle>, _strings: &mut Vec<StringHandle>) {
         for &upvalue in self.upvalues.iter() {
             collector.push(Handle::from(upvalue));
         }
@@ -211,9 +230,9 @@ impl Traceable for Instance {
         40 + 24 * self.properties.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+    fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
         collector.push(Handle::from(self.class));
-        self.properties.trace(collector, key_set);
+        self.properties.trace(collector, strings);
     }
 }
 
@@ -244,7 +263,7 @@ impl Traceable for BoundMethod {
         16
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, _key_set: &mut KeySet) {
+    fn trace(&self, collector: &mut Vec<Handle>, _strings: &mut Vec<StringHandle>) {
         collector.push(Handle::from(self.receiver));
         collector.push(Handle::from(self.method));
     }

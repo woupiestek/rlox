@@ -7,7 +7,7 @@ impl BitArray {
     pub fn new(length: usize) -> Self {
         Self {
             length,
-            data: Box::from(vec![0; (length + 7) / 8]),
+            data: vec![0; (length + 7) / 8].into_boxed_slice(),
         }
     }
     pub fn get(&self, index: usize) -> bool {

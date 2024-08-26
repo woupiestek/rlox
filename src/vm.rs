@@ -7,7 +7,7 @@ use crate::{
     compiler::compile,
     heap::{Handle, Heap, Kind, Traceable},
     natives::Natives,
-    object::{BoundMethod, Class, Closure, Function, Instance, Upvalue, Value},
+    object::{BoundMethod, Class, Closure, Instance, Upvalue, Value},
     strings::{KeySet, Map, StringHandle},
 };
 
@@ -112,9 +112,9 @@ impl VM {
         self.heap.put(t)
     }
 
-    fn roots(&mut self) -> (Vec<Handle>, KeySet) {
+    fn roots(&mut self) -> (Vec<Handle>, Vec<StringHandle>) {
         let mut collector = Vec::new();
-        let mut key_set = KeySet::with_capacity(self.heap.string_pool_capacity());
+        let mut strings = Vec::new();
         #[cfg(feature = "log_gc")]
         {
             println!("collect stack objects");
@@ -140,14 +140,14 @@ impl VM {
         {
             println!("collect globals");
         }
-        self.globals.trace(&mut collector, &mut key_set);
+        self.globals.trace(&mut collector, &mut strings);
         // no compiler roots
         #[cfg(feature = "log_gc")]
         {
             println!("collect init string");
         }
-        key_set.put(self.init_string);
-        (collector, key_set)
+        strings.push(self.init_string);
+        (collector, strings)
     }
 
     fn define_native(

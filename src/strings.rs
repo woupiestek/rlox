@@ -155,10 +155,10 @@ impl<V: Clone> Map<V> {
 }
 
 impl Map<Handle> {
-    pub fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+    pub fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
-                key_set.add(self.key_set.keys[i]);
+                strings.push(self.key_set.keys[i]);
             }
 
             if let Some(value) = self.values[i] {
@@ -169,16 +169,16 @@ impl Map<Handle> {
 }
 
 impl Map<Value> {
-    pub fn trace(&self, collector: &mut Vec<Handle>, key_set: &mut KeySet) {
+    pub fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
-                key_set.put(self.key_set.keys[i]);
+                strings.push(self.key_set.keys[i]);
             }
 
             match self.values[i] {
                 Some(Value::Object(handle)) => collector.push(handle),
                 Some(Value::String(handle)) => {
-                    key_set.put(handle);
+                    strings.push(handle);
                 }
                 _ => {}
             }

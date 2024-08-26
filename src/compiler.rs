@@ -2,9 +2,10 @@ use std::{mem, time::Instant, usize};
 
 use crate::{
     bitarray::BitArray,
-    chunk::{Chunk, Op},
-    heap::{Handle, Heap, Traceable},
-    object::{Function, Value},
+    byte_code::{ByteCode, FunctionHandle},
+    chunk::Op,
+    heap::{Handle, Heap},
+    object::Value,
     scanner::{Scanner, Token, TokenType},
     strings::StringHandle,
 };
@@ -52,7 +53,7 @@ enum FunctionType {
 struct CompileData {
     enclosing: Option<Box<CompileData>>,
     function_type: FunctionType,
-    function: Handle,
+    function: FunctionHandle,
     locals_captured: BitArray,
     locals_initialized: BitArray,
     locals: Vec<StringHandle>,
@@ -62,7 +63,7 @@ struct CompileData {
 }
 
 impl CompileData {
-    fn new(function_type: FunctionType, function: Handle, this_name: StringHandle) -> Self {
+    fn new(function_type: FunctionType, function: FunctionHandle, this_name: StringHandle) -> Self {
         let mut initialized = BitArray::new(256);
         initialized.add(0); // first local
         Self {
@@ -164,32 +165,34 @@ impl CompileData {
 struct Compiler<'src, 'hp> {
     data: Box<CompileData>,
     source: Source<'src>,
+    target: ByteCode,
     heap: &'hp mut Heap,
     this_name: StringHandle,
     super_name: StringHandle,
 }
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
-    fn new(
-        function_type: FunctionType,
-        function: Handle,
-        source: Source<'src>,
-        heap: &'hp mut Heap,
-    ) -> Self {
+    fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
         let this_name = heap.intern_copy("this");
         let super_name = heap.intern_copy("super");
+        let mut target = ByteCode::new();
         Self {
-            data: Box::from(CompileData::new(function_type, function, this_name)),
+            data: Box::from(CompileData::new(
+                function_type,
+                target.new_function(),
+                this_name,
+            )),
             source,
+            target,
             heap,
             this_name,
             super_name,
         }
     }
 
-    fn current_chunk(&mut self) -> &mut Chunk {
-        &mut self.heap.get_mut::<Function>(self.data.function).chunk
-    }
+    // fn current_chunk(&mut self) -> &mut Chunk {
+    //     &mut self.heap.get_mut::<Function>(self.data.function).chunk
+    // }
 
     fn emit_return(&mut self) {
         if self.data.function_type == FunctionType::Initializer {
@@ -202,27 +205,26 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_byte_op(&mut self, op: Op, byte: u8) {
         let line = self.line_and_column().0;
-        self.current_chunk().write_byte_op(op, byte, line);
+        self.target.write_byte_op(op, byte, line);
     }
 
     fn emit_short_op(&mut self, op: Op, short: u16) {
         let line = self.line_and_column().0;
-        self.current_chunk().write_short_op(op, short, line);
+        self.target.write_short_op(op, short, line);
     }
 
     fn emit_invoke_op(&mut self, op: Op, constant: u8, arity: u8) {
         let line = self.line_and_column().0;
-        self.current_chunk()
-            .write_invoke_op(op, constant, arity, line);
+        self.target.write_invoke_op(op, constant, arity, line);
     }
 
     fn emit_op(&mut self, op: Op) {
         let line = self.line_and_column().0;
-        self.current_chunk().write(&[op as u8], line);
+        self.target.write(&[op as u8], line);
     }
 
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
-        let offset = self.current_chunk().count() - start + 1;
+        let offset = self.target.count() - start + 1;
         if offset > u16::MAX as usize {
             err!("loop size to large")
         } else {
@@ -233,11 +235,11 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_jump(&mut self, instruction: Op) -> usize {
         self.emit_short_op(instruction, 0xffff);
-        self.current_chunk().count() - 2
+        self.target.count() - 2
     }
 
     fn emit_constant(&mut self, value: Value) -> Result<(), String> {
-        let make_constant = self.current_chunk().add_constant(value)?;
+        let make_constant = self.target.add_constant(self.data.function, value)?;
         self.emit_byte_op(Op::Constant, make_constant);
         Ok(())
     }
@@ -286,7 +288,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.emit_op(Op::Pop);
         self.parse_precedence(Prec::And)?;
 
-        self.current_chunk().patch_jump(end_jump)
+        self.target.patch_jump(end_jump)
     }
 
     fn binary(&mut self) -> Result<(), String> {
@@ -370,12 +372,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let else_jump = self.emit_jump(Op::JumpIfFalse);
         let end_jump = self.emit_jump(Op::Jump);
 
-        self.current_chunk().patch_jump(else_jump)?;
+        self.target.patch_jump(else_jump)?;
         self.emit_op(Op::Pop);
 
         self.parse_precedence(Prec::Or)?;
 
-        self.current_chunk().patch_jump(end_jump)?;
+        self.target.patch_jump(end_jump)?;
         Ok(())
     }
 
@@ -394,7 +396,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             } else if let Some(arg) = self.data.resolve_upvalue(name)? {
                 (arg, Op::GetUpvalue, Op::SetUpvalue)
             } else {
-                let arg = self.current_chunk().add_constant(Value::from(name))?;
+                let arg = self
+                    .target
+                    .add_constant(self.data.function, Value::from(name))?;
                 (arg, Op::GetGlobal, Op::SetGlobal)
             }
         };
@@ -550,10 +554,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                if self.heap.get_ref::<Function>(self.data.function).arity == u8::MAX {
+                if self.target.function_ref(self.data.function).arity == u8::MAX {
                     return err!("Can't have more than 255 parameters.");
                 }
-                self.heap.get_mut::<Function>(self.data.function).arity += 1;
+                self.target.function_mut(self.data.function).arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index);
                 if !self.source.match_type(TokenType::Comma) {
@@ -577,9 +581,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = self.source.identifier_name()?;
         let name = self.heap.intern_copy(name);
-        let function = self.heap.put(Function::new());
-        self.heap.get_mut::<Function>(function).name = Some(name);
-        let before = self.heap.get_ref::<Function>(function).byte_count();
+        let function = self.target.new_function();
+        self.target.function_mut(function).name = name;
         // do the head of the linked list thing
         let enclosing = mem::replace(
             &mut self.data,
@@ -594,15 +597,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let enclosing = self.data.enclosing.take().unwrap();
         let enclosed = mem::replace(&mut self.data, enclosing);
 
-        self.heap.get_mut::<Function>(function).upvalue_count = enclosed.upvalues.len() as u8;
-        self.heap
-            .increase_byte_count(self.heap.get_ref::<Function>(function).byte_count() - before);
-        let index = self.current_chunk().add_constant(Value::from(function))?;
+        self.target.function_mut(function).upvalue_count = enclosed.upvalues.len() as u8;
+        let index = self.target.add_constant(self.data.function, Value::from(function))?;
         self.emit_byte_op(Op::Closure, index);
         let line = self.line_and_column().0;
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
-            self.current_chunk().write(
+            self.target.write(
                 &[enclosed.upvalues_local.get(upvalue as usize) as u8, upvalue],
                 line,
             );
@@ -727,7 +728,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                 self.expression_statement()
             }?;
         }
-        let mut loop_start = self.current_chunk().count();
+        let mut loop_start = self.target.count();
         let mut exit_jump: Option<usize> = None;
         if !self.source.match_type(TokenType::Semicolon) {
             self.expression()?;
@@ -741,7 +742,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
         if !self.source.match_type(TokenType::RightParen) {
             let body_jump = self.emit_jump(Op::Jump);
-            let increment_start = self.current_chunk().count();
+            let increment_start = self.target.count();
             self.expression()?;
             self.emit_op(Op::Pop);
             self.source
@@ -750,13 +751,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.emit_loop(loop_start)?;
             loop_start = increment_start;
 
-            self.current_chunk().patch_jump(body_jump)?;
+            self.target.patch_jump(body_jump)?;
         }
 
         self.statement()?;
         self.emit_loop(loop_start)?;
         if let Some(i) = exit_jump {
-            self.current_chunk().patch_jump(i)?;
+            self.target.patch_jump(i)?;
             self.emit_op(Op::Pop);
         }
         self.end_scope();
@@ -775,13 +776,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.statement()?;
         let else_jump = self.emit_jump(Op::Jump);
 
-        self.current_chunk().patch_jump(then_jump)?;
+        self.target.patch_jump(then_jump)?;
         self.emit_op(Op::Pop);
         if self.source.match_type(TokenType::Else) {
             self.statement()?;
         }
 
-        self.current_chunk().patch_jump(else_jump)?;
+        self.target.patch_jump(else_jump)?;
         Ok(())
     }
 
@@ -815,7 +816,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn while_statement(&mut self) -> Result<(), String> {
-        let loop_start = self.current_chunk().count();
+        let loop_start = self.target.count();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
         self.expression()?;
@@ -827,13 +828,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.statement()?;
         self.emit_loop(loop_start)?;
 
-        self.current_chunk().patch_jump(exit_jump)?;
+        self.target.patch_jump(exit_jump)?;
         self.emit_op(Op::Pop);
         Ok(())
     }
 
     fn intern(&mut self, loxtr: StringHandle) -> Result<u8, String> {
-        self.current_chunk().add_constant(Value::from(loxtr))
+        self.target.add_constant(Value::from(loxtr))
     }
 
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {

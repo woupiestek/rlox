@@ -1,5 +1,68 @@
 # Rlox
 
+## 2024-08-26
+
+### the obstacle
+
+To get closer to the original, rlox's heaps should provide empty objects, to be
+initialized afterward. But this initialization after the fact can now change the
+size of the object, as a lot of reallocation is going on behind the scenes.
+
+Let's copy the zoo here again:
+
+- BoundMethod: instance: Instance, method: Closure ~ fixed size
+- Class: name: String, methods: Table<Closure> ~ dynamic size
+- Closure: function: Function, upvalues: Vec<Upvalue> ~ dynamic size
+- Function: name: String, arity: int, upvalue_count: number, chunk: Chunk
+  ~apparently dynamic size
+- Instance: class: Class, properties: Table<Value> ~ dynamic size
+- Native: function_pointer: usize
+- String: hash: int64, content: Box<str> ~ dynamic size
+- Open Upvalue: stack pointer + pointer to next open upvalue (because a linked
+  list is used here)
+- Closed Upvalue: value
+
+- Value: tag: Nil, True, False, Number, Object... value: f64|usize
+- Chunk: code: Vec<u8>, lines: Vec<u16>, constants: Vec<Value>
+
+### broken handle tactic
+
+Assume the pointer is an offset to a base pointer held by the heap. Now
+actually, the heap uses a sequence of pointers each pointing to a page of memory
+of some pwo of 2 size. The trick: use the top bits to decide which base pointer
+and the bottom bits for the position within the list. Attempts could be made to
+use larger chunks of memory when reallocating.
+
+### chunks and functions
+
+Instead of having chunks, there'd just be a big chunks repository, that contains
+the data of all chunks put together, but that creates new opportunities. e.g.
+put all the code in one big array, the constants in another, and the lines in a
+different structure altogether. The functions have offsets into these tables,
+and work with that.
+
+The names of functions don't matter, until they are printed. So this could be a
+slower operation hat goes back to the source and parser the function name again.
+That might not be the best idea.
+
+We could do the run length encoding for the line numbers. To start with. Only
+the offsets into the code and constant arrays actually matter, So change the
+functions to have only those. And now the functions themselves make more sense,
+as they contain only offsets into the global store of chunks and constants.
+
+Yes, this is the next place to go.
+
+### eventual allocation
+
+I can imaging this working out as follows: the compiler at first pessimistically
+allocates a lot of space for code & constants. Then realloc is uses to downsize
+the array, and free the space for other stuff. If too little space was
+allocated, the broken offset idea could still work.
+
+### the new repo
+
+Is actually a runtime representation of a compiled lox file.
+
 ## 2024-08-25
 
 ### big migration
@@ -23,7 +86,7 @@ Reminder `$env:RUST_BACKTRACE="full"; cargo run -- test.lox`
 - upvalue changes: shouldn't open/closed upvalues simply be differed types of
   value or kinds of handle?
 - value change: use value arrays that store tags and content separately instead.
-- static/dynamic split: separate memeory managers for such data.
+- static/dynamic split: separate memory managers for such data.
 - call stack changes: don't use the handles to the closures, but copy their
   content straight into the call stack. Just doing so for the top closure could
   help.

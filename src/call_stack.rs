@@ -1,8 +1,5 @@
 use crate::{
-    chunk::Chunk,
-    heap::{Handle, Heap},
-    object::{Closure, Function, Value},
-    strings::StringHandle,
+    byte_code:: ByteCode, heap::{Handle, Heap}, object::{Closure, Value}, strings::StringHandle
 };
 
 // the top frame should be fast, cannot say it looks that way
@@ -38,35 +35,29 @@ impl<const MAX_SIZE: usize> CallStack<MAX_SIZE> {
         Ok(())
     }
 
-    fn chunk<'hp>(&self, heap: &'hp Heap) -> Option<&'hp Chunk> {
-        match self.closures[self.top as usize] {
-            Some(closure) => {
-                let closure = heap.get_ref::<Closure>(closure);
-                let function = heap.get_ref::<Function>(closure.function);
-                Some(&function.chunk)
-            }
-            None => None, // todo
-        }
-    }
+    // fn chunk<'hp>(&self, heap: &'hp Heap) -> Option<&'hp Chunk> {
+    //     match self.closures[self.top as usize] {
+    //         Some(closure) => {
+    //             let closure = heap.get_ref::<Closure>(closure);
+    //             let function = heap.get_ref::<Function>(closure.function);
+    //             Some(&function.chunk)
+    //         }
+    //         None => None, // todo
+    //     }
+    // }
 
-    pub fn read_byte(&mut self, heap: &Heap) -> u8 {
+    pub fn read_byte(&mut self, byte_code: &ByteCode) -> u8 {
         self.ips[self.top as usize] += 1;
-        match self.chunk(heap) {
-            Some(chunk) => chunk.read_byte(self.ips[self.top as usize] as usize),
-            None => 0, // todo
-        }
+        byte_code.read_byte(self.ips[self.top as usize] as usize)
     }
 
-    pub fn read_constant(&mut self, heap: &Heap) -> Value {
+    pub fn read_constant(&mut self, byte_code: &ByteCode) -> Value {
         self.ips[self.top as usize] += 1;
-        match self.chunk(heap) {
-            Some(chunk) => chunk.read_constant(self.ips[self.top as usize] as usize),
-            None => Value::Nil, // todo
-        }
+        byte_code.read_constant(self.ips[self.top as usize] as usize)
     }
 
-    pub fn read_string(&mut self, heap: &Heap) -> Result<StringHandle, String> {
-        let value = self.read_constant(heap);
+    pub fn read_string(&mut self, byte_code: &ByteCode, heap:&Heap) -> Result<StringHandle, String> {
+        let value = self.read_constant(byte_code);
         if let Value::String(handle) = value {
             Ok(handle)
         } else {
@@ -81,14 +72,12 @@ impl<const MAX_SIZE: usize> CallStack<MAX_SIZE> {
         }
     }
 
-    pub fn read_upvalue(&mut self, heap: &Heap) -> Result<Handle, String> {
+    pub fn read_upvalue(&mut self, byte_code: &ByteCode, heap: &Heap) -> Result<Handle, String> {
         self.ips[self.top as usize] += 1;
         match self.closures[self.top as usize] {
             Some(closure) => {
                 let closure = heap.get_ref::<Closure>(closure);
-                let function = heap.get_ref::<Function>(closure.function);
-                Ok(closure.upvalues[function
-                    .chunk
+                Ok(closure.upvalues[byte_code
                     .read_byte(self.ips[self.top as usize] as usize)
                     as usize])
             }
@@ -100,20 +89,14 @@ impl<const MAX_SIZE: usize> CallStack<MAX_SIZE> {
         self.slots[self.top as usize] as usize
     }
 
-    pub fn jump_forward(&mut self, heap: &Heap) {
-        if let Some(chunk) = self.chunk(heap) {
+    pub fn jump_forward(&mut self, byte_code: &ByteCode) {
             self.ips[self.top as usize] +=
-                chunk.read_short(self.ips[self.top as usize] as usize + 1) as isize;
-        }
-        // todo: improve data structure
+                byte_code.read_short(self.ips[self.top as usize] as usize + 1) as isize;
     }
 
-    pub fn jump_back(&mut self, heap: &Heap) {
-        if let Some(chunk) = self.chunk(heap) {
+    pub fn jump_back(&mut self, byte_code: &ByteCode) {
             self.ips[self.top as usize] -=
-                chunk.read_short(self.ips[self.top as usize] as usize + 1) as isize;
-        }
-        // todo: improve data structure
+            byte_code.read_short(self.ips[self.top as usize] as usize + 1) as isize;
     }
 
     pub fn skip(&mut self) {
@@ -136,15 +119,13 @@ impl<const MAX_SIZE: usize> CallStack<MAX_SIZE> {
         }
     }
 
-    pub fn print_stack_trace(&self, heap: &Heap) {
+    pub fn print_stack_trace(&self, byte_code: &ByteCode, heap: &Heap) {
         for i in 0..self.top {
             if let Some(closure) = self.closures[i as usize] {
-                let closure = heap.get_ref::<Closure>(closure);
-                let function: &Function = heap.get_ref::<Function>(closure.function);
                 eprintln!(
                     "  at {} line {}",
-                    heap.to_string(closure.function),
-                    function.chunk.lines[self.ips[i as usize] as usize]
+                    heap.to_string(closure, byte_code),
+                    byte_code.get_line(self.ips[i as usize] as u32)
                 )
             }
         }
