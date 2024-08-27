@@ -1,8 +1,8 @@
 use crate::{
     bitarray::BitArray,
-    byte_code::{self, ByteCode},
-    object::{BoundMethod, Class, Closure, Function, Instance, Upvalue, Value},
-    strings::{self, KeySet, StringHandle, Strings},
+    byte_code::ByteCode,
+    object::{BoundMethod, Class, Closure, Instance, Upvalue, Value},
+    strings::{KeySet, StringHandle, Strings},
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -115,7 +115,10 @@ impl Heap {
             println!("-- gc begin");
             println!("byte count: {}", before);
         }
-        self.mark(&mut roots, &mut strings);
+        let (marked, key_set) = self.mark(&mut roots, &mut strings);
+        self.sweep(marked);
+        self.string_pool.sweep(key_set);
+
         self.next_gc *= 2;
         #[cfg(feature = "log_gc")]
         {
@@ -131,7 +134,7 @@ impl Heap {
         }
     }
 
-    fn mark(&self, roots: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+    fn mark(&self, roots: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) -> (BitArray, KeySet) {
         let mut marked = BitArray::new(self.pointers.len());
         let mut key_set: KeySet = KeySet::with_capacity(self.string_pool.capacity());
 
@@ -168,8 +171,7 @@ impl Heap {
         {
             println!("Done with mark & trace");
         }
-        self.sweep(marked);
-        self.string_pool.sweep(key_set);
+        (marked, key_set)
     }
 
     fn free(&mut self, i: usize) {

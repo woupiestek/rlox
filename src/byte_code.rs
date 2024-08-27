@@ -1,12 +1,9 @@
-use crate::{
-    chunk::Op,
-    object::Value,
-    strings::StringHandle,
-};
+use crate::{chunk::Op, object::Value, strings::StringHandle};
 
 // still over allocating because of alignment!
 // o/c if we knew how small the offsets could actually be...
-
+// todo: not all are mutable, so why provide mutable references?
+#[derive(Debug)]
 pub struct Function {
     pub name: StringHandle, // run time data structure
     pub arity: u8,
@@ -18,6 +15,11 @@ pub struct Function {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct FunctionHandle(u16);
 
+impl FunctionHandle {
+    pub const MAIN: Self = Self(0);
+}
+
+#[derive(Debug)]
 pub struct ByteCode {
     code: Vec<u8>,
     lines: Vec<u16>,
@@ -39,9 +41,9 @@ impl ByteCode {
     }
 
     // repo pattern
-    pub fn new_function(&mut self) -> FunctionHandle {
+    pub fn new_function(&mut self, name: Option<StringHandle>) -> FunctionHandle {
         self.functions.push(Function {
-            name: StringHandle::EMPTY, // be careful with this!
+            name: name.unwrap_or(StringHandle::EMPTY), // be careful with this!
             arity: 0,
             upvalue_count: 0,
             ip: self.code.len() as u32,
@@ -141,9 +143,7 @@ impl ByteCode {
         self.code.push(op as u8);
         self.code.push((short >> 8) as u8);
         self.code.push(short as u8);
-        self.lines.push(line);
-        self.lines.push(line);
-        self.lines.push(line);
+        self.put_line(line, 3);
     }
     pub fn read_byte(&self, index: usize) -> u8 {
         self.code[index]
@@ -151,8 +151,12 @@ impl ByteCode {
     pub fn read_short(&self, index: usize) -> u16 {
         (self.read_byte(index) as u16) << 8 | (self.read_byte(index + 1) as u16)
     }
-    pub fn read_constant(&self, index: usize) -> Value {
-        self.constants[self.read_byte(index) as usize]
+
+    // this could be the point
+    pub fn read_constant(&self, function: FunctionHandle, ip: usize) -> Value {
+        // needs function
+        self.constants[self.functions[function.0 as usize].constant_offset as usize
+            + self.read_byte(ip) as usize]
     }
 
     // we are moving toward not using the garbage collector for static data
@@ -160,19 +164,19 @@ impl ByteCode {
     pub fn trace(
         &self,
         collector: &mut Vec<crate::heap::Handle>,
-        key_set: &mut crate::strings::KeySet,
+        strings: &mut Vec<crate::strings::StringHandle>,
     ) {
-        for f in self.functions {
+        for f in &self.functions {
             if f.name != StringHandle::EMPTY {
-                key_set.put(f.name);
+                strings.push(f.name);
             }
         }
-        for value in self.constants {
-            if let Value::Object(h) = value {
+        for value in &self.constants {
+            if let &Value::Object(h) = value {
                 collector.push(h)
             }
-            if let Value::String(h) = value {
-                key_set.put(h)
+            if let &Value::String(h) = value {
+                strings.push(h)
             }
         }
     }

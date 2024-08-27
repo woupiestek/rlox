@@ -4,7 +4,7 @@ use crate::{
     bitarray::BitArray,
     byte_code::{ByteCode, FunctionHandle},
     chunk::Op,
-    heap::{Handle, Heap},
+    heap::Heap,
     object::Value,
     scanner::{Scanner, Token, TokenType},
     strings::StringHandle,
@@ -179,7 +179,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Self {
             data: Box::from(CompileData::new(
                 function_type,
-                target.new_function(),
+                target.new_function(None),
                 this_name,
             )),
             source,
@@ -581,8 +581,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = self.source.identifier_name()?;
         let name = self.heap.intern_copy(name);
-        let function = self.target.new_function();
-        self.target.function_mut(function).name = name;
+        let function = self.target.new_function(Some(name));
         // do the head of the linked list thing
         let enclosing = mem::replace(
             &mut self.data,
@@ -598,7 +597,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let enclosed = mem::replace(&mut self.data, enclosing);
 
         self.target.function_mut(function).upvalue_count = enclosed.upvalues.len() as u8;
-        let index = self.target.add_constant(self.data.function, Value::from(function))?;
+        let index = self
+            .target
+            .add_constant(self.data.function, Value::from(function))?;
         self.emit_byte_op(Op::Closure, index);
         let line = self.line_and_column().0;
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
@@ -834,7 +835,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn intern(&mut self, loxtr: StringHandle) -> Result<u8, String> {
-        self.target.add_constant(Value::from(loxtr))
+        self.target
+            .add_constant(self.data.function, Value::from(loxtr))
     }
 
     fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
@@ -883,22 +885,16 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn script(&mut self) -> Result<Handle, String> {
-        let before = self
-            .heap
-            .get_ref::<Function>(self.data.function)
-            .byte_count();
+    fn script(mut self) -> Result<ByteCode, String> {
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
         self.emit_return();
-        self.heap.increase_byte_count(
-            self.heap
-                .get_ref::<Function>(self.data.function)
-                .byte_count()
-                - before,
-        );
-        Ok(self.data.function)
+        match self.source.error_count {
+            0 => Ok(self.target),
+            1 => err!("There was a compile time error."),
+            more => err!("There were {} compile time errors.", more),
+        }
     }
 
     fn block(&mut self) -> Result<(), String> {
@@ -993,21 +989,16 @@ impl<'src> Source<'src> {
     }
 }
 
-pub fn compile(source: &str, heap: &mut Heap) -> Result<Handle, String> {
+pub fn compile(source: &str, heap: &mut Heap) -> Result<ByteCode, String> {
     let start = Instant::now();
-    let function = heap.put(Function::new());
     let source = Source::new(source);
-    let mut compiler = Compiler::new(FunctionType::Script, function, source, heap);
+    let compiler = Compiler::new(FunctionType::Script, source, heap);
     let obj = compiler.script()?;
     println!(
         "Compilation finished in {} ns.",
         Instant::now().duration_since(start).as_nanos()
     );
-    match compiler.source.error_count {
-        0 => Ok(obj),
-        1 => err!("There was a compile time error."),
-        more => err!("There were {} compile time errors.", more),
-    }
+    Ok(obj)
 }
 
 #[cfg(test)]

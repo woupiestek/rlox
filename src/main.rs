@@ -1,5 +1,6 @@
 use std::{env, fs, io, process::exit};
 
+use byte_code::ByteCode;
 use heap::Heap;
 
 use crate::vm::VM;
@@ -53,7 +54,7 @@ fn run_file(file_path: &str, vm: &mut VM) {
 }
 
 fn main() {
-    let mut vm = VM::new(Heap::new(1<<12));
+    let mut vm = VM::new(Heap::new(1<<12), ByteCode::new());
     let args: Vec<String> = env::args().collect();
     match args.len() {
         1 => repl(&mut vm),

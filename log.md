@@ -1,5 +1,18 @@
 # Rlox
 
+## 2024-08-27
+
+### type specific allocators
+
+Just do it like that: have a memory manager with a type parameter, for managing
+allocations and pointers of the type, perhaps with the full garbage collection
+package, support for arrays perhaps (support only arrays?).
+
+### status
+
+Introduced bytecode object they contains all code and functions. Two failing
+tests left, and no good error message.
+
 ## 2024-08-26
 
 ### the obstacle

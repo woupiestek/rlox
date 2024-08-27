@@ -55,8 +55,16 @@ impl Value {
         matches!(self, Value::Nil | Value::False)
     }
 
-    pub fn to_handle(&self) -> Result<Handle, String> {
+    pub fn as_object(&self) -> Result<Handle, String> {
         if let &Value::Object(handle) = self {
+            Ok(handle)
+        } else {
+            err!("Not an object")
+        }
+    }
+
+    pub fn as_function(&self) -> Result<FunctionHandle, String> {
+        if let &Value::Function(handle) = self {
             Ok(handle)
         } else {
             err!("Not an object")
@@ -88,46 +96,6 @@ impl Value {
         }
     }
 }
-
-// pub struct Function {
-//     pub name: Option<StringHandle>,
-//     pub arity: u8,
-//     pub upvalue_count: u8,
-//     pub chunk: Chunk,
-// }
-
-// impl Function {
-//     pub fn new() -> Self {
-//         Self {
-//             name: None,
-//             arity: 0,
-//             upvalue_count: 0,
-//             chunk: Chunk::new(),
-//         }
-//     }
-// }
-
-// impl Traceable for Function {
-//     const KIND: Kind = Kind::Function;
-//     // just consider initial allocation
-//     fn byte_count(&self) -> usize {
-//         60 + self.chunk.byte_increment()
-//     }
-
-//     fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
-//         if let Some(name) = self.name {
-//             key_set.put(name);
-//         }
-//         for &value in &self.chunk.constants {
-//             if let Value::Object(h) = value {
-//                 collector.push(h)
-//             }
-//             if let Value::String(h) = value {
-//                 key_set.put(h)
-//             }
-//         }
-//     }
-// }
 
 pub struct Class {
     pub name: StringHandle,
@@ -187,17 +155,14 @@ impl Traceable for Upvalue {
 // though the class basically already determines how many are needed.
 pub struct Closure {
     pub function: FunctionHandle,
-    // todo: find a better way to stringify closures.
-    pub name: Option<StringHandle>,
     // heap allocated
     pub upvalues: Vec<Handle>,
 }
 
 impl Closure {
-    pub fn new(function: FunctionHandle, name: Option<StringHandle>) -> Self {
+    pub fn new(function: FunctionHandle) -> Self {
         Self {
             function,
-            name,
             upvalues: Vec::new(),
         }
     }
