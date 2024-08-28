@@ -1,28 +1,33 @@
-use crate::chunk::{Chunk, Op};
+use crate::{byte_code::ByteCode, chunk::Op, heap::Heap};
 
-pub struct Disassembler<'src> {
-    chunk: &'src Chunk,
+pub struct Disassembler<'src, 'hp> {
+    byte_code: &'src ByteCode,
+    heap: &'hp Heap,
     ip: usize,
 }
 
-impl<'src> Disassembler<'src> {
-    fn new(chunk: &'src Chunk) -> Self {
-        Self { chunk, ip: 0 }
+impl<'src, 'hp> Disassembler<'src, 'hp> {
+    fn new(byte_code: &'src ByteCode, heap: &'hp Heap) -> Self {
+        Self {
+            byte_code,
+            heap,
+            ip: 0,
+        }
     }
 
-    pub fn disassemble(chunk: &'src Chunk) {
-        Self::new(chunk).run();
+    pub fn disassemble(byte_code: &'src ByteCode, heap: &'hp Heap) {
+        Self::new(byte_code, heap).run();
     }
 
     fn run(&mut self) {
         loop {
-            if self.ip >= self.chunk.count() {
+            if self.ip >= self.byte_code.count() {
                 return;
             }
             print!("{}:", self.ip);
-            let op_code = match Op::try_from(self.chunk.read_byte(self.ip)) {
+            let op_code = match Op::try_from(self.byte_code.read_byte(self.ip)) {
                 Err(_) => {
-                    println!("error: {}", self.chunk.read_byte(self.ip));
+                    println!("error: {}", self.byte_code.read_byte(self.ip));
                     self.ip += 1;
                     continue;
                 }
@@ -55,27 +60,27 @@ impl<'src> Disassembler<'src> {
         }
     }
     fn byte(&mut self) {
-        print!(" {}", self.chunk.read_byte(self.ip));
+        print!(" {}", self.byte_code.read_byte(self.ip));
         self.ip += 1;
     }
     fn constant(&mut self) {
-        print!(" {}", self.chunk.read_constant(self.ip));
+        print!(" {}", self.byte_code.read_constant(self.ip).to_string(&self.heap, &self.byte_code));
         self.ip += 1;
     }
     fn invoke(&mut self) {
         print!(
             " {} ({})",
-            self.chunk.read_constant(self.ip),
-            self.chunk.read_byte(self.ip + 1)
+            self.byte_code.read_constant(self.ip).to_string(&self.heap, &self.byte_code),
+            self.byte_code.read_byte(self.ip + 1)
         );
         self.ip += 2;
     }
     fn jump_forward(&mut self) {
-        print!(" {}", self.ip + self.chunk.read_short(self.ip) as usize);
+        print!(" {}", self.ip + self.byte_code.read_short(self.ip) as usize);
         self.ip += 2;
     }
     fn jump_back(&mut self) {
-        print!(" {}", self.ip - self.chunk.read_short(self.ip) as usize);
+        print!(" {}", self.ip - self.byte_code.read_short(self.ip) as usize);
         self.ip += 2;
     }
 }

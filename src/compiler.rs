@@ -139,15 +139,16 @@ impl CompileData {
 
     fn mark_initialized(&mut self) -> bool {
         if self.scopes.len() == 0 {
+            // global scope, so initialization is not needed
             return false;
         }
-        let index = self.locals.len() - 1;
-        self.locals_initialized.add(index);
+        self.locals_initialized.add(self.locals.len() - 1);
         true
     }
 
     fn declare_variable(&mut self, name: StringHandle) -> Result<(), String> {
         if self.scopes.len() == 0 {
+            // global scope, nothing to declare
             return Ok(());
         }
         let l = self.scopes[self.scopes.len() - 1] as usize;
@@ -190,10 +191,6 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    // fn current_chunk(&mut self) -> &mut Chunk {
-    //     &mut self.heap.get_mut::<Function>(self.data.function).chunk
-    // }
-
     fn emit_return(&mut self) {
         if self.data.function_type == FunctionType::Initializer {
             self.emit_byte_op(Op::GetLocal, 0);
@@ -213,9 +210,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.target.write_short_op(op, short, line);
     }
 
-    fn emit_invoke_op(&mut self, op: Op, constant: u8, arity: u8) {
+    fn emit_invoke_op(&mut self, op: Op, constant: Value, arity: u8) -> Result<(), String> {
         let line = self.line_and_column().0;
-        self.target.write_invoke_op(op, constant, arity, line);
+        self.target.write_invoke_op(op, constant, arity, line)
     }
 
     fn emit_op(&mut self, op: Op) {
@@ -238,10 +235,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.target.count() - 2
     }
 
-    fn emit_constant(&mut self, value: Value) -> Result<(), String> {
-        let make_constant = self.target.add_constant(self.data.function, value)?;
-        self.emit_byte_op(Op::Constant, make_constant);
-        Ok(())
+    fn emit_constant_op(&mut self, op: Op, value: Value) -> Result<(), String> {
+        let line = self.line_and_column().0;
+        self.target.write_constant_op(op, value, line)
     }
 
     fn begin_scope(&mut self) {
@@ -351,19 +347,18 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let index = self.identifier_constant("Expect property name after '.'.")?;
         if can_assign && self.source.match_type(TokenType::Equal) {
             self.expression()?;
-            self.emit_byte_op(Op::SetProperty, index)
+            self.emit_constant_op(Op::SetProperty, index)
         } else if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
-            self.emit_invoke_op(Op::Invoke, index, arity);
+            self.emit_invoke_op(Op::Invoke, index, arity)
         } else {
-            self.emit_byte_op(Op::GetProperty, index);
-        };
-        Ok(())
+            self.emit_constant_op(Op::GetProperty, index)
+        }
     }
 
     fn number(&mut self) -> Result<(), String> {
         match self.source.scanner.get_number(self.source.previous.1) {
-            Ok(number) => self.emit_constant(Value::from(number)),
+            Ok(number) => self.emit_constant_op(Op::Constant, Value::from(number)),
             Err(err) => Err(err.to_string()),
         }
     }
@@ -385,31 +380,45 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let value = self
             .heap
             .intern_copy(self.source.scanner.get_str(self.source.previous.1)?);
-        self.emit_constant(Value::from(value))
+        self.emit_constant_op(Op::Constant, Value::from(value))
     }
 
-    // admit code for variable access
+    // emit code for variable access
     fn variable(&mut self, name: StringHandle, can_assign: bool) -> Result<(), String> {
-        let (arg, get, set) = {
-            if let Some(arg) = self.data.resolve_local(name)? {
-                (arg, Op::GetLocal, Op::SetLocal)
-            } else if let Some(arg) = self.data.resolve_upvalue(name)? {
-                (arg, Op::GetUpvalue, Op::SetUpvalue)
-            } else {
-                let arg = self
-                    .target
-                    .add_constant(self.data.function, Value::from(name))?;
-                (arg, Op::GetGlobal, Op::SetGlobal)
-            }
-        };
-
-        if can_assign && self.source.match_type(TokenType::Equal) {
+        let is_assignment = can_assign && self.source.match_type(TokenType::Equal);
+        if is_assignment {
             self.expression()?;
-            self.emit_byte_op(set, arg);
-        } else {
-            self.emit_byte_op(get, arg);
         }
-        Ok(())
+        if let Some(arg) = self.data.resolve_local(name)? {
+            self.emit_byte_op(
+                if is_assignment {
+                    Op::SetLocal
+                } else {
+                    Op::GetLocal
+                },
+                arg,
+            );
+            return Ok(());
+        }
+        if let Some(arg) = self.data.resolve_upvalue(name)? {
+            self.emit_byte_op(
+                if is_assignment {
+                    Op::SetUpvalue
+                } else {
+                    Op::GetUpvalue
+                },
+                arg,
+            );
+            return Ok(());
+        }
+        self.emit_constant_op(
+            if is_assignment {
+                Op::SetGlobal
+            } else {
+                Op::GetGlobal
+            },
+            Value::String(name),
+        )
     }
 
     fn super_(&mut self) -> Result<(), String> {
@@ -426,10 +435,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.match_type(TokenType::LeftParen) {
             let arity = self.argument_list()?;
             self.variable(self.super_name, false)?;
-            self.emit_invoke_op(Op::SuperInvoke, index, arity);
+            self.emit_invoke_op(Op::SuperInvoke, index, arity)?;
         } else {
             self.variable(self.super_name, false)?;
-            self.emit_byte_op(Op::GetSuper, index);
+            self.emit_constant_op(Op::GetSuper, index)?;
         }
         Ok(())
     }
@@ -472,7 +481,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn store_identifier(&mut self) -> Result<StringHandle, String> {
-        let str = self.source.identifier_name()?;
+        let str = self
+            .source
+            .scanner
+            .get_identifier_name(self.source.previous.1)?;
         Ok(self.heap.intern_copy(str))
     }
 
@@ -521,21 +533,16 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn parse_variable(&mut self, error_msg: &str) -> Result<u8, String> {
+    fn parse_variable(&mut self, error_msg: &str) -> Result<Option<StringHandle>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        let name = self.store_identifier()?;
+        let name: StringHandle = self.store_identifier()?;
         self.data.declare_variable(name)?;
-        if self.data.scopes.len() > 0 {
-            Ok(0)
+        Ok(if self.data.scopes.len() > 0 {
+            None
         } else {
-            self.intern(name)
-        }
-    }
-
-    fn define_variable(&mut self, global: u8) {
-        if !self.data.mark_initialized() {
-            self.emit_byte_op(Op::DefineGlobal, global)
-        }
+            // global
+            Some(name)
+        })
     }
 
     fn expression(&mut self) -> Result<(), String> {
@@ -559,7 +566,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                 }
                 self.target.function_mut(self.data.function).arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
-                self.define_variable(index);
+                self.define_variable(index)?;
                 if !self.source.match_type(TokenType::Comma) {
                     break;
                 }
@@ -574,12 +581,23 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
+    fn define_variable(&mut self, index: Option<StringHandle>) -> Result<(), String> {
+        Ok(if let Some(name) = index {
+            self.emit_constant_op(Op::DefineGlobal, Value::String(name))?;
+        } else {
+            self.data.mark_initialized();
+        })
+    }
+
     fn line_and_column(&self) -> (u16, u16) {
         self.source.scanner.line_and_column(self.source.previous.1)
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
-        let name = self.source.identifier_name()?;
+        let name = self
+            .source
+            .scanner
+            .get_identifier_name((&self.source).previous.1)?;
         let name = self.heap.intern_copy(name);
         let function = self.target.new_function(Some(name));
         // do the head of the linked list thing
@@ -597,10 +615,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let enclosed = mem::replace(&mut self.data, enclosing);
 
         self.target.function_mut(function).upvalue_count = enclosed.upvalues.len() as u8;
-        let index = self
-            .target
-            .add_constant(self.data.function, Value::from(function))?;
-        self.emit_byte_op(Op::Closure, index);
+        self.emit_constant_op(Op::Closure, Value::from(function))?;
         let line = self.line_and_column().0;
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
@@ -615,16 +630,18 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn method(&mut self) -> Result<(), String> {
         self.source
             .consume(TokenType::Identifier, "Expect method name.")?;
-        let name = self.source.identifier_name()?;
+        let name = self
+            .source
+            .scanner
+            .get_identifier_name((&self.source).previous.1)?;
         let function_type = if name == "init" {
             FunctionType::Initializer
         } else {
             FunctionType::Method
         };
         let loxtr = self.heap.intern_copy(name);
-        let intern = self.intern(loxtr)?;
         self.function(function_type)?;
-        self.emit_byte_op(Op::Method, intern);
+        self.emit_constant_op(Op::Method, Value::from(loxtr))?;
         Ok(())
     }
 
@@ -633,9 +650,11 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
         self.data.declare_variable(class_name)?;
-        let index = self.intern(class_name)?;
-        self.emit_byte_op(Op::Class, index);
-        self.define_variable(index);
+        self.define_variable(if self.data.scopes.len()==0 {Some(class_name)} else {None})?;
+
+        self.emit_constant_op(Op::Class, Value::from(class_name))?;
+
+        self.data.mark_initialized();
 
         if self.source.class_depth == 127 {
             return err!("Cannot nest classes that deep");
@@ -653,7 +672,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             }
             self.begin_scope();
             self.data.add_local(self.super_name)?;
-            self.define_variable(0);
+            self.data.mark_initialized();
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
             self.source.has_super.add(self.source.class_depth as usize);
@@ -691,7 +710,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let index = self.parse_variable("Expect function name.")?;
         self.data.mark_initialized();
         self.function(FunctionType::Function)?;
-        self.define_variable(index);
+        if let Some(name) = index {
+            self.emit_constant_op(Op::DefineGlobal, Value::String(name))?;
+        }
         Ok(())
     }
 
@@ -706,8 +727,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             TokenType::Semicolon,
             "Expect ';' after variable declaration.",
         )?;
-        self.define_variable(index);
-        Ok(())
+        self.define_variable(index)
     }
 
     fn expression_statement(&mut self) -> Result<(), String> {
@@ -834,15 +854,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn intern(&mut self, loxtr: StringHandle) -> Result<u8, String> {
-        self.target
-            .add_constant(self.data.function, Value::from(loxtr))
-    }
-
-    fn identifier_constant(&mut self, error_msg: &str) -> Result<u8, String> {
+    fn identifier_constant(&mut self, error_msg: &str) -> Result<Value, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        let name = self.store_identifier()?;
-        self.intern(name)
+        Ok(Value::from(self.store_identifier()?))
     }
 
     fn declaration(&mut self) {
@@ -983,22 +997,20 @@ impl<'src> Source<'src> {
             }
         }
     }
-
-    fn identifier_name(&self) -> Result<&str, String> {
-        self.scanner.get_identifier_name(self.previous.1)
-    }
 }
 
 pub fn compile(source: &str, heap: &mut Heap) -> Result<ByteCode, String> {
     let start = Instant::now();
     let source = Source::new(source);
     let compiler = Compiler::new(FunctionType::Script, source, heap);
-    let obj = compiler.script()?;
+    let bytecode = compiler.script()?;
     println!(
-        "Compilation finished in {} ns.",
-        Instant::now().duration_since(start).as_nanos()
+        "Compilation finished in {} ns. Instruction count {}. Constant count {}.",
+        Instant::now().duration_since(start).as_nanos(),
+        bytecode.count(),
+        bytecode.constant_count(),
     );
-    Ok(obj)
+    Ok(bytecode)
 }
 
 #[cfg(test)]
@@ -1006,11 +1018,11 @@ mod tests {
     use super::*;
 
     macro_rules! disassemble {
-        ($chunk:expr) => {
+        ($bc:expr,$h:expr) => {
             #[cfg(feature = "trace")]
             {
                 use crate::debug::Disassembler;
-                Disassembler::disassemble($chunk);
+                Disassembler::disassemble($bc, $h);
             }
         };
     }
@@ -1095,7 +1107,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1104,7 +1116,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1113,7 +1125,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1129,7 +1141,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1141,7 +1153,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1150,7 +1162,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1171,7 +1183,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1187,7 +1199,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1217,7 +1229,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1234,7 +1246,7 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 
     #[test]
@@ -1254,6 +1266,6 @@ mod tests {
         let mut heap = Heap::new(0);
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap().chunk);
+        disassemble!(&result.unwrap(), &heap);
     }
 }

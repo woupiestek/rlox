@@ -24,11 +24,12 @@ fn clock_native(_args: &[Value]) -> Result<Value, String> {
 
 macro_rules! binary_op {
     ($self:ident, $a:ident, $b:ident, $value:expr) => {{
-        if let &[Value::Number($a), Value::Number($b)] = $self.tail(2)? {
+        let tail = $self.tail(2)?;
+        if let &[Value::Number($a), Value::Number($b)] = tail {
             $self.stack_top -= 2;
             $self.push(Value::from($value));
         } else {
-            return err!("Operands must be numbers.");
+            return err!("Operands must be numbers, but were {:?}.", tail);
         }
     }};
 }
@@ -46,7 +47,7 @@ pub struct VM {
 }
 
 impl VM {
-    pub fn new(mut heap: Heap, byte_code: ByteCode) -> Self {
+    pub fn new(mut heap: Heap) -> Self {
         let init_string = heap.intern_copy("init");
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
@@ -56,7 +57,7 @@ impl VM {
             globals: Map::new(),
             init_string,
             heap,
-            byte_code,
+            byte_code: ByteCode::new(),
             natives: Natives::new(),
         };
         s.define_native("clock", clock_native);
@@ -306,19 +307,27 @@ impl VM {
             {
                 print!("stack: ");
                 for i in 0..self.stack_top {
-                    print!("{};", &self.values[i]);
+                    print!(
+                        "{};",
+                        &self.values[i].to_string(&self.heap, &self.byte_code)
+                    );
                 }
                 println!("");
 
-                // print!("globals: ");
-                // for (k, v) in &self.globals {
-                //     print!("{}:{};", **k, v)
-                // }
-                // println!("");
+                print!("globals: ");
+                for k in self.globals.keys() {
+                    print!(
+                        "{}:{};",
+                        self.heap.get_str(k),
+                        self.globals
+                            .get(k)
+                            .unwrap()
+                            .to_string(&self.heap, &self.byte_code)
+                    )
+                }
+                println!("");
 
-                let ip = self.top_frame().ip;
-                println!("ip: {}", ip);
-                println!("line: {}", self.top_frame().chunk().lines[ip as usize]);
+                self.call_stack.print_trace(&self.byte_code);
                 println!("op code: {:?}", instruction);
                 println!();
             }
@@ -565,13 +574,18 @@ impl VM {
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
         self.byte_code = compile(source, &mut self.heap)?;
+        #[cfg(feature = "trace")]
+        {
+            use crate::debug::Disassembler;
+            Disassembler::disassemble(&self.byte_code, &self.heap);
+        }
         let closure = self.new_obj(Closure::new(FunctionHandle::MAIN));
         self.push(Value::from(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
-            // where is the stack trace!?
-            self.call_stack.print_stack_trace(&self.byte_code,&self.heap);
+            self.call_stack
+                .print_stack_trace(&self.byte_code, &self.heap);
             self.reset_stack();
             err!("Runtime error!")
         } else {
@@ -586,12 +600,12 @@ mod tests {
 
     #[test]
     fn no_error_on_init() {
-        VM::new(Heap::new(1 << 8), ByteCode::new());
+        VM::new(Heap::new(1 << 8));
     }
 
     #[test]
     fn interpret_empty_string() {
-        let mut vm = VM::new(Heap::new(1 << 8), ByteCode::new());
+        let mut vm = VM::new(Heap::new(1 << 8));
         assert!(vm.interpret("").is_ok())
     }
 
@@ -600,7 +614,7 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -608,7 +622,7 @@ mod tests {
     #[test]
     fn boolean_logic() {
         let test = "print \"hi\" or 2; // \"hi\".";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -623,7 +637,7 @@ mod tests {
             temp = a;
             a = b;
         }";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -634,7 +648,7 @@ mod tests {
         for (var b = 0; b < 10; b = b + 1) {
             print \"test\";
         }";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -648,7 +662,7 @@ mod tests {
             print b;
             temp = b;
         }";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -667,7 +681,7 @@ mod tests {
             showA();
         }
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -681,7 +695,7 @@ mod tests {
           }
           for (var i = 0; i < 20; i = i + 1) { print fib(i); }
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -692,7 +706,7 @@ mod tests {
         if (true) print \"less\";
         print \"more\";
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -711,7 +725,7 @@ mod tests {
         var counter = makeCounter();
         counter();
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -729,7 +743,7 @@ mod tests {
             }
         }
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -740,7 +754,7 @@ mod tests {
         class Bagel { eat() { print \"Crunch crunch crunch!\"; } }
         var bagel = Bagel();
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -750,7 +764,7 @@ mod tests {
         let test = "
         print clock();
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -760,7 +774,7 @@ mod tests {
         let test = "
         print \"x\" == \"x\";
         ";
-        let mut vm = VM::new(Heap::new(0), ByteCode::new());
+        let mut vm = VM::new(Heap::new(0));
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }

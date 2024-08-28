@@ -9,7 +9,6 @@ pub struct Function {
     pub arity: u8,
     pub upvalue_count: u8,
     pub ip: u32,
-    pub constant_offset: u32,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -25,8 +24,12 @@ pub struct ByteCode {
     lines: Vec<u16>,
     run_lengths: Vec<u16>,
     constants: Vec<Value>, // run time data structure
+    constant_offsets: Vec<u32>,
     functions: Vec<Function>,
 }
+
+// one bucket for constants for 2 ** (CONSTANT_SHIFT - 8) instructions
+const CONSTANT_SHIFT: usize = 11;
 
 impl ByteCode {
     // it might help to specify some sizes up front, but these 5 array don't all need the same
@@ -36,6 +39,7 @@ impl ByteCode {
             lines: Vec::new(),
             run_lengths: Vec::new(),
             constants: Vec::new(),
+            constant_offsets: Vec::new(),
             functions: Vec::new(),
         }
     }
@@ -47,7 +51,6 @@ impl ByteCode {
             arity: 0,
             upvalue_count: 0,
             ip: self.code.len() as u32,
-            constant_offset: self.constants.len() as u32,
         });
         FunctionHandle((self.functions.len() - 1) as u16)
     }
@@ -107,25 +110,50 @@ impl ByteCode {
     pub fn count(&self) -> usize {
         self.code.len()
     }
+    pub fn constant_count(&self) -> usize {
+        self.constants.len()
+    }
 
-    // note the offset...
-    pub fn add_constant(&mut self, fh: FunctionHandle, value: Value) -> Result<u8, String> {
-        let constant_offset = self.functions[fh.0 as usize].constant_offset;
-        let l = self.constants.len() as u32;
-        let mut i = constant_offset;
-        while i < l {
-            if self.constants[i as usize] == value {
-                return Ok((i - constant_offset) as u8);
-            } else {
-                i += 1;
+    // mind the offset...
+    fn add_constant(&mut self, value: Value) -> Result<(), String> {
+        let bucket = self.code.len() >> CONSTANT_SHIFT;
+        // empty bucket case
+        if bucket >= self.constant_offsets.len() {
+            loop {
+                self.constant_offsets.push(self.constants.len() as u32);
+                if bucket < self.constant_offsets.len() {
+                    break;
+                }
+            }
+            self.constants.push(value);
+            self.code.push(0);
+            return Ok(());
+        }
+        // search of index case
+        let constant_offset = self.constant_offsets[bucket] as usize;
+        let l = self.constants.len() - constant_offset;
+        for i in 0..l {
+            let j = i + constant_offset;
+            if self.constants[j] == value {
+                self.code.push(j as u8);
+                return Ok(());
             }
         }
-        if i - constant_offset > u8::MAX as u32 {
-            err!("Too many constants in function")
-        } else {
-            self.constants.push(value);
-            Ok((i - constant_offset) as u8)
+        // can we change the offset of the current bucket?
+        // no, the 256 constants in there would be orphaned.
+        if l > u8::MAX as usize {
+            return err!("Too many constants in function");
         }
+        self.constants.push(value);
+        self.code.push(l as u8);
+        Ok(())
+    }
+
+    pub fn write_constant_op(&mut self, op: Op, constant: Value, line: u16) -> Result<(), String> {
+        self.code.push(op as u8);
+        self.add_constant(constant)?;
+        self.put_line(line, 2);
+        Ok(())
     }
 
     pub fn write_byte_op(&mut self, op: Op, byte: u8, line: u16) {
@@ -133,11 +161,19 @@ impl ByteCode {
         self.code.push(byte);
         self.put_line(line, 2);
     }
-    pub fn write_invoke_op(&mut self, op: Op, constant: u8, arity: u8, line: u16) {
+
+    pub fn write_invoke_op(
+        &mut self,
+        op: Op,
+        constant: Value,
+        arity: u8,
+        line: u16,
+    ) -> Result<(), String> {
         self.code.push(op as u8);
-        self.code.push(constant);
+        self.add_constant(constant)?;
         self.code.push(arity);
         self.put_line(line, 3);
+        Ok(())
     }
     pub fn write_short_op(&mut self, op: Op, short: u16, line: u16) {
         self.code.push(op as u8);
@@ -152,11 +188,10 @@ impl ByteCode {
         (self.read_byte(index) as u16) << 8 | (self.read_byte(index + 1) as u16)
     }
 
-    // this could be the point
-    pub fn read_constant(&self, function: FunctionHandle, ip: usize) -> Value {
-        // needs function
-        self.constants[self.functions[function.0 as usize].constant_offset as usize
-            + self.read_byte(ip) as usize]
+    pub fn read_constant(&self, ip: usize) -> Value {
+        let bucket = self.code.len() >> CONSTANT_SHIFT;
+        let constant_offset = self.constant_offsets[bucket] as usize;
+        self.constants[constant_offset + self.read_byte(ip) as usize]
     }
 
     // we are moving toward not using the garbage collector for static data

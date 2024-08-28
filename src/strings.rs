@@ -152,6 +152,14 @@ impl<V: Clone> Map<V> {
             }
         }
     }
+
+    #[cfg(feature = "trace")]
+    pub fn keys(&self) -> KeyIterator {
+        KeyIterator {
+            key_set: &self.key_set,
+            index: self.key_set.keys.len(),
+        }
+    }
 }
 
 impl Map<Handle> {
@@ -183,6 +191,26 @@ impl Map<Value> {
                 _ => {}
             }
         }
+    }
+}
+
+pub struct KeyIterator<'m> {
+    key_set: &'m KeySet,
+    index: usize,
+}
+
+// note type members...
+impl<'m> Iterator for KeyIterator<'m> {
+    type Item = StringHandle;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.index > 0 {
+            self.index -= 1;
+            if self.key_set.keys[self.index].is_valid() {
+                return Some(self.key_set.keys[self.index]);
+            }
+        }
+        return None;
     }
 }
 
@@ -323,7 +351,11 @@ impl Strings {
         let mut values = vec![None; capacity].into_boxed_slice();
         let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
         for i in 0..self.key_set.keys.len() {
-            let (found, j) = key_set.find(self.key_set.keys[i]);
+            let key = self.key_set.keys[i];
+            if !key.is_valid() {
+                continue;
+            }
+            let (found, j) = key_set.find(key);
             if found {
                 values[j] = self.values[i].take();
                 generations[j] = self.generations[i];
