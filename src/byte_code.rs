@@ -35,7 +35,7 @@ impl ByteCode {
     // it might help to specify some sizes up front, but these 5 array don't all need the same
     pub fn new() -> Self {
         Self {
-            code: Vec::new(),
+            code: vec![0],// don't allow writing to ip = 0
             lines: Vec::new(),
             run_lengths: Vec::new(),
             constants: Vec::new(),
@@ -133,9 +133,8 @@ impl ByteCode {
         let constant_offset = self.constant_offsets[bucket] as usize;
         let l = self.constants.len() - constant_offset;
         for i in 0..l {
-            let j = i + constant_offset;
-            if self.constants[j] == value {
-                self.code.push(j as u8);
+            if self.constants[i + constant_offset] == value {
+                self.code.push(i as u8);
                 return Ok(());
             }
         }
@@ -192,6 +191,14 @@ impl ByteCode {
         let bucket = self.code.len() >> CONSTANT_SHIFT;
         let constant_offset = self.constant_offsets[bucket] as usize;
         self.constants[constant_offset + self.read_byte(ip) as usize]
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn read_constant_carefully(&self, ip: usize) -> Option<&Value> {
+        let bucket = self.code.len() >> CONSTANT_SHIFT;
+        let constant_offset = self.constant_offsets[bucket] as usize;
+        let index = constant_offset + self.read_byte(ip) as usize;
+        self.constants.get(index)
     }
 
     // we are moving toward not using the garbage collector for static data

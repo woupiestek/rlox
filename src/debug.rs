@@ -11,7 +11,7 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
         Self {
             byte_code,
             heap,
-            ip: 0,
+            ip: 1, // skip first byte!
         }
     }
 
@@ -64,13 +64,20 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
         self.ip += 1;
     }
     fn constant(&mut self) {
-        print!(" {}", self.byte_code.read_constant(self.ip).to_string(&self.heap, &self.byte_code));
+        let maybe_constant = self.byte_code.read_constant_carefully(self.ip);
+        if let Some(value) = maybe_constant {
+            print!(" {}", value.to_string(&self.heap, &self.byte_code));
+        } else {
+            eprint!(" invalid constant at {}", self.ip)
+        }
         self.ip += 1;
     }
     fn invoke(&mut self) {
         print!(
             " {} ({})",
-            self.byte_code.read_constant(self.ip).to_string(&self.heap, &self.byte_code),
+            self.byte_code
+                .read_constant(self.ip)
+                .to_string(&self.heap, &self.byte_code),
             self.byte_code.read_byte(self.ip + 1)
         );
         self.ip += 2;
