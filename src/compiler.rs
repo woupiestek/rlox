@@ -658,13 +658,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
         self.data.declare_variable(class_name)?;
+        self.emit_constant_op(Op::Class, Value::from(class_name))?;
         self.define_variable(if self.data.scopes.len() == 0 {
             Some(class_name)
         } else {
             None
         })?;
-
-        self.emit_constant_op(Op::Class, Value::from(class_name))?;
 
         self.data.mark_initialized();
 
