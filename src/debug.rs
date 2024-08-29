@@ -1,4 +1,8 @@
-use crate::{byte_code::ByteCode, chunk::Op, heap::Heap};
+use crate::{
+    byte_code::{ByteCode, FunctionHandle},
+    chunk::Op,
+    heap::Heap,
+};
 
 pub struct Disassembler<'src, 'hp> {
     byte_code: &'src ByteCode,
@@ -20,10 +24,11 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
     }
 
     fn run(&mut self) {
-        loop {
-            if self.ip >= self.byte_code.count() {
-                return;
-            }
+        self.functions();
+    }
+
+    fn code(&mut self, to: usize) {
+        while self.ip < to {
             print!("{}:", self.ip);
             let op_code = match Op::try_from(self.byte_code.read_byte(self.ip)) {
                 Err(_) => {
@@ -64,12 +69,8 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
         self.ip += 1;
     }
     fn constant(&mut self) {
-        let maybe_constant = self.byte_code.read_constant_carefully(self.ip);
-        if let Some(value) = maybe_constant {
-            print!(" {}", value.to_string(&self.heap, &self.byte_code));
-        } else {
-            eprint!(" invalid constant at {}", self.ip)
-        }
+        let value = self.byte_code.read_constant(self.ip);
+        print!(" {}", value.to_string(&self.heap, &self.byte_code));
         self.ip += 1;
     }
     fn invoke(&mut self) {
@@ -89,5 +90,25 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
     fn jump_back(&mut self) {
         print!(" {}", self.ip - self.byte_code.read_short(self.ip) as usize);
         self.ip += 2;
+    }
+
+    fn functions(&mut self) {
+        let l = self.byte_code.function_count();
+        for i in 0..l {
+            let current = FunctionHandle::from_index(i);
+            println!("{}:", self.byte_code.function_string(current, &self.heap));
+            self.ip = self
+                .byte_code
+                .function_ref(current)
+                .ip as usize;
+            let to = if i + 1 == l {
+                self.byte_code.count()
+            } else {
+                self.byte_code
+                    .function_ref(FunctionHandle::from_index(i + 1))
+                    .ip as usize
+            };
+            self.code(to);
+        }
     }
 }

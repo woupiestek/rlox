@@ -72,21 +72,20 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
 
     pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<Handle, String> {
         match self.closures[self.top] {
-            Some(closure) => Ok(heap.get_ref::<Closure>(closure).upvalues[index]),
+            Some(closure) => 
+            {
+            let closure = heap.get_ref::<Closure>(closure);
+            if index >= closure.upvalues.len() {
+              return err!("Upvalue index out of bound somehow {} out of {}", index,  closure.upvalues.len());
+            }
+            Ok(closure.upvalues[index])},
             None => err!("No closure in call frame"), // todo
         }
     }
 
     pub fn read_upvalue(&mut self, byte_code: &ByteCode, heap: &Heap) -> Result<Handle, String> {
-        self.ips[self.top] += 1;
-        match self.closures[self.top] {
-            Some(closure) => {
-                let closure = heap.get_ref::<Closure>(closure);
-                Ok(closure.upvalues
-                    [byte_code.read_byte(self.ips[self.top] as usize) as usize])
-            }
-            None => err!("No closure in call frame"), // todo
-        }
+        let index = byte_code.read_byte(self.ips[self.top] as usize) as usize;
+        self.upvalue(index, heap)
     }
 
     pub fn slot(&self) -> usize {

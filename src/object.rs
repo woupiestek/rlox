@@ -1,7 +1,10 @@
 // run time data structures
 
 use crate::{
-    byte_code::{ByteCode, FunctionHandle},  heap::{Handle, Heap, Kind, Traceable}, natives::NativeHandle, strings::{Map, StringHandle}
+    byte_code::{ByteCode, FunctionHandle},
+    heap::{Handle, Heap, Kind, Traceable},
+    natives::NativeHandle,
+    strings::{Map, StringHandle},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -80,19 +83,7 @@ impl Value {
             Value::True => format!("true"),
             Value::Native(_) => format!("<native function>"),
             Value::String(a) => heap.get_str(*a).to_owned(),
-            Value::Function(a) => {
-                let function = byte_code.function_ref(*a);
-                if function.name != StringHandle::EMPTY {
-                    format!(
-                        "<fn {} ({}/{})>",
-                        heap.get_str(function.name),
-                        function.arity,
-                        function.upvalue_count
-                    )
-                } else {
-                    format!("<script>")
-                }
-            }
+            Value::Function(a) => byte_code.function_string(*a, heap),
         }
     }
 }

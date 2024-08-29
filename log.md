@@ -1,5 +1,22 @@
 # Rlox
 
+## 2024-08-29
+
+### serious issue with bytecode
+
+Nested functions... I see the code of nested functions nested in the byte code.
+Make sense with how the compile works, but then code is executed immediately...
+the return statement would just take you out. The weird values are apparently
+explained by a function running when it shouldn't.
+
+Some of these things could probably be fixed with jumps. Just jump over the code
+of other functions. Here we finally see what the chunks are for, however: each
+function's code is in its own slice of memory, and therefore adjacent in memory,
+unhindered by nested function definitions.
+
+Time to admit defeat... Munificent was right about both the data model and the
+need for a good dissambler.
+
 ## 2024-08-27
 
 ### type specific allocators

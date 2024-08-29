@@ -1003,14 +1003,15 @@ pub fn compile(source: &str, heap: &mut Heap) -> Result<ByteCode, String> {
     let start = Instant::now();
     let source = Source::new(source);
     let compiler = Compiler::new(FunctionType::Script, source, heap);
-    let bytecode = compiler.script()?;
+    let byte_code = compiler.script()?;
     println!(
-        "Compilation finished in {} ns. Instruction count {}. Constant count {}.",
+        "Compilation finished in {} ns. Instruction count {}. Constant count {}. Function count {}",
         Instant::now().duration_since(start).as_nanos(),
-        bytecode.count(),
-        bytecode.constant_count(),
+        byte_code.count(),
+        byte_code.constant_count(),
+        byte_code.function_count()
     );
-    Ok(bytecode)
+    Ok(byte_code)
 }
 
 #[cfg(test)]

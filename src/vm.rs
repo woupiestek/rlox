@@ -295,9 +295,10 @@ impl VM {
     }
 
     // combined to avoid gc errors
-    fn push_traceable<T: Traceable>(&mut self, traceable: T) {
+    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> Handle {
         let value = self.new_obj(traceable);
         self.push(Value::from(value));
+        value
     }
 
     fn run(&mut self) -> Result<(), String> {
@@ -371,20 +372,23 @@ impl VM {
                         .call_stack
                         .read_constant(&self.byte_code)
                         .as_function()?;
-                    let mut traceable = Closure::new(function);
                     // garbage collection risks?
+                    let closure = self.push_traceable(Closure::new(function));
+                    let before_count = self.heap.get_ref::<Closure>(closure).byte_count();
                     let f = self.byte_code.function_ref(function);
+                    let mut upvalues = Vec::with_capacity(f.upvalue_count as usize);
                     for _ in 0..f.upvalue_count {
                         let is_local = self.call_stack.read_byte(&self.byte_code);
                         let index = self.call_stack.read_byte(&self.byte_code) as usize;
-                        traceable.upvalues.push(if is_local > 0 {
+                        upvalues.push(if is_local > 0 {
                             let location = self.call_stack.slot() + index;
                             self.capture_upvalue(location)
                         } else {
                             self.call_stack.upvalue(index, &self.heap)?
                         })
                     }
-                    self.push_traceable(traceable);
+                    self.heap.get_mut::<Closure>(closure).upvalues = upvalues;
+                    self.heap.increase_byte_count(self.heap.get_ref::<Closure>(closure).byte_count() - before_count);
                 }
                 Op::Constant => {
                     let value = self.call_stack.read_constant(&self.byte_code);
@@ -718,6 +722,24 @@ mod tests {
             var i = 0;
             fun count() {
               i = i + 1;
+              print i;
+            }
+            return count;
+        }
+        var counter = makeCounter();
+        counter();
+        ";
+        let mut vm = VM::new(Heap::new(0));
+        let result = vm.interpret(test);
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
+
+    #[test]
+    fn smaller_upvalues() {
+        let test = "
+        fun makeCounter() {
+            var i = 0;
+            fun count() {
               print i;
             }
             return count;

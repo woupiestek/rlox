@@ -1,4 +1,4 @@
-use crate::{chunk::Op, object::Value, strings::StringHandle};
+use crate::{chunk::Op, heap::Heap, object::Value, strings::StringHandle};
 
 // still over allocating because of alignment!
 // o/c if we knew how small the offsets could actually be...
@@ -11,11 +11,32 @@ pub struct Function {
     pub ip: u32,
 }
 
+impl Function {
+    pub fn to_string(&self, heap: &Heap) -> String {
+        if self.name != StringHandle::EMPTY {
+            format!(
+                "<fn {} ({}/{})>",
+                heap.get_str(self.name),
+                self.arity,
+                self.upvalue_count
+            )
+        } else {
+            format!("<script>")
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct FunctionHandle(u16);
 
 impl FunctionHandle {
     pub const MAIN: Self = Self(0);
+
+    #[cfg(feature = "trace")]
+    pub fn from_index(i: usize) -> Self {
+        Self(i as u16)
+    }
+
 }
 
 #[derive(Debug)]
@@ -35,7 +56,7 @@ impl ByteCode {
     // it might help to specify some sizes up front, but these 5 array don't all need the same
     pub fn new() -> Self {
         Self {
-            code: vec![0],// don't allow writing to ip = 0
+            code: vec![0], // don't allow writing to ip = 0
             lines: Vec::new(),
             run_lengths: Vec::new(),
             constants: Vec::new(),
@@ -193,12 +214,12 @@ impl ByteCode {
         self.constants[constant_offset + self.read_byte(ip) as usize]
     }
 
-    #[cfg(feature = "trace")]
-    pub fn read_constant_carefully(&self, ip: usize) -> Option<&Value> {
-        let bucket = self.code.len() >> CONSTANT_SHIFT;
-        let constant_offset = self.constant_offsets[bucket] as usize;
-        let index = constant_offset + self.read_byte(ip) as usize;
-        self.constants.get(index)
+    pub fn function_count(&self) -> usize {
+        self.functions.len()
+    }
+
+    pub fn function_string(&self, fi: FunctionHandle, heap: &Heap) -> String {
+         self.functions[fi.0 as usize].to_string(heap)
     }
 
     // we are moving toward not using the garbage collector for static data
