@@ -1,6 +1,6 @@
 use crate::{
     bitarray::BitArray,
-    byte_code::ByteCode,
+    functions::Functions,
     object::{BoundMethod, Class, Closure, Instance, Upvalue, Value},
     strings::{KeySet, StringHandle, Strings},
 };
@@ -245,10 +245,10 @@ impl Heap {
         self.kinds[handle.0 as usize]
     }
 
-    pub fn to_string(&self, handle: Handle, byte_code: &ByteCode) -> String {
+    pub fn to_string(&self, handle: Handle, functions: &Functions) -> String {
         match self.kind(handle) {
             Kind::BoundMethod => {
-                self.to_string(self.get_ref::<BoundMethod>(handle).method, byte_code)
+                self.to_string(self.get_ref::<BoundMethod>(handle).method, functions)
             }
             Kind::Class => format!(
                 "<class {}>",
@@ -257,17 +257,7 @@ impl Heap {
                     .unwrap_or("???")
             ),
             Kind::Closure => {
-                let function = byte_code.function_ref(self.get_ref::<Closure>(handle).function);
-                if function.name != StringHandle::EMPTY {
-                    format!(
-                        "<fn {} ({}/{})>",
-                        self.get_str(function.name),
-                        function.arity,
-                        function.upvalue_count
-                    )
-                } else {
-                    format!("<script>")
-                }
+                functions.to_string(self.get_ref::<Closure>(handle).function, self)
             }
             Kind::Free => format!("<free>"),
             Kind::Instance => {

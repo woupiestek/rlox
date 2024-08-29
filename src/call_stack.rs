@@ -1,5 +1,5 @@
 use crate::{
-    byte_code::ByteCode,
+    functions::{Chunk, Functions},
     heap::{Handle, Heap},
     object::{Closure, Value},
     strings::StringHandle,
@@ -10,7 +10,7 @@ pub struct CallStack<const MAX_SIZE: usize> {
     // current frame
     top: usize,
     // instruction pointers
-    ips: [u32; MAX_SIZE],
+    ips: [i32; MAX_SIZE],
     // offsets into operand stack
     slots: [u16; MAX_SIZE],
     // called functions
@@ -31,42 +31,44 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         &mut self,
         slot: usize,
         closure: Handle,
-        heap: &Heap,
-        byte_code: &ByteCode,
     ) -> Result<(), String> {
         if self.top == 0 {
             return err!("Stack overflow.");
         }
         self.top -= 1;
         self.closures[self.top] = Some(closure);
-        let fi = heap.get_ref::<Closure>(closure).function;
-        self.ips[self.top] = byte_code.function_ref(fi).ip - 1;
+        self.ips[self.top] = - 1;
         self.slots[self.top] = slot as u16;
         Ok(())
     }
 
-    pub fn read_byte(&mut self, byte_code: &ByteCode) -> u8 {
-        self.ips[self.top] += 1;
-        byte_code.read_byte(self.ips[self.top] as usize)
+    fn get_chunk<'b>(&self, functions: &'b Functions, heap: &Heap) -> &'b Chunk {
+        let fi = heap.get_ref::<Closure>(self.closures[self.top].unwrap()).function;
+        functions.chunk_ref(fi)
     }
 
-    pub fn read_constant(&mut self, byte_code: &ByteCode) -> Value {
+    pub fn read_byte(&mut self, functions: &Functions, heap: &Heap) -> u8 {
         self.ips[self.top] += 1;
-        byte_code.read_constant(
+        self.get_chunk(functions, heap).read_byte(self.ips[self.top] as usize)
+    }
+
+    pub fn read_constant(&mut self, functions: &Functions, heap: &Heap) -> Value {
+        self.ips[self.top] += 1;
+        self.get_chunk(functions, heap).read_constant(
             self.ips[self.top] as usize,
         )
     }
 
     pub fn read_string(
         &mut self,
-        byte_code: &ByteCode,
+        functions: &Functions,
         heap: &Heap,
     ) -> Result<StringHandle, String> {
-        let value = self.read_constant(byte_code);
+        let value = self.read_constant(functions,heap);
         if let Value::String(handle) = value {
             Ok(handle)
         } else {
-            err!("'{}' is not a string", value.to_string(heap, byte_code))
+            err!("'{}' is not a string", value.to_string(heap, functions))
         }
     }
 
@@ -83,8 +85,8 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn read_upvalue(&mut self, byte_code: &ByteCode, heap: &Heap) -> Result<Handle, String> {
-        let index = byte_code.read_byte(self.ips[self.top] as usize) as usize;
+    pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<Handle, String> {
+        let index = self.get_chunk(functions, heap).read_byte(self.ips[self.top] as usize) as usize;
         self.upvalue(index, heap)
     }
 
@@ -92,14 +94,14 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         self.slots[self.top] as usize
     }
 
-    pub fn jump_forward(&mut self, byte_code: &ByteCode) {
+    pub fn jump_forward(&mut self, functions: &Functions, heap: &Heap) {
         self.ips[self.top] +=
-            byte_code.read_short(self.ips[self.top] as usize + 1) as u32;
+        self.get_chunk(functions, heap).read_short(self.ips[self.top] as usize + 1) as i32;
     }
 
-    pub fn jump_back(&mut self, byte_code: &ByteCode) {
+    pub fn jump_back(&mut self, functions: &Functions, heap: &Heap) {
         self.ips[self.top] -=
-            byte_code.read_short(self.ips[self.top] as usize + 1) as u32;
+        self.get_chunk(functions, heap).read_short(self.ips[self.top] as usize + 1) as i32;
     }
 
     pub fn skip(&mut self) {
@@ -122,22 +124,24 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn print_stack_trace(&self, byte_code: &ByteCode, heap: &Heap) {
+    pub fn print_stack_trace(&self, functions: &Functions, heap: &Heap) {
         for i in self.top..STACK_SIZE {
             if let Some(closure) = self.closures[i as usize] {
                 eprintln!(
                     "  at {} line {}",
-                    heap.to_string(closure, byte_code),
-                    byte_code.get_line(self.ips[i as usize])
+                    heap.to_string(closure, functions),
+                    self.get_chunk(functions, heap).get_line(self.ips[i as usize])
                 )
             }
         }
     }
 
     #[cfg(feature = "trace")]
-    pub fn print_trace(&self, byte_code: &ByteCode){
+    pub fn print_trace(&self, functions: &Functions, heap: &Heap){
         let ip = self.ips[self.top];
         println!("ip: {}", ip);
-        println!("line: {}", byte_code.get_line(ip));
+        let fh = heap.get_ref::<Closure>(self.closures[self.top].unwrap()).function;
+        let chunk = functions.chunk_ref(fh);
+        println!("line: {}", chunk.get_line(ip));
     }
 }

@@ -1,38 +1,43 @@
 use crate::{
-    byte_code::{ByteCode, FunctionHandle},
-    chunk::Op,
-    heap::Heap,
+    functions::{Chunk, FunctionHandle, Functions}, heap::Heap, op::Op
 };
 
 pub struct Disassembler<'src, 'hp> {
-    byte_code: &'src ByteCode,
+    functions: &'src Functions,
     heap: &'hp Heap,
+    fh: FunctionHandle,
     ip: usize,
 }
 
 impl<'src, 'hp> Disassembler<'src, 'hp> {
-    fn new(byte_code: &'src ByteCode, heap: &'hp Heap) -> Self {
+    pub fn disassemble(functions: &'src Functions, heap: &'hp Heap) {
         Self {
-            byte_code,
+            functions,
             heap,
-            ip: 1, // skip first byte!
-        }
+            fh: FunctionHandle::MAIN,
+            ip: 0,
+        }.run();
     }
 
-    pub fn disassemble(byte_code: &'src ByteCode, heap: &'hp Heap) {
-        Self::new(byte_code, heap).run();
+    fn chunk(&self) -> &Chunk {
+        self.functions.chunk_ref(self.fh)
     }
 
     fn run(&mut self) {
-        self.functions();
+        for i in 0..self.functions.count() {
+            self.fh = FunctionHandle::from_index(i);
+            println!("{}:", self.functions.to_string(self.fh, self.heap));
+            self.ip = 0;
+            self.code();
+        }
     }
 
-    fn code(&mut self, to: usize) {
-        while self.ip < to {
+    fn code(&mut self) {
+        while self.ip < self.chunk().ip() {
             print!("{}:", self.ip);
-            let op_code = match Op::try_from(self.byte_code.read_byte(self.ip)) {
+            let op_code = match Op::try_from(self.chunk().read_byte(self.ip)) {
                 Err(_) => {
-                    println!("error: {}", self.byte_code.read_byte(self.ip));
+                    println!("error: {}", self.chunk().read_byte(self.ip));
                     self.ip += 1;
                     continue;
                 }
@@ -65,50 +70,30 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
         }
     }
     fn byte(&mut self) {
-        print!(" {}", self.byte_code.read_byte(self.ip));
+        print!(" {}", self.chunk().read_byte(self.ip));
         self.ip += 1;
     }
     fn constant(&mut self) {
-        let value = self.byte_code.read_constant(self.ip);
-        print!(" {}", value.to_string(&self.heap, &self.byte_code));
+        let value = self.chunk().read_constant(self.ip);
+        print!(" {}", value.to_string(&self.heap, &self.functions));
         self.ip += 1;
     }
     fn invoke(&mut self) {
         print!(
             " {} ({})",
-            self.byte_code
+            self.chunk()
                 .read_constant(self.ip)
-                .to_string(&self.heap, &self.byte_code),
-            self.byte_code.read_byte(self.ip + 1)
+                .to_string(&self.heap, &self.functions),
+            self.chunk().read_byte(self.ip + 1)
         );
         self.ip += 2;
     }
     fn jump_forward(&mut self) {
-        print!(" {}", self.ip + self.byte_code.read_short(self.ip) as usize);
+        print!(" {}", self.ip + self.chunk().read_short(self.ip) as usize);
         self.ip += 2;
     }
     fn jump_back(&mut self) {
-        print!(" {}", self.ip - self.byte_code.read_short(self.ip) as usize);
+        print!(" {}", self.ip - self.chunk().read_short(self.ip) as usize);
         self.ip += 2;
-    }
-
-    fn functions(&mut self) {
-        let l = self.byte_code.function_count();
-        for i in 0..l {
-            let current = FunctionHandle::from_index(i);
-            println!("{}:", self.byte_code.function_string(current, &self.heap));
-            self.ip = self
-                .byte_code
-                .function_ref(current)
-                .ip as usize;
-            let to = if i + 1 == l {
-                self.byte_code.count()
-            } else {
-                self.byte_code
-                    .function_ref(FunctionHandle::from_index(i + 1))
-                    .ip as usize
-            };
-            self.code(to);
-        }
     }
 }

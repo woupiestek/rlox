@@ -17,6 +17,11 @@ unhindered by nested function definitions.
 Time to admit defeat... Munificent was right about both the data model and the
 need for a good dissambler.
 
+### result
+
+Reverted the data structure solved the recursive function. something still goes
+wrong with upvalues, and new problem have arisen with classes.
+
 ## 2024-08-27
 
 ### type specific allocators

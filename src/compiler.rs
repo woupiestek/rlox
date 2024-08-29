@@ -2,10 +2,10 @@ use std::{mem, time::Instant, usize};
 
 use crate::{
     bitarray::BitArray,
-    byte_code::{ByteCode, FunctionHandle},
-    chunk::Op,
+    functions::{Chunk, FunctionHandle, Functions},
     heap::Heap,
     object::Value,
+    op::Op,
     scanner::{Scanner, Token, TokenType},
     strings::StringHandle,
 };
@@ -115,7 +115,7 @@ impl CompileData {
         let count = self.upvalues.len();
         for i in 0..count {
             let upvalue = self.upvalues[i];
-            if self.upvalues_local.get(upvalue as usize) && upvalue == index {
+            if upvalue == index && self.upvalues_local.get(upvalue as usize) == is_local {
                 return Ok(i as u8);
             }
         }
@@ -166,7 +166,7 @@ impl CompileData {
 struct Compiler<'src, 'hp> {
     data: Box<CompileData>,
     source: Source<'src>,
-    target: ByteCode,
+    target: Functions,
     heap: &'hp mut Heap,
     this_name: StringHandle,
     super_name: StringHandle,
@@ -176,7 +176,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
         let this_name = heap.intern_copy("this");
         let super_name = heap.intern_copy("super");
-        let mut target = ByteCode::new();
+        let mut target = Functions::new();
         Self {
             data: Box::from(CompileData::new(
                 function_type,
@@ -191,6 +191,16 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
+    fn chunk_ref(&self) -> &Chunk {
+        let fi = self.data.function;
+        self.target.chunk_ref(fi)
+    }
+
+    fn chunk_mut(&mut self) -> &mut Chunk {
+        let fi = self.data.function;
+        self.target.chunk_mut(fi)
+    }
+
     fn emit_return(&mut self) {
         if self.data.function_type == FunctionType::Initializer {
             self.emit_byte_op(Op::GetLocal, 0);
@@ -202,26 +212,26 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_byte_op(&mut self, op: Op, byte: u8) {
         let line = self.line_and_column().0;
-        self.target.write_byte_op(op, byte, line);
+        self.chunk_mut().write_byte_op(op, byte, line);
     }
 
     fn emit_short_op(&mut self, op: Op, short: u16) {
         let line = self.line_and_column().0;
-        self.target.write_short_op(op, short, line);
+        self.chunk_mut().write_short_op(op, short, line);
     }
 
     fn emit_invoke_op(&mut self, op: Op, constant: Value, arity: u8) -> Result<(), String> {
         let line = self.line_and_column().0;
-        self.target.write_invoke_op(op, constant, arity, line)
+        self.chunk_mut().write_invoke_op(op, constant, arity, line)
     }
 
     fn emit_op(&mut self, op: Op) {
         let line = self.line_and_column().0;
-        self.target.write(&[op as u8], line);
+        self.chunk_mut().write(&[op as u8], line);
     }
 
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
-        let offset = self.target.count() - start + 1;
+        let offset = self.chunk_ref().ip() - start + 1;
         if offset > u16::MAX as usize {
             err!("loop size to large")
         } else {
@@ -232,12 +242,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_jump(&mut self, instruction: Op) -> usize {
         self.emit_short_op(instruction, 0xffff);
-        self.target.count() - 2
+        self.chunk_ref().ip() - 2
     }
 
     fn emit_constant_op(&mut self, op: Op, value: Value) -> Result<(), String> {
         let line = self.line_and_column().0;
-        self.target.write_constant_op(op, value, line)
+        self.chunk_mut().write_constant_op(op, value, line)
     }
 
     fn begin_scope(&mut self) {
@@ -284,7 +294,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.emit_op(Op::Pop);
         self.parse_precedence(Prec::And)?;
 
-        self.target.patch_jump(end_jump)
+        self.chunk_mut().patch_jump(end_jump)
     }
 
     fn binary(&mut self) -> Result<(), String> {
@@ -367,12 +377,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let else_jump = self.emit_jump(Op::JumpIfFalse);
         let end_jump = self.emit_jump(Op::Jump);
 
-        self.target.patch_jump(else_jump)?;
+        self.chunk_mut().patch_jump(else_jump)?;
         self.emit_op(Op::Pop);
 
         self.parse_precedence(Prec::Or)?;
 
-        self.target.patch_jump(end_jump)?;
+        self.chunk_mut().patch_jump(end_jump)?;
         Ok(())
     }
 
@@ -561,10 +571,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                if self.target.function_ref(self.data.function).arity == u8::MAX {
-                    return err!("Can't have more than 255 parameters.");
-                }
-                self.target.function_mut(self.data.function).arity += 1;
+                self.target.incr_arity(self.data.function)?;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index)?;
                 if !self.source.match_type(TokenType::Comma) {
@@ -614,12 +621,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let enclosing = self.data.enclosing.take().unwrap();
         let enclosed = mem::replace(&mut self.data, enclosing);
 
-        self.target.function_mut(function).upvalue_count = enclosed.upvalues.len() as u8;
+        self.target
+            .set_upvalue_count(function, enclosed.upvalues.len() as u8);
         self.emit_constant_op(Op::Closure, Value::from(function))?;
         let line = self.line_and_column().0;
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
-            self.target.write(
+            self.chunk_mut().write(
                 &[enclosed.upvalues_local.get(upvalue as usize) as u8, upvalue],
                 line,
             );
@@ -650,7 +658,11 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
         self.data.declare_variable(class_name)?;
-        self.define_variable(if self.data.scopes.len()==0 {Some(class_name)} else {None})?;
+        self.define_variable(if self.data.scopes.len() == 0 {
+            Some(class_name)
+        } else {
+            None
+        })?;
 
         self.emit_constant_op(Op::Class, Value::from(class_name))?;
 
@@ -749,7 +761,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                 self.expression_statement()
             }?;
         }
-        let mut loop_start = self.target.count();
+        let mut loop_start = self.chunk_ref().ip();
         let mut exit_jump: Option<usize> = None;
         if !self.source.match_type(TokenType::Semicolon) {
             self.expression()?;
@@ -763,7 +775,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
         if !self.source.match_type(TokenType::RightParen) {
             let body_jump = self.emit_jump(Op::Jump);
-            let increment_start = self.target.count();
+            let increment_start = self.chunk_ref().ip();
             self.expression()?;
             self.emit_op(Op::Pop);
             self.source
@@ -772,13 +784,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.emit_loop(loop_start)?;
             loop_start = increment_start;
 
-            self.target.patch_jump(body_jump)?;
+            self.chunk_mut().patch_jump(body_jump)?;
         }
 
         self.statement()?;
         self.emit_loop(loop_start)?;
         if let Some(i) = exit_jump {
-            self.target.patch_jump(i)?;
+            self.chunk_mut().patch_jump(i)?;
             self.emit_op(Op::Pop);
         }
         self.end_scope();
@@ -797,13 +809,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.statement()?;
         let else_jump = self.emit_jump(Op::Jump);
 
-        self.target.patch_jump(then_jump)?;
+        self.chunk_mut().patch_jump(then_jump)?;
         self.emit_op(Op::Pop);
         if self.source.match_type(TokenType::Else) {
             self.statement()?;
         }
 
-        self.target.patch_jump(else_jump)?;
+        self.chunk_mut().patch_jump(else_jump)?;
         Ok(())
     }
 
@@ -837,7 +849,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn while_statement(&mut self) -> Result<(), String> {
-        let loop_start = self.target.count();
+        let loop_start = self.chunk_ref().ip();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
         self.expression()?;
@@ -849,7 +861,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.statement()?;
         self.emit_loop(loop_start)?;
 
-        self.target.patch_jump(exit_jump)?;
+        self.chunk_mut().patch_jump(exit_jump)?;
         self.emit_op(Op::Pop);
         Ok(())
     }
@@ -899,7 +911,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn script(mut self) -> Result<ByteCode, String> {
+    fn script(mut self) -> Result<Functions, String> {
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
@@ -999,17 +1011,14 @@ impl<'src> Source<'src> {
     }
 }
 
-pub fn compile(source: &str, heap: &mut Heap) -> Result<ByteCode, String> {
+pub fn compile(source: &str, heap: &mut Heap) -> Result<Functions, String> {
     let start = Instant::now();
     let source = Source::new(source);
     let compiler = Compiler::new(FunctionType::Script, source, heap);
     let byte_code = compiler.script()?;
     println!(
-        "Compilation finished in {} ns. Instruction count {}. Constant count {}. Function count {}",
+        "Compilation finished in {} ns.",
         Instant::now().duration_since(start).as_nanos(),
-        byte_code.count(),
-        byte_code.constant_count(),
-        byte_code.function_count()
     );
     Ok(byte_code)
 }

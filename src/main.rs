@@ -9,8 +9,8 @@ mod debug;
 
 #[macro_use]
 mod common;
-mod byte_code;
-mod chunk;
+mod functions;
+mod op;
 mod bitarray;
 mod compiler;
 mod strings;
