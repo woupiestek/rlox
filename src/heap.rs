@@ -256,9 +256,7 @@ impl Heap {
                     .get(self.get_ref::<Class>(handle).name)
                     .unwrap_or("???")
             ),
-            Kind::Closure => {
-                functions.to_string(self.get_ref::<Closure>(handle).function, self)
-            }
+            Kind::Closure => functions.to_string(self.get_ref::<Closure>(handle).function, self),
             Kind::Free => format!("<free>"),
             Kind::Instance => {
                 let instance = self.get_ref::<Instance>(handle);

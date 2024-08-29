@@ -100,7 +100,9 @@ impl<'src> Scanner<'src> {
         let mut next = index;
         loop {
             next += 1;
-            if next == self.source.len() || (self.get_byte(next) as i8) >= -64 { return next; }
+            if next == self.source.len() || (self.get_byte(next) as i8) >= -64 {
+                return next;
+            }
         }
     }
 
@@ -342,57 +344,57 @@ impl<'src> Scanner<'src> {
                 let this = &self;
                 let typ = TokenType::LeftParen;
                 Token(typ, this.token_start)
-            },
+            }
             b')' => {
                 let this = &self;
                 let typ = TokenType::RightParen;
                 Token(typ, this.token_start)
-            },
+            }
             b'{' => {
                 let this = &self;
                 let typ = TokenType::LeftBrace;
                 Token(typ, this.token_start)
-            },
+            }
             b'}' => {
                 let this = &self;
                 let typ = TokenType::RightBrace;
                 Token(typ, this.token_start)
-            },
+            }
             b';' => {
                 let this = &self;
                 let typ = TokenType::Semicolon;
                 Token(typ, this.token_start)
-            },
+            }
             b',' => {
                 let this = &self;
                 let typ = TokenType::Comma;
                 Token(typ, this.token_start)
-            },
+            }
             b'.' => {
                 let this = &self;
                 let typ = TokenType::Dot;
                 Token(typ, this.token_start)
-            },
+            }
             b'-' => {
                 let this = &self;
                 let typ = TokenType::Minus;
                 Token(typ, this.token_start)
-            },
+            }
             b'+' => {
                 let this = &self;
                 let typ = TokenType::Plus;
                 Token(typ, this.token_start)
-            },
+            }
             b'/' => {
                 let this = &self;
                 let typ = TokenType::Slash;
                 Token(typ, this.token_start)
-            },
+            }
             b'*' => {
                 let this = &self;
                 let typ = TokenType::Star;
                 Token(typ, this.token_start)
-            },
+            }
             b'!' => {
                 if self.match_eq() {
                     {
@@ -458,7 +460,7 @@ impl<'src> Scanner<'src> {
                 let this = &self;
                 let typ = TokenType::BadTokenStart;
                 Token(typ, this.token_start)
-            },
+            }
         }
     }
 }

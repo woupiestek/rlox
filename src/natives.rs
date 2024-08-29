@@ -3,7 +3,7 @@ use crate::object::Value;
 pub struct Natives(Vec<fn(args: &[Value]) -> Result<Value, String>>);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct NativeHandle(u8);     // More than enough for now...
+pub struct NativeHandle(u8); // More than enough for now...
 
 // All natives are collected on shut down.
 impl Natives {
@@ -14,14 +14,13 @@ impl Natives {
     pub fn store(&mut self, f: fn(args: &[Value]) -> Result<Value, String>) -> NativeHandle {
         let index = self.0.len();
         self.0.push(f);
-        NativeHandle (index as u8)
+        NativeHandle(index as u8)
     }
 
     pub fn call(&self, handle: NativeHandle, args: &[Value]) -> Result<Value, String> {
         self.0[handle.0 as usize](args)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -46,7 +45,6 @@ mod tests {
     fn store_native_function() {
         let mut natives = Natives::new();
         let handle = natives.store(first);
-        assert_eq!(natives.call(handle,&[Value::Nil]),Ok(Value::Nil));
+        assert_eq!(natives.call(handle, &[Value::Nil]), Ok(Value::Nil));
     }
 }
-

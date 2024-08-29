@@ -1,5 +1,7 @@
 use crate::{
-    functions::{Chunk, FunctionHandle, Functions}, heap::Heap, op::Op
+    functions::{Chunk, FunctionHandle, Functions},
+    heap::Heap,
+    op::Op,
 };
 
 pub struct Disassembler<'src, 'hp> {
@@ -16,7 +18,8 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
             heap,
             fh: FunctionHandle::MAIN,
             ip: 0,
-        }.run();
+        }
+        .run();
     }
 
     fn chunk(&self) -> &Chunk {

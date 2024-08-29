@@ -1,7 +1,7 @@
 // run time data structures
 
 use crate::{
-    functions::{Functions, FunctionHandle},
+    functions::{FunctionHandle, Functions},
     heap::{Handle, Heap, Kind, Traceable},
     natives::NativeHandle,
     strings::{Map, StringHandle},

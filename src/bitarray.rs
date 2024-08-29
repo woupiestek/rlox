@@ -24,7 +24,6 @@ impl BitArray {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

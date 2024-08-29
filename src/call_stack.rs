@@ -21,42 +21,40 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     pub fn new() -> Self {
         Self {
             top: STACK_SIZE,
-            ips: [0; STACK_SIZE], 
+            ips: [0; STACK_SIZE],
             slots: [0; STACK_SIZE],
             closures: [Option::None; STACK_SIZE],
         }
     }
 
-    pub fn push(
-        &mut self,
-        slot: usize,
-        closure: Handle,
-    ) -> Result<(), String> {
+    pub fn push(&mut self, slot: usize, closure: Handle) -> Result<(), String> {
         if self.top == 0 {
             return err!("Stack overflow.");
         }
         self.top -= 1;
         self.closures[self.top] = Some(closure);
-        self.ips[self.top] = - 1;
+        self.ips[self.top] = -1;
         self.slots[self.top] = slot as u16;
         Ok(())
     }
 
     fn get_chunk<'b>(&self, functions: &'b Functions, heap: &Heap) -> &'b Chunk {
-        let fi = heap.get_ref::<Closure>(self.closures[self.top].unwrap()).function;
+        let fi = heap
+            .get_ref::<Closure>(self.closures[self.top].unwrap())
+            .function;
         functions.chunk_ref(fi)
     }
 
     pub fn read_byte(&mut self, functions: &Functions, heap: &Heap) -> u8 {
         self.ips[self.top] += 1;
-        self.get_chunk(functions, heap).read_byte(self.ips[self.top] as usize)
+        self.get_chunk(functions, heap)
+            .read_byte(self.ips[self.top] as usize)
     }
 
     pub fn read_constant(&mut self, functions: &Functions, heap: &Heap) -> Value {
         self.ips[self.top] += 1;
-        self.get_chunk(functions, heap).read_constant(
-            self.ips[self.top] as usize,
-        )
+        self.get_chunk(functions, heap)
+            .read_constant(self.ips[self.top] as usize)
     }
 
     pub fn read_string(
@@ -64,7 +62,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         functions: &Functions,
         heap: &Heap,
     ) -> Result<StringHandle, String> {
-        let value = self.read_constant(functions,heap);
+        let value = self.read_constant(functions, heap);
         if let Value::String(handle) = value {
             Ok(handle)
         } else {
@@ -74,19 +72,16 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
 
     pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<Handle, String> {
         match self.closures[self.top] {
-            Some(closure) => 
-            {
-            let closure = heap.get_ref::<Closure>(closure);
-            if index >= closure.upvalues.len() {
-              return err!("Upvalue index out of bound somehow {} out of {}", index,  closure.upvalues.len());
+            Some(closure) => {
+                let closure = heap.get_ref::<Closure>(closure);
+                Ok(closure.upvalues[index])
             }
-            Ok(closure.upvalues[index])},
             None => err!("No closure in call frame"), // todo
         }
     }
 
     pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<Handle, String> {
-        let index = self.get_chunk(functions, heap).read_byte(self.ips[self.top] as usize) as usize;
+        let index = self.read_byte(functions, heap) as usize;
         self.upvalue(index, heap)
     }
 
@@ -95,13 +90,15 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     }
 
     pub fn jump_forward(&mut self, functions: &Functions, heap: &Heap) {
-        self.ips[self.top] +=
-        self.get_chunk(functions, heap).read_short(self.ips[self.top] as usize + 1) as i32;
+        self.ips[self.top] += self
+            .get_chunk(functions, heap)
+            .read_short(self.ips[self.top] as usize + 1) as i32;
     }
 
     pub fn jump_back(&mut self, functions: &Functions, heap: &Heap) {
-        self.ips[self.top] -=
-        self.get_chunk(functions, heap).read_short(self.ips[self.top] as usize + 1) as i32;
+        self.ips[self.top] -= self
+            .get_chunk(functions, heap)
+            .read_short(self.ips[self.top] as usize + 1) as i32;
     }
 
     pub fn skip(&mut self) {
@@ -130,17 +127,21 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
                 eprintln!(
                     "  at {} line {}",
                     heap.to_string(closure, functions),
-                    self.get_chunk(functions, heap).get_line(self.ips[i as usize])
+                    self.get_chunk(functions, heap)
+                        .get_line(self.ips[i as usize])
                 )
             }
         }
     }
 
     #[cfg(feature = "trace")]
-    pub fn print_trace(&self, functions: &Functions, heap: &Heap){
+    pub fn print_trace(&self, functions: &Functions, heap: &Heap) {
         let ip = self.ips[self.top];
         println!("ip: {}", ip);
-        let fh = heap.get_ref::<Closure>(self.closures[self.top].unwrap()).function;
+        let fh = heap
+            .get_ref::<Closure>(self.closures[self.top].unwrap())
+            .function;
+        println!("{}:", functions.to_string(fh, heap));
         let chunk = functions.chunk_ref(fh);
         println!("line: {}", chunk.get_line(ip));
     }

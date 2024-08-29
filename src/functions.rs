@@ -180,7 +180,7 @@ impl Functions {
         Ok(())
     }
 
-    pub fn arity(&self, fh:FunctionHandle) -> u8 {
+    pub fn arity(&self, fh: FunctionHandle) -> u8 {
         self.arities[fh.0 as usize]
     }
 
@@ -188,7 +188,7 @@ impl Functions {
         self.upvalue_counts[fh.0 as usize] = count
     }
 
-    pub fn upvalue_count(&self, fh:FunctionHandle) -> u8 {
+    pub fn upvalue_count(&self, fh: FunctionHandle) -> u8 {
         self.upvalue_counts[fh.0 as usize]
     }
 
