@@ -2,7 +2,7 @@
 
 use crate::{
     functions::{FunctionHandle, Functions},
-    heap::{Handle, Heap, Kind, Traceable},
+    heap::{ObjectHandle, Heap, Kind, Traceable},
     natives::NativeHandle,
     strings::{Map, StringHandle},
 };
@@ -15,7 +15,7 @@ pub enum Value {
     Function(FunctionHandle),
     Native(NativeHandle),
     Number(f64),
-    Object(Handle),
+    Object(ObjectHandle),
     String(StringHandle),
 }
 
@@ -47,9 +47,9 @@ impl From<f64> for Value {
     }
 }
 
-impl From<Handle> for Value {
-    fn from(value: Handle) -> Self {
-        Value::Object(Handle::from(value))
+impl From<ObjectHandle> for Value {
+    fn from(value: ObjectHandle) -> Self {
+        Value::Object(ObjectHandle::from(value))
     }
 }
 
@@ -58,7 +58,7 @@ impl Value {
         matches!(self, Value::Nil | Value::False)
     }
 
-    pub fn as_object(&self) -> Result<Handle, String> {
+    pub fn as_object(&self) -> Result<ObjectHandle, String> {
         if let &Value::Object(handle) = self {
             Ok(handle)
         } else {
@@ -91,7 +91,7 @@ impl Value {
 pub struct Class {
     pub name: StringHandle,
     // heap allocated
-    pub methods: Map<Handle>,
+    pub methods: Map<ObjectHandle>,
 }
 
 impl Class {
@@ -112,14 +112,14 @@ impl Traceable for Class {
         40 + 16 * self.methods.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+    fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
         strings.push(self.name);
         self.methods.trace(collector, strings);
     }
 }
 
 pub enum Upvalue {
-    Open(usize, Option<Handle>),
+    Open(usize, Option<ObjectHandle>),
     // store any value on the heap...
     // allow this value to change into other types of value
     Closed(Value),
@@ -132,9 +132,9 @@ impl Traceable for Upvalue {
         24
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+    fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
         match *self {
-            Upvalue::Open(_, Some(next)) => collector.push(Handle::from(next)),
+            Upvalue::Open(_, Some(next)) => collector.push(ObjectHandle::from(next)),
             Upvalue::Closed(Value::Object(handle)) => collector.push(handle),
             Upvalue::Closed(Value::String(handle)) => strings.push(handle),
             _ => (),
@@ -147,7 +147,7 @@ impl Traceable for Upvalue {
 pub struct Closure {
     pub function: FunctionHandle,
     // heap allocated
-    pub upvalues: Vec<Handle>,
+    pub upvalues: Vec<ObjectHandle>,
 }
 
 impl Closure {
@@ -166,15 +166,15 @@ impl Traceable for Closure {
         16 + self.upvalues.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, _strings: &mut Vec<StringHandle>) {
+    fn trace(&self, collector: &mut Vec<ObjectHandle>, _strings: &mut Vec<StringHandle>) {
         for &upvalue in self.upvalues.iter() {
-            collector.push(Handle::from(upvalue));
+            collector.push(ObjectHandle::from(upvalue));
         }
     }
 }
 
 pub struct Instance {
-    pub class: Handle,
+    pub class: ObjectHandle,
     // heap allocated
     pub properties: Map<Value>,
 }
@@ -186,14 +186,14 @@ impl Traceable for Instance {
         40 + 24 * self.properties.capacity()
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
-        collector.push(Handle::from(self.class));
+    fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
+        collector.push(ObjectHandle::from(self.class));
         self.properties.trace(collector, strings);
     }
 }
 
 impl Instance {
-    pub fn new(class: Handle) -> Self {
+    pub fn new(class: ObjectHandle) -> Self {
         Self {
             class,
             properties: Map::new(),
@@ -202,12 +202,12 @@ impl Instance {
 }
 
 pub struct BoundMethod {
-    pub receiver: Handle,
-    pub method: Handle,
+    pub receiver: ObjectHandle,
+    pub method: ObjectHandle,
 }
 
 impl BoundMethod {
-    pub fn new(receiver: Handle, method: Handle) -> Self {
+    pub fn new(receiver: ObjectHandle, method: ObjectHandle) -> Self {
         Self { receiver, method }
     }
 }
@@ -219,8 +219,8 @@ impl Traceable for BoundMethod {
         16
     }
 
-    fn trace(&self, collector: &mut Vec<Handle>, _strings: &mut Vec<StringHandle>) {
-        collector.push(Handle::from(self.receiver));
-        collector.push(Handle::from(self.method));
+    fn trace(&self, collector: &mut Vec<ObjectHandle>, _strings: &mut Vec<StringHandle>) {
+        collector.push(ObjectHandle::from(self.receiver));
+        collector.push(ObjectHandle::from(self.method));
     }
 }

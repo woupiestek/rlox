@@ -1,4 +1,4 @@
-use crate::{heap::Heap, object::Value, op::Op, strings::StringHandle};
+use crate::{common::FUNCTIONS, heap::{Handle, Heap}, object::Value, op::Op, strings::StringHandle};
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -119,8 +119,7 @@ impl Chunk {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct FunctionHandle(u16);
+pub type FunctionHandle = Handle<FUNCTIONS>;
 
 impl FunctionHandle {
     pub const MAIN: Self = Self(0);
@@ -161,7 +160,7 @@ impl Functions {
         });
         self.names.push(name.unwrap_or(StringHandle::EMPTY));
         self.upvalue_counts.push(0);
-        FunctionHandle((self.chunks.len() - 1) as u16)
+        FunctionHandle::from((self.chunks.len() - 1) as u32)
     }
 
     pub fn chunk_ref(&self, fh: FunctionHandle) -> &Chunk {
@@ -216,7 +215,7 @@ impl Functions {
     // here is why: this method does the same thing on every cycle.
     pub fn trace(
         &self,
-        collector: &mut Vec<crate::heap::Handle>,
+        collector: &mut Vec<crate::heap::ObjectHandle>,
         strings: &mut Vec<crate::strings::StringHandle>,
     ) {
         for name in &self.names {

@@ -5,7 +5,7 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     functions::{FunctionHandle, Functions},
-    heap::{Handle, Heap, Kind, Traceable},
+    heap::{ObjectHandle, Heap, Kind, Traceable},
     natives::Natives,
     object::{BoundMethod, Class, Closure, Instance, Upvalue, Value},
     op::Op,
@@ -38,7 +38,7 @@ pub struct VM {
     values: [Value; STACK_SIZE],
     stack_top: usize,
     call_stack: CallStack<MAX_FRAMES>,
-    open_upvalues: Option<Handle>,
+    open_upvalues: Option<ObjectHandle>,
     globals: Map<Value>,
     init_string: StringHandle,
     heap: Heap,
@@ -63,7 +63,7 @@ impl VM {
         s.define_native("clock", clock_native);
         s
     }
-    pub fn capture_upvalue(&mut self, location: usize) -> Handle {
+    pub fn capture_upvalue(&mut self, location: usize) -> ObjectHandle {
         let mut previous = None;
         let mut current = self.open_upvalues;
         while let Some(link) = current {
@@ -108,7 +108,7 @@ impl VM {
         }
     }
 
-    fn new_obj<T: Traceable>(&mut self, t: T) -> Handle {
+    fn new_obj<T: Traceable>(&mut self, t: T) -> ObjectHandle {
         if self.heap.needs_gc() {
             let (roots, keyset) = self.roots();
             self.heap.retain(roots, keyset);
@@ -116,7 +116,7 @@ impl VM {
         self.heap.put(t)
     }
 
-    fn roots(&mut self) -> (Vec<Handle>, Vec<StringHandle>) {
+    fn roots(&mut self) -> (Vec<ObjectHandle>, Vec<StringHandle>) {
         let mut collector = Vec::new();
         let mut strings = Vec::new();
         #[cfg(feature = "log_gc")]
@@ -138,7 +138,7 @@ impl VM {
             println!("collect upvalues");
         }
         if let Some(upvalue) = self.open_upvalues {
-            collector.push(Handle::from(upvalue));
+            collector.push(ObjectHandle::from(upvalue));
         }
         #[cfg(feature = "log_gc")]
         {
@@ -182,7 +182,7 @@ impl VM {
         self.values[self.stack_top - 1 - distance]
     }
 
-    fn call(&mut self, closure: Handle, arity: u8) -> Result<(), String> {
+    fn call(&mut self, closure: ObjectHandle, arity: u8) -> Result<(), String> {
         let handle = self.heap.get_ref::<Closure>(closure).function;
         let expected = self.functions.arity(handle);
         if arity != expected {
@@ -232,7 +232,7 @@ impl VM {
 
     fn invoke_from_class(
         &mut self,
-        class: Handle,
+        class: ObjectHandle,
         name: StringHandle,
         arity: u8,
     ) -> Result<(), String> {
@@ -256,7 +256,7 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: Handle, name: StringHandle) -> Result<(), String> {
+    fn bind_method(&mut self, class: ObjectHandle, name: StringHandle) -> Result<(), String> {
         match self.heap.get_ref::<Class>(class).methods.get(name) {
             None => err!("Undefined property '{}'.", self.heap.get_str(name)),
             Some(method) => {
@@ -291,7 +291,7 @@ impl VM {
     }
 
     // combined to avoid gc errors
-    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> Handle {
+    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> ObjectHandle {
         let value = self.new_obj(traceable);
         self.push(Value::from(value));
         value

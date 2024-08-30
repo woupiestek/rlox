@@ -1,9 +1,8 @@
 use std::u32;
 
-use crate::{heap::Handle, object::Value};
+use crate::{common::STRINGS, heap::{Handle, ObjectHandle}, object::Value};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct StringHandle(u32);
+pub type StringHandle = Handle<STRINGS>;
 
 impl StringHandle {
     pub const EMPTY: Self = Self(0);
@@ -162,8 +161,8 @@ impl<V: Clone> Map<V> {
     }
 }
 
-impl Map<Handle> {
-    pub fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+impl Map<ObjectHandle> {
+    pub fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
                 strings.push(self.key_set.keys[i]);
@@ -177,7 +176,7 @@ impl Map<Handle> {
 }
 
 impl Map<Value> {
-    pub fn trace(&self, collector: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) {
+    pub fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
                 strings.push(self.key_set.keys[i]);
@@ -258,7 +257,7 @@ impl Strings {
             if key == StringHandle::EMPTY {
                 let j = tombstone.unwrap_or(index);
                 // combine generations
-                let handle = StringHandle(hash ^ ((generation as u32) << 24));
+                let handle = StringHandle::from(hash ^ ((generation as u32) << 24));
                 self.key_set.keys[j] = handle;
                 self.generations[j] = generation;
                 self.key_set.count += 1;

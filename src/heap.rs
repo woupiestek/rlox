@@ -1,8 +1,7 @@
+
+
 use crate::{
-    bitarray::BitArray,
-    functions::Functions,
-    object::{BoundMethod, Class, Closure, Instance, Upvalue, Value},
-    strings::{KeySet, StringHandle, Strings},
+    bitarray::BitArray, common::OBJECTS, functions::Functions, object::{BoundMethod, Class, Closure, Instance, Upvalue, Value}, strings::{KeySet, StringHandle, Strings}
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -21,20 +20,28 @@ where
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
-    fn trace(&self, handles: &mut Vec<Handle>, strings: &mut Vec<StringHandle>);
-    fn get(heap: &Heap, handle: Handle) -> *mut Self {
+    fn trace(&self, handles: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>);
+    fn get(heap: &Heap, handle: ObjectHandle) -> *mut Self {
         assert_eq!(Self::KIND, heap.kinds[handle.0 as usize]);
         heap.pointers[handle.0 as usize] as *mut Self
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct Handle(u32);
+pub struct Handle<const KIND: u8>(pub u32);
+
+impl <const KIND: u8> From<u32> for Handle<KIND> {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+pub type ObjectHandle = Handle<OBJECTS>;
 
 pub struct Heap {
     kinds: Vec<Kind>,
     pointers: Vec<*mut u8>, // why not store lengths?
-    free: Vec<Handle>,
+    free: Vec<ObjectHandle>,
     string_pool: Strings,
     byte_count: usize,
     next_gc: usize,
@@ -46,13 +53,13 @@ impl Heap {
             kinds: Vec::with_capacity(init_size),
             pointers: Vec::with_capacity(init_size),
             free: Vec::with_capacity(init_size),
-            string_pool: Strings::with_capacity(init_size),
             byte_count: 0,
             next_gc: 1 << 20,
+            string_pool: Strings::with_capacity(init_size),
         }
     }
 
-    pub fn put<T: Traceable>(&mut self, t: T) -> Handle {
+    pub fn put<T: Traceable>(&mut self, t: T) -> ObjectHandle {
         self.byte_count += t.byte_count();
         if let Some(handle) = self.free.pop() {
             self.kinds[handle.0 as usize] = T::KIND;
@@ -62,20 +69,20 @@ impl Heap {
             let index = self.pointers.len();
             self.pointers.push(Box::into_raw(Box::from(t)) as *mut u8);
             self.kinds.push(T::KIND);
-            Handle(index as u32)
+            ObjectHandle::from(index as u32)
         }
     }
 
-    fn get_star_mut<T: Traceable>(&self, handle: Handle) -> *mut T {
+    fn get_star_mut<T: Traceable>(&self, handle: ObjectHandle) -> *mut T {
         assert_eq!(T::KIND, self.kinds[handle.0 as usize]);
         self.pointers[handle.0 as usize] as *mut T
     }
 
-    pub fn get_ref<T: Traceable>(&self, handle: Handle) -> &T {
+    pub fn get_ref<T: Traceable>(&self, handle: ObjectHandle) -> &T {
         unsafe { self.get_star_mut::<T>(handle).as_ref().unwrap() }
     }
 
-    pub fn get_mut<T: Traceable>(&mut self, handle: Handle) -> &mut T {
+    pub fn get_mut<T: Traceable>(&mut self, handle: ObjectHandle) -> &mut T {
         unsafe { self.get_star_mut::<T>(handle).as_mut().unwrap() }
     }
 
@@ -107,7 +114,7 @@ impl Heap {
         self.string_pool.get(handle).unwrap()
     }
 
-    pub fn retain(&mut self, mut roots: Vec<Handle>, mut strings: Vec<StringHandle>) {
+    pub fn retain(&mut self, mut roots: Vec<ObjectHandle>, mut strings: Vec<StringHandle>) {
         #[cfg(feature = "log_gc")]
         let before = self.byte_count;
         #[cfg(feature = "log_gc")]
@@ -134,7 +141,7 @@ impl Heap {
         }
     }
 
-    fn mark(&self, roots: &mut Vec<Handle>, strings: &mut Vec<StringHandle>) -> (BitArray, KeySet) {
+    fn mark(&self, roots: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) -> (BitArray, KeySet) {
         let mut marked = BitArray::new(self.pointers.len());
         let mut key_set: KeySet = KeySet::with_capacity(self.string_pool.capacity());
 
@@ -204,7 +211,7 @@ impl Heap {
             },
         }
         self.kinds[i] = Kind::Free;
-        self.free.push(Handle(i as u32));
+        self.free.push(ObjectHandle::from(i as u32));
     }
 
     fn sweep(&mut self, marked: BitArray) {
@@ -241,11 +248,11 @@ impl Heap {
         self.byte_count > self.next_gc
     }
 
-    pub fn kind(&self, handle: Handle) -> Kind {
+    pub fn kind(&self, handle: ObjectHandle) -> Kind {
         self.kinds[handle.0 as usize]
     }
 
-    pub fn to_string(&self, handle: Handle, functions: &Functions) -> String {
+    pub fn to_string(&self, handle: ObjectHandle, functions: &Functions) -> String {
         match self.kind(handle) {
             Kind::BoundMethod => {
                 self.to_string(self.get_ref::<BoundMethod>(handle).method, functions)

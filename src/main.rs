@@ -17,6 +17,7 @@ mod strings;
 // mod loxtr;
 // mod table;
 mod natives;
+// mod upvalues;
 
 mod heap;
 // mod memory;

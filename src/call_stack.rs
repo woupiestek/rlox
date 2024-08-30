@@ -1,6 +1,6 @@
 use crate::{
     functions::{Chunk, Functions},
-    heap::{Handle, Heap},
+    heap::{ObjectHandle, Heap},
     object::{Closure, Value},
     strings::StringHandle,
 };
@@ -14,7 +14,7 @@ pub struct CallStack<const MAX_SIZE: usize> {
     // offsets into operand stack
     slots: [u16; MAX_SIZE],
     // called functions
-    closures: [Option<Handle>; MAX_SIZE],
+    closures: [Option<ObjectHandle>; MAX_SIZE],
 }
 
 impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
@@ -27,7 +27,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn push(&mut self, slot: usize, closure: Handle) -> Result<(), String> {
+    pub fn push(&mut self, slot: usize, closure: ObjectHandle) -> Result<(), String> {
         if self.top == 0 {
             return err!("Stack overflow.");
         }
@@ -70,7 +70,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<Handle, String> {
+    pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<ObjectHandle, String> {
         match self.closures[self.top] {
             Some(closure) => {
                 let closure = heap.get_ref::<Closure>(closure);
@@ -80,7 +80,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<Handle, String> {
+    pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<ObjectHandle, String> {
         let index = self.read_byte(functions, heap) as usize;
         self.upvalue(index, heap)
     }
@@ -113,10 +113,10 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         self.top >= STACK_SIZE
     }
 
-    pub fn trace(&self, collector: &mut Vec<Handle>) {
+    pub fn trace(&self, collector: &mut Vec<ObjectHandle>) {
         for option in &self.closures {
             if let Some(closure) = option {
-                collector.push(Handle::from(*closure))
+                collector.push(ObjectHandle::from(*closure))
             };
         }
     }

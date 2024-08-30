@@ -1,5 +1,32 @@
 # Rlox
 
+## 2024-08-30
+
+### type specific allocators
+
+So have a struct that owns all the allocations of a type. It seems like we
+should just follow the example of vec, but with a solution for free elements,
+like a free list.
+
+Note: we need a different approach for dynamically sized types--array in
+partcular--and a way to keep track of free elements.
+
+### after implementing
+
+I have the memory pool worked out, but I don't veel like using it yet... I feel
+like the data oreintation may reveal some interesting alternatives.
+
+- I think it should essentially be a vec, with the mechanism for generation
+  handles separated.
+- Is it really that great, to used the memory in the pool for a links list of
+  free slots it safes memory.
+
+### the linked list of open upvalues
+
+Is that really that performant? The amount of time it takes to insert an upvalue
+is linear just push one and sort, or even go through the whole array onse when
+clsing is also linear. Hmm...
+
 ## 2024-08-29
 
 ### serious issue with bytecode
@@ -21,6 +48,14 @@ need for a good dissambler.
 
 Reverted the data structure solved the recursive function. something still goes
 wrong with upvalues, and new problem have arisen with classes.
+
+Can a mistake ever be smart? At least the tests succeed again, after severla
+significant refactors.
+
+### type specific allocators
+
+So the idea was that for each type, there is a class that manages objects of
+that type.
 
 ## 2024-08-27
 
