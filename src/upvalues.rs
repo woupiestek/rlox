@@ -27,11 +27,11 @@ impl Upvalues {
     }
 
     pub fn get(&self, handle: UpvalueHandle) -> Value {
-        self.values[handle.0 as usize]
+        self.values[handle.index()]
     }
 
     pub fn set(&mut self, handle: UpvalueHandle, value: Value) {
-        self.values[handle.0 as usize] = value
+        self.values[handle.index()] = value
     }
 
     pub fn open_upvalue(&mut self, location: u16) -> UpvalueHandle {
@@ -55,7 +55,7 @@ impl Upvalues {
         });
         handle
     }
-    
+
     // alternative to messing with a linked list
     pub fn close(&mut self, location: u16, stack: &[Value]) {
         self.open.rotate(location);
@@ -80,7 +80,7 @@ impl Upvalues {
     }
 
     pub fn trace(&self, handle: UpvalueHandle, collector: &mut Collector) {
-        collector.trace(self.values[handle.0 as usize])
+        collector.trace(self.values[handle.index()])
     }
 
     pub fn trace_roots(&self, collector: &mut Collector) {
@@ -106,7 +106,6 @@ impl Upvalues {
         self.open.clear()
     }
 }
-
 
 // a heap would work given that always the highest locations are dropped
 // for now, a linked list mimic. Elements are moved, to keep it sorted

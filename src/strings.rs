@@ -1,8 +1,9 @@
 use std::{mem, u32};
 
 use crate::{
+    closures::ClosureHandle,
     common::STRINGS,
-    heap::{Collector, Handle, ObjectHandle},
+    heap::{Collector, Handle},
     object::Value,
 };
 
@@ -165,14 +166,14 @@ impl<V: Clone> Map<V> {
     }
 }
 
-impl Map<ObjectHandle> {
+impl Map<ClosureHandle> {
     pub fn trace(&self, collector: &mut Collector) {
         for i in 0..self.capacity() {
             // in case a string get resurrected
             if self.key_set.keys[i].is_valid() {
                 collector.strings.push(self.key_set.keys[i]);
                 if let Some(value) = self.values[i] {
-                    collector.objects.push(value)
+                    collector.closures.push(value)
                 }
             }
         }

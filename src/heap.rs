@@ -1,8 +1,9 @@
 use crate::{
     bitarray::BitArray,
+    closures::{ClosureHandle, Closures},
     common::OBJECTS,
     functions::Functions,
-    object::{BoundMethod, Class, Closure, Instance, Value},
+    object::{BoundMethod, Class, Instance, Value},
     strings::{KeySet, StringHandle, Strings},
     upvalues::{UpvalueHandle, Upvalues},
 };
@@ -11,7 +12,6 @@ use crate::{
 pub enum Kind {
     BoundMethod = 1, // different (better?) miri errors
     Class,
-    Closure,
     Free,
     Instance,
 }
@@ -20,6 +20,7 @@ pub struct Collector {
     pub objects: Vec<ObjectHandle>,
     pub strings: Vec<StringHandle>,
     pub upvalues: Vec<UpvalueHandle>,
+    pub closures: Vec<ClosureHandle>,
 }
 
 impl Collector {
@@ -28,6 +29,7 @@ impl Collector {
             objects: Vec::new(),
             strings: Vec::new(),
             upvalues: Vec::new(),
+            closures: Vec::new(),
         }
     }
 
@@ -35,6 +37,7 @@ impl Collector {
         match value {
             Value::Object(o) => self.objects.push(o),
             Value::String(s) => self.strings.push(s),
+            Value::Closure(c) => self.closures.push(c),
             // Value::Function(_) => todo!(),
             // Value::Native(_) => todo!(),
             _ => (),
@@ -48,16 +51,22 @@ where
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
-    fn trace(&self, collector:  &mut  Collector);
+    fn trace(&self, collector: &mut Collector);
     fn get(heap: &Heap, handle: ObjectHandle) -> *mut Self {
-        assert_eq!(Self::KIND, heap.kinds[handle.0 as usize]);
-        heap.pointers[handle.0 as usize] as *mut Self
+        assert_eq!(Self::KIND, heap.kinds[handle.index()]);
+        heap.pointers[handle.index()] as *mut Self
     }
 }
 
 // Handle64, Handle32, Handle16 etc. More options?
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Handle<const KIND: u8>(pub u32);
+
+impl<const KIND: u8> Handle<KIND> {
+    pub fn index(&self) -> usize {
+        self.0 as usize
+    }
+}
 
 impl<const KIND: u8> From<u32> for Handle<KIND> {
     fn from(value: u32) -> Self {
@@ -71,8 +80,9 @@ pub struct Heap {
     kinds: Vec<Kind>,
     pointers: Vec<*mut u8>, // why not store lengths?
     free: Vec<ObjectHandle>,
-    string_pool: Strings,
+    strings: Strings,
     pub upvalues: Upvalues,
+    pub closures: Closures,
     byte_count: usize,
     next_gc: usize,
 }
@@ -83,8 +93,9 @@ impl Heap {
             kinds: Vec::with_capacity(init_size),
             pointers: Vec::with_capacity(init_size),
             free: Vec::with_capacity(init_size),
-            string_pool: Strings::with_capacity(init_size),
+            strings: Strings::with_capacity(init_size),
             upvalues: Upvalues::new(),
+            closures: Closures::new(),
             byte_count: 0,
             next_gc: 1 << 20,
         }
@@ -93,8 +104,8 @@ impl Heap {
     pub fn put<T: Traceable>(&mut self, t: T) -> ObjectHandle {
         self.byte_count += t.byte_count();
         if let Some(handle) = self.free.pop() {
-            self.kinds[handle.0 as usize] = T::KIND;
-            self.pointers[handle.0 as usize] = Box::into_raw(Box::from(t)) as *mut u8;
+            self.kinds[handle.index()] = T::KIND;
+            self.pointers[handle.index()] = Box::into_raw(Box::from(t)) as *mut u8;
             handle
         } else {
             let index = self.pointers.len();
@@ -105,8 +116,8 @@ impl Heap {
     }
 
     fn get_star_mut<T: Traceable>(&self, handle: ObjectHandle) -> *mut T {
-        assert_eq!(T::KIND, self.kinds[handle.0 as usize]);
-        self.pointers[handle.0 as usize] as *mut T
+        assert_eq!(T::KIND, self.kinds[handle.index()]);
+        self.pointers[handle.index()] as *mut T
     }
 
     pub fn get_ref<T: Traceable>(&self, handle: ObjectHandle) -> &T {
@@ -119,7 +130,7 @@ impl Heap {
 
     pub fn try_ref<T: Traceable>(&self, value: Value) -> Option<&T> {
         if let Value::Object(handle) = value {
-            if T::KIND == self.kinds[handle.0 as usize] {
+            if T::KIND == self.kinds[handle.index()] {
                 unsafe { self.get_star_mut::<T>(handle).as_ref() }
             } else {
                 None
@@ -131,7 +142,7 @@ impl Heap {
 
     pub fn try_mut<T: Traceable>(&self, value: Value) -> Option<&mut T> {
         if let Value::Object(handle) = value {
-            if T::KIND == self.kinds[handle.0 as usize] {
+            if T::KIND == self.kinds[handle.index()] {
                 unsafe { self.get_star_mut::<T>(handle).as_mut() }
             } else {
                 None
@@ -142,7 +153,7 @@ impl Heap {
     }
 
     pub fn get_str(&self, handle: StringHandle) -> &str {
-        self.string_pool.get(handle).unwrap()
+        self.strings.get(handle).unwrap()
     }
 
     pub fn retain(&mut self, mut collector: Collector) {
@@ -153,10 +164,11 @@ impl Heap {
             println!("-- gc begin");
             println!("byte count: {}", before);
         }
-        let (key_set, marked_objects, marked_upvalues ) = self.mark(&mut collector);
+        let (key_set, marked_objects, marked_upvalues, marked_closures) = self.mark(&mut collector);
         self.sweep(marked_objects);
         self.upvalues.sweep(marked_upvalues);
-        self.string_pool.sweep(key_set);
+        self.strings.sweep(key_set);
+        self.closures.sweep(marked_closures);
 
         self.next_gc *= 2;
         #[cfg(feature = "log_gc")]
@@ -173,13 +185,11 @@ impl Heap {
         }
     }
 
-    fn mark(
-        &self,
-        collector: &mut Collector
-    ) -> (KeySet,BitArray, BitArray) {
+    fn mark(&self, collector: &mut Collector) -> (KeySet, BitArray, BitArray, BitArray) {
         let mut marked_objects = BitArray::new(self.pointers.len());
         let mut marked_upvalues = BitArray::new(self.upvalues.count());
-        let mut key_set: KeySet = KeySet::with_capacity(self.string_pool.capacity());
+        let mut marked_closures = BitArray::new(self.closures.count());
+        let mut key_set: KeySet = KeySet::with_capacity(self.strings.capacity());
 
         #[cfg(feature = "log_gc")]
         {
@@ -191,7 +201,7 @@ impl Heap {
         loop {
             let mut is_empty = true;
             if let Some(string) = collector.strings.pop() {
-                is_empty=false;
+                is_empty = false;
                 key_set.put(string)
             }
             if let Some(handle) = collector.objects.pop() {
@@ -204,7 +214,6 @@ impl Heap {
                 match self.kinds[index] {
                     Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(collector),
                     Kind::Class => self.get_ref::<Class>(handle).trace(collector),
-                    Kind::Closure => self.get_ref::<Closure>(handle).trace(collector),
                     Kind::Free => {}
                     Kind::Instance => self.get_ref::<Instance>(handle).trace(collector),
                 }
@@ -216,13 +225,22 @@ impl Heap {
                     self.upvalues.trace(handle, collector);
                 }
             }
-            if is_empty { break; }
+            if let Some(handle) = collector.closures.pop() {
+                is_empty = false;
+                if !marked_closures.get(handle.0 as usize) {
+                    marked_closures.add(handle.0 as usize);
+                    self.closures.trace(handle, collector)
+                }
+            }
+            if is_empty {
+                break;
+            }
         }
         #[cfg(feature = "log_gc")]
         {
             println!("Done with mark & trace");
         }
-        (key_set,marked_objects,marked_upvalues)
+        (key_set, marked_objects, marked_upvalues, marked_closures)
     }
 
     fn free(&mut self, i: usize) {
@@ -234,11 +252,6 @@ impl Heap {
             },
             Kind::Class => unsafe {
                 let ptr = self.pointers[i] as *mut Class;
-                self.byte_count -= &(*ptr).byte_count();
-                drop(Box::from_raw(ptr));
-            },
-            Kind::Closure => unsafe {
-                let ptr = self.pointers[i] as *mut Closure;
                 self.byte_count -= &(*ptr).byte_count();
                 drop(Box::from_raw(ptr));
             },
@@ -275,39 +288,44 @@ impl Heap {
 
     pub fn intern_copy(&mut self, name: &str) -> StringHandle {
         self.byte_count += name.len();
-        self.string_pool.put(name)
+        self.strings.put(name)
     }
 
     pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> Option<StringHandle> {
         // todo: count added bytes somehow
-        self.string_pool.concat(a, b)
+        self.strings.concat(a, b)
     }
 
     pub fn needs_gc(&self) -> bool {
-        self.byte_count + self.upvalues.byte_count() + self.string_pool.byte_count() > self.next_gc
+        self.byte_count
+            + self.upvalues.byte_count()
+            + self.strings.byte_count()
+            + self.closures.byte_count()
+            > self.next_gc
     }
 
     pub fn kind(&self, handle: ObjectHandle) -> Kind {
-        self.kinds[handle.0 as usize]
+        self.kinds[handle.index()]
     }
 
     pub fn to_string(&self, handle: ObjectHandle, functions: &Functions) -> String {
         match self.kind(handle) {
-            Kind::BoundMethod => {
-                self.to_string(self.get_ref::<BoundMethod>(handle).method, functions)
-            }
+            Kind::BoundMethod => functions.to_string(
+                self.closures
+                    .function_handle(self.get_ref::<BoundMethod>(handle).method),
+                self,
+            ),
             Kind::Class => format!(
                 "<class {}>",
-                self.string_pool
+                self.strings
                     .get(self.get_ref::<Class>(handle).name)
                     .unwrap_or("???")
             ),
-            Kind::Closure => functions.to_string(self.get_ref::<Closure>(handle).function, self),
             Kind::Free => format!("<free>"),
             Kind::Instance => {
                 let instance = self.get_ref::<Instance>(handle);
                 let class = self.get_ref::<Class>(instance.class);
-                format!("<{} instance>", self.string_pool.get(class.name).unwrap())
+                format!("<{} instance>", self.strings.get(class.name).unwrap())
             }
         }
     }

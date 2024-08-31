@@ -1,10 +1,11 @@
 // run time data structures
 
 use crate::{
+    closures::ClosureHandle,
     functions::{FunctionHandle, Functions},
     heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
     natives::NativeHandle,
-    strings::{Map, StringHandle}, upvalues::UpvalueHandle,
+    strings::{Map, StringHandle},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -18,6 +19,7 @@ pub enum Value {
     Object(ObjectHandle),
     String(StringHandle),
     StackRef(u16), // for open upvalues
+    Closure(ClosureHandle),
 }
 
 impl From<StringHandle> for Value {
@@ -75,17 +77,18 @@ impl Value {
         }
     }
 
-    pub fn to_string(&self, heap: &Heap, byte_code: &Functions) -> String {
+    pub fn to_string(&self, heap: &Heap, functions: &Functions) -> String {
         match self {
             Value::False => format!("false"),
             Value::Nil => format!("nil"),
             Value::Number(a) => format!("{}", a),
-            Value::Object(a) => heap.to_string(*a, byte_code),
+            Value::Object(a) => heap.to_string(*a, functions),
             Value::True => format!("true"),
             Value::Native(_) => format!("<native function>"),
             Value::String(a) => heap.get_str(*a).to_owned(),
-            Value::Function(a) => byte_code.to_string(*a, heap),
-            Value::StackRef(i) => format!("&{}",i),
+            Value::Function(a) => functions.to_string(*a, heap),
+            Value::StackRef(i) => format!("&{}", i),
+            Value::Closure(a) => functions.to_string(heap.closures.function_handle(*a), heap),
         }
     }
 }
@@ -93,7 +96,7 @@ impl Value {
 pub struct Class {
     pub name: StringHandle,
     // heap allocated
-    pub methods: Map<ObjectHandle>,
+    pub methods: Map<ClosureHandle>,
 }
 
 impl Class {
@@ -117,37 +120,6 @@ impl Traceable for Class {
     fn trace(&self, collector: &mut Collector) {
         collector.strings.push(self.name);
         self.methods.trace(collector);
-    }
-}
-
-// I guess the constructor can own the upvalues,
-// though the class basically already determines how many are needed.
-pub struct Closure {
-    pub function: FunctionHandle,
-    // heap allocated
-    pub upvalues: Vec<UpvalueHandle>,
-}
-
-impl Closure {
-    pub fn new(function: FunctionHandle) -> Self {
-        Self {
-            function,
-            upvalues: Vec::new(),
-        }
-    }
-}
-
-impl Traceable for Closure {
-    const KIND: Kind = Kind::Closure;
-
-    fn byte_count(&self) -> usize {
-        16 + self.upvalues.capacity()
-    }
-
-    fn trace(&self, collector: &mut Collector) {
-        for &upvalue in self.upvalues.iter() {
-            collector.upvalues.push(upvalue);
-        }
     }
 }
 
@@ -181,11 +153,11 @@ impl Instance {
 
 pub struct BoundMethod {
     pub receiver: ObjectHandle,
-    pub method: ObjectHandle,
+    pub method: ClosureHandle,
 }
 
 impl BoundMethod {
-    pub fn new(receiver: ObjectHandle, method: ObjectHandle) -> Self {
+    pub fn new(receiver: ObjectHandle, method: ClosureHandle) -> Self {
         Self { receiver, method }
     }
 }
@@ -199,6 +171,6 @@ impl Traceable for BoundMethod {
 
     fn trace(&self, collector: &mut Collector) {
         collector.objects.push(ObjectHandle::from(self.receiver));
-        collector.objects.push(ObjectHandle::from(self.method));
+        collector.closures.push(self.method);
     }
 }

@@ -1,4 +1,10 @@
-use crate::{common::FUNCTIONS, heap::{Collector, Handle, Heap}, object::Value, op::Op, strings::StringHandle};
+use crate::{
+    common::FUNCTIONS,
+    heap::{Collector, Handle, Heap},
+    object::Value,
+    op::Op,
+    strings::StringHandle,
+};
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -164,31 +170,31 @@ impl Functions {
     }
 
     pub fn chunk_ref(&self, fh: FunctionHandle) -> &Chunk {
-        &self.chunks[fh.0 as usize]
+        &self.chunks[fh.index()]
     }
 
     pub fn chunk_mut(&mut self, fh: FunctionHandle) -> &mut Chunk {
-        &mut self.chunks[fh.0 as usize]
+        &mut self.chunks[fh.index()]
     }
 
     pub fn incr_arity(&mut self, fh: FunctionHandle) -> Result<(), String> {
-        if self.arities[fh.0 as usize] == u8::MAX {
+        if self.arities[fh.index()] == u8::MAX {
             return err!("Can't have more than 255 parameters.");
         }
-        self.arities[fh.0 as usize] += 1;
+        self.arities[fh.index()] += 1;
         Ok(())
     }
 
     pub fn arity(&self, fh: FunctionHandle) -> u8 {
-        self.arities[fh.0 as usize]
+        self.arities[fh.index()]
     }
 
     pub fn set_upvalue_count(&mut self, fh: FunctionHandle, count: u8) {
-        self.upvalue_counts[fh.0 as usize] = count
+        self.upvalue_counts[fh.index()] = count
     }
 
-    pub fn upvalue_count(&self, fh: FunctionHandle) -> u8 {
-        self.upvalue_counts[fh.0 as usize]
+    pub fn upvalue_count(&self, fh: FunctionHandle) -> usize {
+        self.upvalue_counts[fh.index()] as usize
     }
 
     #[cfg(feature = "trace")]
@@ -213,10 +219,7 @@ impl Functions {
 
     // we are moving toward not using the garbage collector for static data
     // here is why: this method does the same thing on every cycle.
-    pub fn trace_roots(
-        &self,
-        collector: &mut Collector,
-    ) {
+    pub fn trace_roots(&self, collector: &mut Collector) {
         for name in &self.names {
             if name.is_valid() {
                 collector.strings.push(*name);

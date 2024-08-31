@@ -2,12 +2,13 @@ use std::time;
 
 use crate::{
     call_stack::CallStack,
+    closures::ClosureHandle,
     common::U8_COUNT,
     compiler::compile,
     functions::{FunctionHandle, Functions},
     heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
     natives::Natives,
-    object::{BoundMethod, Class, Closure, Instance, Value},
+    object::{BoundMethod, Class, Instance, Value},
     op::Op,
     strings::{Map, StringHandle},
     upvalues::UpvalueHandle,
@@ -102,7 +103,7 @@ impl VM {
         {
             println!("collect upvalues");
         }
-            self.heap.upvalues.trace_roots(&mut collector);
+        self.heap.upvalues.trace_roots(&mut collector);
         #[cfg(feature = "log_gc")]
         {
             println!("collect globals");
@@ -145,8 +146,8 @@ impl VM {
         self.values[self.stack_top - 1 - distance]
     }
 
-    fn call(&mut self, closure: ObjectHandle, arity: u8) -> Result<(), String> {
-        let handle = self.heap.get_ref::<Closure>(closure).function;
+    fn call(&mut self, closure: ClosureHandle, arity: u8) -> Result<(), String> {
+        let handle = self.heap.closures.function_handle(closure);
         let expected = self.functions.arity(handle);
         if arity != expected {
             return err!("Expected {} arguments but got {}.", expected, arity);
@@ -156,8 +157,8 @@ impl VM {
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
-        if let Value::Object(handle) = callee {
-            match self.heap.kind(handle) {
+        match callee {
+            Value::Object(handle) => match self.heap.kind(handle) {
                 Kind::BoundMethod => {
                     let bm = self.heap.get_ref::<BoundMethod>(handle);
                     self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
@@ -175,22 +176,23 @@ impl VM {
                         return Ok(());
                     }
                 }
-                Kind::Closure => {
-                    return self.call(handle, arity);
-                }
-                _ => (),
+                _ => err!(
+                    "Can only call functions and classes, not '{}'",
+                    callee.to_string(&self.heap, &self.functions)
+                ),
+            },
+            Value::Native(handle) => {
+                let result = self.natives.call(handle, self.tail(arity as usize)?)?;
+                self.stack_top -= arity as usize + 1;
+                self.push(result);
+                return Ok(());
             }
+            Value::Closure(ch) => return self.call(ch, arity),
+            _ => err!(
+                "Can only call functions and classes, not '{}'",
+                callee.to_string(&self.heap, &self.functions)
+            ),
         }
-        if let Value::Native(handle) = callee {
-            let result = self.natives.call(handle, self.tail(arity as usize)?)?;
-            self.stack_top -= arity as usize + 1;
-            self.push(result);
-            return Ok(());
-        }
-        err!(
-            "Can only call functions and classes, not '{}'",
-            callee.to_string(&self.heap, &self.functions)
-        )
     }
 
     fn invoke_from_class(
@@ -231,7 +233,8 @@ impl VM {
                 } else {
                     err!(
                         "Cannot bind method {} to {}",
-                        self.heap.to_string(method, &self.functions),
+                        self.functions
+                            .to_string(self.heap.closures.function_handle(method), &self.heap),
                         self.heap.get_str(name)
                     )
                 }
@@ -240,7 +243,7 @@ impl VM {
     }
 
     fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
-        if let Ok(&[Value::Object(class), Value::Object(method)]) = self.tail(2) {
+        if let Ok(&[Value::Object(class), Value::Closure(method)]) = self.tail(2) {
             let class: &mut Class = self.heap.get_mut(class);
             let before_count = class.byte_count();
             class.methods.set(name, method);
@@ -332,24 +335,21 @@ impl VM {
                         .read_constant(&self.functions, &self.heap)
                         .as_function()?;
                     // garbage collection risks?
-                    let closure = self.push_traceable(Closure::new(function));
-                    let before_count = self.heap.get_ref::<Closure>(closure).byte_count();
-                    let capacity = self.functions.upvalue_count(function) as usize;
-                    let mut upvalues = Vec::with_capacity(capacity);
-                    for _ in 0..capacity {
+                    self.collect_garbage_if_needed();
+                    let closure = self.heap.closures.new_closure(function, &self.functions);
+                    self.push(Value::Closure(closure));
+                    let capacity = self.functions.upvalue_count(function);
+                    for i in 0..capacity {
                         let is_local = self.call_stack.read_byte(&self.functions, &self.heap);
                         let index = self.call_stack.read_byte(&self.functions, &self.heap) as usize;
-                        upvalues.push(if is_local > 0 {
+                        let uh = if is_local > 0 {
                             let location = self.call_stack.slot() + index;
                             self.capture_upvalue(location)
                         } else {
                             self.call_stack.upvalue(index, &self.heap)?
-                        })
+                        };
+                        self.heap.closures.set_upvalue(closure, i, uh);
                     }
-                    self.heap.get_mut::<Closure>(closure).upvalues = upvalues;
-                    self.heap.increase_byte_count(
-                        self.heap.get_ref::<Closure>(closure).byte_count() - before_count,
-                    );
                 }
                 Op::Constant => {
                     let value = self.call_stack.read_constant(&self.functions, &self.heap);
@@ -546,8 +546,11 @@ impl VM {
             use crate::debug::Disassembler;
             Disassembler::disassemble(&self.functions, &self.heap);
         }
-        let closure = self.new_obj(Closure::new(FunctionHandle::MAIN));
-        self.push(Value::from(closure));
+        let closure = self
+            .heap
+            .closures
+            .new_closure(FunctionHandle::MAIN, &self.functions);
+        self.push(Value::Closure(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);

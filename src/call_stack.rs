@@ -1,8 +1,10 @@
 use crate::{
+    closures::ClosureHandle,
     functions::{Chunk, Functions},
-    heap::{Collector, Heap, ObjectHandle},
-    object::{Closure, Value},
-    strings::StringHandle, upvalues::UpvalueHandle,
+    heap::{Collector, Heap},
+    object::Value,
+    strings::StringHandle,
+    upvalues::UpvalueHandle,
 };
 
 // the top frame should be fast, cannot say it looks that way
@@ -14,7 +16,7 @@ pub struct CallStack<const MAX_SIZE: usize> {
     // offsets into operand stack
     slots: [u16; MAX_SIZE],
     // called functions
-    closures: [Option<ObjectHandle>; MAX_SIZE],
+    closures: [Option<ClosureHandle>; MAX_SIZE],
 }
 
 impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
@@ -27,7 +29,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn push(&mut self, slot: usize, closure: ObjectHandle) -> Result<(), String> {
+    pub fn push(&mut self, slot: usize, closure: ClosureHandle) -> Result<(), String> {
         if self.top == 0 {
             return err!("Stack overflow.");
         }
@@ -40,8 +42,8 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
 
     fn get_chunk<'b>(&self, functions: &'b Functions, heap: &Heap) -> &'b Chunk {
         let fi = heap
-            .get_ref::<Closure>(self.closures[self.top].unwrap())
-            .function;
+            .closures
+            .function_handle(self.closures[self.top].unwrap());
         functions.chunk_ref(fi)
     }
 
@@ -72,15 +74,16 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
 
     pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<UpvalueHandle, String> {
         match self.closures[self.top] {
-            Some(closure) => {
-                let closure = heap.get_ref::<Closure>(closure);
-                Ok(closure.upvalues[index])
-            }
+            Some(closure) => Ok(heap.closures.get_upvalue(closure, index)),
             None => err!("No closure in call frame"), // todo
         }
     }
 
-    pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<UpvalueHandle, String> {
+    pub fn read_upvalue(
+        &mut self,
+        functions: &Functions,
+        heap: &Heap,
+    ) -> Result<UpvalueHandle, String> {
         let index = self.read_byte(functions, heap) as usize;
         self.upvalue(index, heap)
     }
@@ -114,9 +117,9 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     }
 
     pub fn trace(&self, collector: &mut Collector) {
-        for option in &self.closures {
+        for &option in &self.closures {
             if let Some(closure) = option {
-                collector.objects.push(ObjectHandle::from(*closure))
+                collector.closures.push(closure)
             };
         }
     }
@@ -124,9 +127,10 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     pub fn print_stack_trace(&self, functions: &Functions, heap: &Heap) {
         for i in self.top..STACK_SIZE {
             if let Some(closure) = self.closures[i as usize] {
+                let fh = heap.closures.function_handle(closure);
                 eprintln!(
                     "  at {} line {}",
-                    heap.to_string(closure, functions),
+                    functions.to_string(fh, heap),
                     self.get_chunk(functions, heap)
                         .get_line(self.ips[i as usize])
                 )

@@ -17,7 +17,7 @@ impl Natives {
     }
 
     pub fn call(&self, handle: NativeHandle, args: &[Value]) -> Result<Value, String> {
-        self.0[handle.0 as usize](args)
+        self.0[handle.index()](args)
     }
 }
 
