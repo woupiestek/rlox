@@ -9,4 +9,4 @@ pub const STRINGS:u8 = 0;
 pub const NATIVES:u8 = 1;
 pub const FUNCTIONS:u8 = 2;
 pub const OBJECTS:u8 = 3;
-// pub const UPVALUES:u8 = 4;
+pub const UPVALUES:u8 = 4;

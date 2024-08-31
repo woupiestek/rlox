@@ -5,11 +5,12 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     functions::{FunctionHandle, Functions},
-    heap::{ObjectHandle, Heap, Kind, Traceable},
+    heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
     natives::Natives,
-    object::{BoundMethod, Class, Closure, Instance, Upvalue, Value},
+    object::{BoundMethod, Class, Closure, Instance, Value},
     op::Op,
     strings::{Map, StringHandle},
+    upvalues::UpvalueHandle,
 };
 
 const MAX_FRAMES: usize = 64; // > 0, < 2^16 - 1
@@ -38,7 +39,6 @@ pub struct VM {
     values: [Value; STACK_SIZE],
     stack_top: usize,
     call_stack: CallStack<MAX_FRAMES>,
-    open_upvalues: Option<ObjectHandle>,
     globals: Map<Value>,
     init_string: StringHandle,
     heap: Heap,
@@ -53,7 +53,6 @@ impl VM {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
             call_stack: CallStack::new(),
-            open_upvalues: None,
             globals: Map::new(),
             init_string,
             heap,
@@ -63,70 +62,36 @@ impl VM {
         s.define_native("clock", clock_native);
         s
     }
-    pub fn capture_upvalue(&mut self, location: usize) -> ObjectHandle {
-        let mut previous = None;
-        let mut current = self.open_upvalues;
-        while let Some(link) = current {
-            if let &Upvalue::Open(index, next) = self.heap.get_ref::<Upvalue>(link) {
-                if location == index {
-                    return link;
-                }
-                if location < index {
-                    break;
-                }
-                previous = current;
-                current = next
-            } else {
-                break;
-            }
-        }
-        let created = self.new_obj(Upvalue::Open(location, current));
-        match previous {
-            None => {
-                self.open_upvalues = Some(created);
-            }
-            Some(obj) => {
-                if let &Upvalue::Open(x, _) = self.heap.get_ref::<Upvalue>(obj) {
-                    *self.heap.get_mut::<Upvalue>(obj) = Upvalue::Open(x, Some(created))
-                }
-            }
-        }
-        created
+
+    pub fn capture_upvalue(&mut self, location: usize) -> UpvalueHandle {
+        self.collect_garbage_if_needed();
+        self.heap.upvalues.open_upvalue(location as u16)
     }
 
     fn close_upvalues(&mut self, location: usize) {
-        while let Some(link) = self.open_upvalues {
-            if let &Upvalue::Open(l, next) = *&self.heap.get_ref::<Upvalue>(link) {
-                if l < location {
-                    return;
-                }
-                *self.heap.get_mut::<Upvalue>(link) = Upvalue::Closed(self.values[l]);
-                self.open_upvalues = next;
-            } else {
-                self.open_upvalues = None;
-            }
-        }
+        self.heap.upvalues.close(location as u16, &self.values);
     }
 
     fn new_obj<T: Traceable>(&mut self, t: T) -> ObjectHandle {
-        if self.heap.needs_gc() {
-            let (roots, keyset) = self.roots();
-            self.heap.retain(roots, keyset);
-        }
+        self.collect_garbage_if_needed();
         self.heap.put(t)
     }
 
-    fn roots(&mut self) -> (Vec<ObjectHandle>, Vec<StringHandle>) {
-        let mut collector = Vec::new();
-        let mut strings = Vec::new();
+    fn collect_garbage_if_needed(&mut self) {
+        if self.heap.needs_gc() {
+            let collector = self.roots();
+            self.heap.retain(collector);
+        }
+    }
+
+    fn roots(&mut self) -> Collector {
+        let mut collector = Collector::new();
         #[cfg(feature = "log_gc")]
         {
             println!("collect stack objects");
         }
         for i in 0..self.stack_top {
-            if let Value::Object(handle) = self.values[i] {
-                collector.push(handle);
-            }
+            collector.trace(self.values[i]);
         }
         #[cfg(feature = "log_gc")]
         {
@@ -137,22 +102,20 @@ impl VM {
         {
             println!("collect upvalues");
         }
-        if let Some(upvalue) = self.open_upvalues {
-            collector.push(ObjectHandle::from(upvalue));
-        }
+            self.heap.upvalues.trace_roots(&mut collector);
         #[cfg(feature = "log_gc")]
         {
             println!("collect globals");
         }
-        self.globals.trace(&mut collector, &mut strings);
+        self.globals.trace(&mut collector);
         // no compiler roots
         #[cfg(feature = "log_gc")]
         {
             println!("collect init string");
         }
-        self.functions.trace(&mut collector, &mut strings);
-        strings.push(self.init_string);
-        (collector, strings)
+        self.functions.trace_roots(&mut collector);
+        collector.strings.push(self.init_string);
+        collector
     }
 
     fn define_native(
@@ -437,13 +400,15 @@ impl VM {
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
-                    let value = match self.heap.get_ref::<Upvalue>(
-                        self.call_stack.read_upvalue(&self.functions, &self.heap)?,
-                    ) {
-                        &Upvalue::Open(index, _) => self.values[index],
-                        &Upvalue::Closed(value) => value,
-                    };
-                    self.push(value);
+                    let value = self
+                        .heap
+                        .upvalues
+                        .get(self.call_stack.read_upvalue(&self.functions, &self.heap)?);
+                    if let Value::StackRef(location) = value {
+                        self.push(self.values[location as usize]);
+                    } else {
+                        self.push(value);
+                    }
                 }
                 Op::Greater => {
                     binary_op!(self, a, b, a > b)
@@ -542,11 +507,11 @@ impl VM {
                 }
                 Op::SetUpvalue => {
                     let upvalue = self.call_stack.read_upvalue(&self.functions, &self.heap)?;
-                    match self.heap.get_ref(upvalue) {
-                        &Upvalue::Closed(_) => {
-                            *self.heap.get_mut(upvalue) = Upvalue::Closed(self.peek(0))
-                        }
-                        &Upvalue::Open(index, _) => self.values[index] = self.peek(0),
+                    let value = self.heap.upvalues.get(upvalue);
+                    if let Value::StackRef(location) = value {
+                        self.values[location as usize] = self.peek(0)
+                    } else {
+                        self.heap.upvalues.set(upvalue, self.peek(0))
                     }
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
@@ -571,7 +536,7 @@ impl VM {
 
     fn reset_stack(&mut self) {
         self.stack_top = 0;
-        self.open_upvalues = None;
+        self.heap.upvalues.reset();
     }
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {

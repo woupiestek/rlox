@@ -1,8 +1,8 @@
 use crate::{
     functions::{Chunk, Functions},
-    heap::{ObjectHandle, Heap},
+    heap::{Collector, Heap, ObjectHandle},
     object::{Closure, Value},
-    strings::StringHandle,
+    strings::StringHandle, upvalues::UpvalueHandle,
 };
 
 // the top frame should be fast, cannot say it looks that way
@@ -70,7 +70,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<ObjectHandle, String> {
+    pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<UpvalueHandle, String> {
         match self.closures[self.top] {
             Some(closure) => {
                 let closure = heap.get_ref::<Closure>(closure);
@@ -80,7 +80,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<ObjectHandle, String> {
+    pub fn read_upvalue(&mut self, functions: &Functions, heap: &Heap) -> Result<UpvalueHandle, String> {
         let index = self.read_byte(functions, heap) as usize;
         self.upvalue(index, heap)
     }
@@ -113,10 +113,10 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         self.top >= STACK_SIZE
     }
 
-    pub fn trace(&self, collector: &mut Vec<ObjectHandle>) {
+    pub fn trace(&self, collector: &mut Collector) {
         for option in &self.closures {
             if let Some(closure) = option {
-                collector.push(ObjectHandle::from(*closure))
+                collector.objects.push(ObjectHandle::from(*closure))
             };
         }
     }

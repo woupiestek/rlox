@@ -1,4 +1,4 @@
-use crate::{common::FUNCTIONS, heap::{Handle, Heap}, object::Value, op::Op, strings::StringHandle};
+use crate::{common::FUNCTIONS, heap::{Collector, Handle, Heap}, object::Value, op::Op, strings::StringHandle};
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -213,23 +213,22 @@ impl Functions {
 
     // we are moving toward not using the garbage collector for static data
     // here is why: this method does the same thing on every cycle.
-    pub fn trace(
+    pub fn trace_roots(
         &self,
-        collector: &mut Vec<crate::heap::ObjectHandle>,
-        strings: &mut Vec<crate::strings::StringHandle>,
+        collector: &mut Collector,
     ) {
         for name in &self.names {
             if name.is_valid() {
-                strings.push(*name);
+                collector.strings.push(*name);
             }
         }
         for chunk in &self.chunks {
             for value in &chunk.constants {
                 if let Value::Object(h) = value {
-                    collector.push(*h)
+                    collector.objects.push(*h)
                 }
                 if let Value::String(h) = value {
-                    strings.push(*h)
+                    collector.strings.push(*h)
                 }
             }
         }

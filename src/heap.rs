@@ -1,7 +1,10 @@
-
-
 use crate::{
-    bitarray::BitArray, common::OBJECTS, functions::Functions, object::{BoundMethod, Class, Closure, Instance, Upvalue, Value}, strings::{KeySet, StringHandle, Strings}
+    bitarray::BitArray,
+    common::OBJECTS,
+    functions::Functions,
+    object::{BoundMethod, Class, Closure, Instance, Value},
+    strings::{KeySet, StringHandle, Strings},
+    upvalues::{UpvalueHandle, Upvalues},
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -11,7 +14,32 @@ pub enum Kind {
     Closure,
     Free,
     Instance,
-    Upvalue,
+}
+
+pub struct Collector {
+    pub objects: Vec<ObjectHandle>,
+    pub strings: Vec<StringHandle>,
+    pub upvalues: Vec<UpvalueHandle>,
+}
+
+impl Collector {
+    pub fn new() -> Self {
+        Self {
+            objects: Vec::new(),
+            strings: Vec::new(),
+            upvalues: Vec::new(),
+        }
+    }
+
+    pub fn trace(&mut self, value: Value) {
+        match value {
+            Value::Object(o) => self.objects.push(o),
+            Value::String(s) => self.strings.push(s),
+            // Value::Function(_) => todo!(),
+            // Value::Native(_) => todo!(),
+            _ => (),
+        }
+    }
 }
 
 pub trait Traceable
@@ -20,17 +48,18 @@ where
 {
     const KIND: Kind;
     fn byte_count(&self) -> usize;
-    fn trace(&self, handles: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>);
+    fn trace(&self, collector:  &mut  Collector);
     fn get(heap: &Heap, handle: ObjectHandle) -> *mut Self {
         assert_eq!(Self::KIND, heap.kinds[handle.0 as usize]);
         heap.pointers[handle.0 as usize] as *mut Self
     }
 }
 
+// Handle64, Handle32, Handle16 etc. More options?
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Handle<const KIND: u8>(pub u32);
 
-impl <const KIND: u8> From<u32> for Handle<KIND> {
+impl<const KIND: u8> From<u32> for Handle<KIND> {
     fn from(value: u32) -> Self {
         Self(value)
     }
@@ -43,6 +72,7 @@ pub struct Heap {
     pointers: Vec<*mut u8>, // why not store lengths?
     free: Vec<ObjectHandle>,
     string_pool: Strings,
+    pub upvalues: Upvalues,
     byte_count: usize,
     next_gc: usize,
 }
@@ -53,9 +83,10 @@ impl Heap {
             kinds: Vec::with_capacity(init_size),
             pointers: Vec::with_capacity(init_size),
             free: Vec::with_capacity(init_size),
+            string_pool: Strings::with_capacity(init_size),
+            upvalues: Upvalues::new(),
             byte_count: 0,
             next_gc: 1 << 20,
-            string_pool: Strings::with_capacity(init_size),
         }
     }
 
@@ -114,7 +145,7 @@ impl Heap {
         self.string_pool.get(handle).unwrap()
     }
 
-    pub fn retain(&mut self, mut roots: Vec<ObjectHandle>, mut strings: Vec<StringHandle>) {
+    pub fn retain(&mut self, mut collector: Collector) {
         #[cfg(feature = "log_gc")]
         let before = self.byte_count;
         #[cfg(feature = "log_gc")]
@@ -122,8 +153,9 @@ impl Heap {
             println!("-- gc begin");
             println!("byte count: {}", before);
         }
-        let (marked, key_set) = self.mark(&mut roots, &mut strings);
-        self.sweep(marked);
+        let (key_set, marked_objects, marked_upvalues ) = self.mark(&mut collector);
+        self.sweep(marked_objects);
+        self.upvalues.sweep(marked_upvalues);
         self.string_pool.sweep(key_set);
 
         self.next_gc *= 2;
@@ -141,8 +173,12 @@ impl Heap {
         }
     }
 
-    fn mark(&self, roots: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) -> (BitArray, KeySet) {
-        let mut marked = BitArray::new(self.pointers.len());
+    fn mark(
+        &self,
+        collector: &mut Collector
+    ) -> (KeySet,BitArray, BitArray) {
+        let mut marked_objects = BitArray::new(self.pointers.len());
+        let mut marked_upvalues = BitArray::new(self.upvalues.count());
         let mut key_set: KeySet = KeySet::with_capacity(self.string_pool.capacity());
 
         #[cfg(feature = "log_gc")]
@@ -152,33 +188,41 @@ impl Heap {
                 roots.len()
             );
         }
-        while let Some(string) = strings.pop() {
-            key_set.put(string)
-        }
-        while let Some(handle) = roots.pop() {
-            let index = handle.0 as usize;
-            if marked.get(index) {
-                continue;
-            }
-            marked.add(index);
-            match self.kinds[index] {
-                Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(roots, strings),
-                Kind::Class => self.get_ref::<Class>(handle).trace(roots, strings),
-                Kind::Closure => self.get_ref::<Closure>(handle).trace(roots, strings),
-                Kind::Free => {}
-                Kind::Instance => self.get_ref::<Instance>(handle).trace(roots, strings),
-                Kind::Upvalue => self.get_ref::<Upvalue>(handle).trace(roots, strings),
-            }
-            while let Some(string) = strings.pop() {
+        loop {
+            let mut is_empty = true;
+            if let Some(string) = collector.strings.pop() {
+                is_empty=false;
                 key_set.put(string)
             }
+            if let Some(handle) = collector.objects.pop() {
+                is_empty = false;
+                let index = handle.0 as usize;
+                if marked_objects.get(index) {
+                    continue;
+                }
+                marked_objects.add(index);
+                match self.kinds[index] {
+                    Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(collector),
+                    Kind::Class => self.get_ref::<Class>(handle).trace(collector),
+                    Kind::Closure => self.get_ref::<Closure>(handle).trace(collector),
+                    Kind::Free => {}
+                    Kind::Instance => self.get_ref::<Instance>(handle).trace(collector),
+                }
+            }
+            if let Some(handle) = collector.upvalues.pop() {
+                is_empty = false;
+                if !marked_upvalues.get(handle.0 as usize) {
+                    marked_upvalues.add(handle.0 as usize);
+                    self.upvalues.trace(handle, collector);
+                }
+            }
+            if is_empty { break; }
         }
-
         #[cfg(feature = "log_gc")]
         {
             println!("Done with mark & trace");
         }
-        (marked, key_set)
+        (key_set,marked_objects,marked_upvalues)
     }
 
     fn free(&mut self, i: usize) {
@@ -201,11 +245,6 @@ impl Heap {
             Kind::Free => {}
             Kind::Instance => unsafe {
                 let ptr = self.pointers[i] as *mut Instance;
-                self.byte_count -= &(*ptr).byte_count();
-                drop(Box::from_raw(ptr));
-            },
-            Kind::Upvalue => unsafe {
-                let ptr = self.pointers[i] as *mut Upvalue;
                 self.byte_count -= &(*ptr).byte_count();
                 drop(Box::from_raw(ptr));
             },
@@ -245,7 +284,7 @@ impl Heap {
     }
 
     pub fn needs_gc(&self) -> bool {
-        self.byte_count > self.next_gc
+        self.byte_count + self.upvalues.byte_count() + self.string_pool.byte_count() > self.next_gc
     }
 
     pub fn kind(&self, handle: ObjectHandle) -> Kind {
@@ -270,7 +309,6 @@ impl Heap {
                 let class = self.get_ref::<Class>(instance.class);
                 format!("<{} instance>", self.string_pool.get(class.name).unwrap())
             }
-            Kind::Upvalue => format!("<upvalue>"),
         }
     }
 }

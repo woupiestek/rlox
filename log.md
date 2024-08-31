@@ -1,5 +1,59 @@
 # Rlox
 
+## 2024-08-31
+
+### new garbage collections
+
+For collectibles:
+
+1. have a list of used handles
+2. have a bitarray of marked handles
+3. have methods for tracing and sweeping
+4. loop through the pools: trace and mark their elements,
+5. loop through the pools again, to sweep them.
+
+To centralize, put all the pools on the heap.
+
+Every time we trace a pool, new handles if many types may be found.
+
+Two big changes: data orient upvalues and refactor tracing completed without
+break any test.
+
+### sorting open upvalues
+
+The reason a linked list was used before, was to keep upvalues stored by stack
+location. When closing upvalue, no vull traversal was needed that way. I
+experimented with keeping a list of open upvalues equal in size to the stack,
+This seemed sadly slow. To close upvalues we need upvalue handles associated
+with each stack location pointed to.
+
+What the current thing is doing is different because it can create duplicate
+upvalues.
+
+We need a bijection between stack slots and upvalues. Form upvalues to stack
+slots is sorted. From stack slots to upvalues, I don't know yet. Genuine
+application of heaps... or put the next pointer in the object like Munificent
+did. Maybe us a trie to safe space... or implement linked list atop vecs. I
+mean, in a data oriented way: keep a vec of next highest open next to the open
+list, use it to traverse the open ones.
+
+Something clever: stack ref uses additonal _stack pointer_ to point to the next
+upvalue on the stack. Problem: upvalues don't go on the stack.
+
+I'm really opposed to the linked list solution.
+
+### status
+
+Setting on a solution with two stacks, and moving values between them. What are
+the requirements?
+
+It is scope based. upvalue closing happens when upvalues go out of scope. so
+sometimes a single upvalues is closed, and sometimes the collection for a
+function. The heaps structure is valid.
+
+Binary heap push on top and rebalance. Opposite: pop from end, make root, and
+rebalance. can use peek and deleteMax instead of top. But get?
+
 ## 2024-08-30
 
 ### type specific allocators

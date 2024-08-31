@@ -1,6 +1,10 @@
-use std::u32;
+use std::{mem, u32};
 
-use crate::{common::STRINGS, heap::{Handle, ObjectHandle}, object::Value};
+use crate::{
+    common::STRINGS,
+    heap::{Collector, Handle, ObjectHandle},
+    object::Value,
+};
 
 pub type StringHandle = Handle<STRINGS>;
 
@@ -162,32 +166,27 @@ impl<V: Clone> Map<V> {
 }
 
 impl Map<ObjectHandle> {
-    pub fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
+    pub fn trace(&self, collector: &mut Collector) {
         for i in 0..self.capacity() {
+            // in case a string get resurrected
             if self.key_set.keys[i].is_valid() {
-                strings.push(self.key_set.keys[i]);
-            }
-
-            if let Some(value) = self.values[i] {
-                collector.push(value)
+                collector.strings.push(self.key_set.keys[i]);
+                if let Some(value) = self.values[i] {
+                    collector.objects.push(value)
+                }
             }
         }
     }
 }
 
 impl Map<Value> {
-    pub fn trace(&self, collector: &mut Vec<ObjectHandle>, strings: &mut Vec<StringHandle>) {
+    pub fn trace(&self, collector: &mut Collector) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
-                strings.push(self.key_set.keys[i]);
-            }
-
-            match self.values[i] {
-                Some(Value::Object(handle)) => collector.push(handle),
-                Some(Value::String(handle)) => {
-                    strings.push(handle);
+                collector.strings.push(self.key_set.keys[i]);
+                if let Some(value) = self.values[i] {
+                    collector.trace(value)
                 }
-                _ => {}
             }
         }
     }
@@ -363,6 +362,12 @@ impl Strings {
         self.key_set = key_set;
         self.values = values;
         self.generations = generations;
+    }
+
+    const ENTRY_SIZE: usize = (mem::size_of::<Option<Box<str>>>() + mem::size_of::<StringHandle>());
+
+    pub fn byte_count(&self) -> usize {
+        self.capacity() * Self::ENTRY_SIZE
     }
 }
 
