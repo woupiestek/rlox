@@ -119,7 +119,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     pub fn trace(&self, collector: &mut Collector) {
         for &option in &self.closures {
             if let Some(closure) = option {
-                collector.closures.push(closure)
+                collector.push(closure)
             };
         }
     }

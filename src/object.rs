@@ -94,6 +94,18 @@ impl Value {
             Value::Class(a) => heap.classes.to_string(*a, &heap.strings),
         }
     }
+
+    pub fn trace(&self, collector: &mut Collector) {
+        match self {
+            Value::Object(h) => collector.push(*h),
+            Value::String(h) => collector.push(*h),
+            Value::Closure(h) => collector.push(*h),
+            Value::Class(h) => collector.push(*h),
+            // Value::Function(_) => todo!(),
+            // Value::Native(_) => todo!(),
+            _ => (),
+        }
+    }
 }
 
 pub struct Instance {
@@ -110,7 +122,7 @@ impl Traceable for Instance {
     }
 
     fn trace(&self, collector: &mut Collector) {
-        collector.classes.push(self.class);
+        collector.push(self.class);
         self.properties.trace(collector);
     }
 }
@@ -143,7 +155,7 @@ impl Traceable for BoundMethod {
     }
 
     fn trace(&self, collector: &mut Collector) {
-        collector.objects.push(ObjectHandle::from(self.receiver));
-        collector.closures.push(self.method);
+        collector.push(ObjectHandle::from(self.receiver));
+        collector.push(self.method);
     }
 }

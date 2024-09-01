@@ -4,7 +4,7 @@ use crate::{
     bitarray::BitArray,
     common::CLOSURES,
     functions::{FunctionHandle, Functions},
-    heap::{Collector, Handle},
+    heap::{Collector, Handle, Pool},
     upvalues::UpvalueHandle,
 };
 
@@ -58,23 +58,24 @@ impl Closures {
         }
     }
 
-    pub fn byte_count(&self) -> usize {
-        // not collecting functions right now
-        4 * self.upvalue_count + 8 * self.upvalues.capacity()
-    }
-
-    pub fn trace(&self, fh: ClosureHandle, collector: &mut Collector) {
-        // not collecting functions right now
-        collector
-            .upvalues
-            .extend_from_slice(&self.upvalues[fh.index()])
-    }
-
     pub fn count(&self) -> usize {
         self.functions.len()
     }
+}
 
-    pub fn sweep(&mut self, marked: BitArray) {
+impl Pool<CLOSURES> for Closures {
+    fn byte_count(&self) -> usize {
+        // not collecting functions right now
+        4 * self.upvalue_count + 8 * self.upvalues.capacity()
+    }
+    fn trace(&self, handle: Handle<CLOSURES>, collector: &mut Collector) {
+        // not collecting functions right now
+        for i in 0..self.upvalues[handle.index()].len() {
+            collector.push(self.upvalues[handle.index()][i])
+        }
+    }
+
+    fn sweep(&mut self, marked: &BitArray) {
         self.free.clear();
         for i in 0..self.upvalues.len() {
             if !marked.get(i) {

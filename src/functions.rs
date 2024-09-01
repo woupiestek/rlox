@@ -222,16 +222,16 @@ impl Functions {
     pub fn trace_roots(&self, collector: &mut Collector) {
         for name in &self.names {
             if name.is_valid() {
-                collector.strings.push(*name);
+                collector.push(*name);
             }
         }
         for chunk in &self.chunks {
             for value in &chunk.constants {
                 if let Value::Object(h) = value {
-                    collector.objects.push(*h)
+                    collector.push(*h)
                 }
                 if let Value::String(h) = value {
-                    collector.strings.push(*h)
+                    collector.push(*h)
                 }
             }
         }

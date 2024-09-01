@@ -1,12 +1,14 @@
+use std::mem;
+
 use crate::{
     bitarray::BitArray,
-    classes::{ClassHandle, Classes},
-    closures::{ClosureHandle, Closures},
-    common::OBJECTS,
+    classes::Classes,
+    closures::Closures,
+    common::{CLASSES, CLOSURES, OBJECTS, STRINGS, UPVALUES},
     functions::Functions,
     object::{BoundMethod, Instance, Value},
     strings::{KeySet, StringHandle, Strings},
-    upvalues::{UpvalueHandle, Upvalues},
+    upvalues::Upvalues,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -17,43 +19,107 @@ pub enum Kind {
 }
 
 pub struct Collector {
-    pub objects: Vec<ObjectHandle>,
-    pub strings: Vec<StringHandle>,
-    pub upvalues: Vec<UpvalueHandle>,
-    pub closures: Vec<ClosureHandle>,
-    pub classes: Vec<ClassHandle>,
-}
-
-impl Collector {
-    pub fn new() -> Self {
-        Self {
-            objects: Vec::new(),
-            strings: Vec::new(),
-            upvalues: Vec::new(),
-            closures: Vec::new(),
-            classes: Vec::new(),
-        }
-    }
-
-    pub fn trace(&mut self, value: Value) {
-        match value {
-            Value::Object(o) => self.objects.push(o),
-            Value::String(s) => self.strings.push(s),
-            Value::Closure(c) => self.closures.push(c),
-            Value::Class(c) => self.classes.push(c),
-            // Value::Function(_) => todo!(),
-            // Value::Native(_) => todo!(),
-            _ => (),
-        }
-    }
-}
-
-pub struct Marks {
-    pub objects: BitArray,
+    pub handles: [Vec<u32>; 8],
+    pub marks: [BitArray; 8],
     pub strings: KeySet,
-    pub upvalues: BitArray,
-    pub closures: BitArray,
-    pub classes: BitArray,
+}
+
+// todo: currently, this is reconstructed every GC cycle. Keeping it may help performance
+impl Collector {
+    pub fn new(heap: &Heap) -> Self {
+        Self {
+            handles: Default::default(),
+            // resizeable, resettable arrays, length updates on collection
+            marks: [
+                BitArray::new(0),                   //strings
+                BitArray::new(0),                   //natives
+                BitArray::new(0),                   //functions
+                BitArray::new(heap.pointers.len()), //objects
+                BitArray::new(heap.upvalues.count()),
+                BitArray::new(heap.closures.count()),
+                BitArray::new(heap.classes.count()),
+                BitArray::new(0), // not yet used
+            ],
+            strings: KeySet::with_capacity(heap.strings.capacity()),
+        }
+    }
+
+    pub fn push<const KIND: u8>(&mut self, handle: Handle<KIND>) {
+        if !self.marks[KIND as usize].get(handle.index()) {
+            self.handles[KIND as usize].push(handle.0);
+        }
+    }
+
+    fn mark_and_sweep(&mut self, heap: &mut Heap) {
+        self.mark(heap);
+        self.sweep(heap);
+    }
+
+    fn mark(&mut self, heap: &mut Heap) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!(
+                "Start marking objects & tracing references. Number of roots: {}",
+                roots.len()
+            );
+        }
+        loop {
+            let mut done = true;
+            if let Some(i) = self.handles[STRINGS as usize].pop() {
+                self.strings.put(Handle::from(i));
+                done = false
+            }
+            done &= heap.mark(self)
+                && heap.classes.mark(self)
+                && heap.closures.mark(self)
+                && heap.upvalues.mark(self);
+            if done {
+                break;
+            }
+        }
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Done with mark & trace");
+        }
+    }
+
+    fn sweep(&mut self, heap: &mut Heap) {
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Start sweeping.");
+        }
+        heap.classes.sweep(&self.marks[CLASSES as usize]);
+        heap.closures.sweep(&self.marks[CLOSURES as usize]);
+        heap.sweep(&self.marks[OBJECTS as usize]);
+        // this is pain.
+        heap.strings
+            .sweep(mem::replace(&mut self.strings, KeySet::with_capacity(0)));
+        heap.upvalues.sweep(&self.marks[UPVALUES as usize]);
+        #[cfg(feature = "log_gc")]
+        {
+            println!("Done sweeping");
+        }
+    }
+}
+
+pub trait Pool<const KIND: u8>
+where
+    Self: Sized,
+{
+    fn byte_count(&self) -> usize;
+    fn trace(&self, handle: Handle<KIND>, collector: &mut Collector);
+    fn sweep(&mut self, marks: &BitArray);
+    // indicate that the collector has no more elements of a kind
+    fn mark(&mut self, collector: &mut Collector) -> bool {
+        if let Some(i) = collector.handles[KIND as usize].pop() {
+            if !collector.marks[KIND as usize].get(i as usize) {
+                self.trace(Handle::from(i), collector);
+            }
+            false
+        } else {
+            true
+        }
+    }
 }
 
 pub trait Traceable
@@ -95,7 +161,7 @@ pub struct Heap {
     pub upvalues: Upvalues,
     pub closures: Closures,
     pub classes: Classes,
-    byte_count: usize,
+    _byte_count: usize,
     next_gc: usize,
 }
 
@@ -109,13 +175,13 @@ impl Heap {
             upvalues: Upvalues::new(),
             closures: Closures::new(),
             classes: Classes::new(),
-            byte_count: 0,
+            _byte_count: 0,
             next_gc: 1 << 20,
         }
     }
 
     pub fn put<T: Traceable>(&mut self, t: T) -> ObjectHandle {
-        self.byte_count += t.byte_count();
+        self._byte_count += t.byte_count();
         if let Some(handle) = self.free.pop() {
             self.kinds[handle.index()] = T::KIND;
             self.pointers[handle.index()] = Box::into_raw(Box::from(t)) as *mut u8;
@@ -173,13 +239,7 @@ impl Heap {
             println!("-- gc begin");
             println!("byte count: {}", before);
         }
-        let marks = self.mark(&mut collector);
-        self.sweep(marks.objects);
-        self.upvalues.sweep(marks.upvalues);
-        self.strings.sweep(marks.strings);
-        self.closures.sweep(marks.closures);
-        self.classes.sweep(marks.classes);
-
+        collector.mark_and_sweep(self);
         self.next_gc *= 2;
         #[cfg(feature = "log_gc")]
         {
@@ -195,83 +255,17 @@ impl Heap {
         }
     }
 
-    fn mark(&self, collector: &mut Collector) -> Marks {
-        let mut marks = Marks {
-            objects: BitArray::new(self.pointers.len()),
-            upvalues: BitArray::new(self.upvalues.count()),
-            closures: BitArray::new(self.closures.count()),
-            classes: BitArray::new(self.classes.count()),
-            strings: KeySet::with_capacity(self.strings.capacity()),
-        };
-        #[cfg(feature = "log_gc")]
-        {
-            println!(
-                "Start marking objects & tracing references. Number of roots: {}",
-                roots.len()
-            );
-        }
-        loop {
-            let mut is_empty = true;
-            if let Some(string) = collector.strings.pop() {
-                is_empty = false;
-                marks.strings.put(string)
-            }
-            if let Some(handle) = collector.objects.pop() {
-                is_empty = false;
-                let index = handle.0 as usize;
-                if marks.objects.get(index) {
-                    continue;
-                }
-                marks.objects.add(index);
-                match self.kinds[index] {
-                    Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(collector),
-                    Kind::Free => {}
-                    Kind::Instance => self.get_ref::<Instance>(handle).trace(collector),
-                }
-            }
-            if let Some(handle) = collector.upvalues.pop() {
-                is_empty = false;
-                if !marks.upvalues.get(handle.0 as usize) {
-                    marks.upvalues.add(handle.0 as usize);
-                    self.upvalues.trace(handle, collector);
-                }
-            }
-            if let Some(handle) = collector.closures.pop() {
-                is_empty = false;
-                if !marks.closures.get(handle.0 as usize) {
-                    marks.closures.add(handle.0 as usize);
-                    self.closures.trace(handle, collector)
-                }
-            }
-            if let Some(handle) = collector.classes.pop() {
-                is_empty = false;
-                if !marks.classes.get(handle.0 as usize) {
-                    marks.classes.add(handle.0 as usize);
-                    self.classes.trace(handle, collector)
-                }
-            }
-            if is_empty {
-                break;
-            }
-        }
-        #[cfg(feature = "log_gc")]
-        {
-            println!("Done with mark & trace");
-        }
-        marks
-    }
-
     fn free(&mut self, i: usize) {
         match self.kinds[i] {
             Kind::BoundMethod => unsafe {
                 let ptr = self.pointers[i] as *mut BoundMethod;
-                self.byte_count -= &(*ptr).byte_count();
+                self._byte_count -= &(*ptr).byte_count();
                 drop(Box::from_raw(ptr));
             },
             Kind::Free => {}
             Kind::Instance => unsafe {
                 let ptr = self.pointers[i] as *mut Instance;
-                self.byte_count -= &(*ptr).byte_count();
+                self._byte_count -= &(*ptr).byte_count();
                 drop(Box::from_raw(ptr));
             },
         }
@@ -279,28 +273,12 @@ impl Heap {
         self.free.push(ObjectHandle::from(i as u32));
     }
 
-    fn sweep(&mut self, marked: BitArray) {
-        #[cfg(feature = "log_gc")]
-        {
-            println!("Start sweeping.");
-        }
-        for i in 0..self.pointers.len() {
-            if !marked.get(i) {
-                self.free(i);
-            }
-        }
-        #[cfg(feature = "log_gc")]
-        {
-            println!("Done sweeping");
-        }
-    }
-
     pub fn increase_byte_count(&mut self, diff: usize) {
-        self.byte_count += diff;
+        self._byte_count += diff;
     }
 
     pub fn intern_copy(&mut self, name: &str) -> StringHandle {
-        self.byte_count += name.len();
+        self._byte_count += name.len();
         self.strings.put(name)
     }
 
@@ -310,11 +288,11 @@ impl Heap {
     }
 
     pub fn needs_gc(&self) -> bool {
-        self.byte_count
+        self._byte_count
             + self.upvalues.byte_count()
             + self.strings.byte_count()
             + self.closures.byte_count()
-            + self.classes.byte_code()
+            + self.classes.byte_count()
             > self.next_gc
     }
 
@@ -346,5 +324,27 @@ impl Drop for Heap {
         for i in 0..self.pointers.len() {
             self.free(i);
         }
+    }
+}
+
+impl Pool<OBJECTS> for Heap {
+    fn trace(&self, handle: ObjectHandle, collector: &mut Collector) {
+        match self.kinds[handle.index()] {
+            Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(collector),
+            Kind::Free => {}
+            Kind::Instance => self.get_ref::<Instance>(handle).trace(collector),
+        }
+    }
+
+    fn sweep(&mut self, marked: &BitArray) {
+        for i in 0..self.pointers.len() {
+            if !marked.get(i) {
+                self.free(i);
+            }
+        }
+    }
+
+    fn byte_count(&self) -> usize {
+        self._byte_count
     }
 }

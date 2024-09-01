@@ -4,7 +4,7 @@ use crate::{
     bitarray::BitArray,
     closures::ClosureHandle,
     common::CLASSES,
-    heap::{Collector, Handle},
+    heap::{Collector, Handle, Pool},
     strings::{Map, StringHandle, Strings},
 };
 
@@ -38,10 +38,7 @@ impl Classes {
             ClassHandle::from(i)
         }
     }
-    pub fn trace(&self, ch: ClassHandle, collector: &mut Collector) {
-        collector.strings.push(self.names[ch.index()]);
-        self.methods[ch.index()].trace(collector);
-    }
+
     pub fn get_name<'s>(&self, ch: ClassHandle, strings: &'s Strings) -> &'s str {
         strings.get(self.names[ch.index()]).unwrap()
     }
@@ -49,7 +46,7 @@ impl Classes {
     pub fn to_string(&self, ch: ClassHandle, strings: &Strings) -> String {
         format!("<class {}>", self.get_name(ch, strings))
     }
-    pub fn get_method(&self, ch: ClassHandle, name: StringHandle) -> Option<ClassHandle> {
+    pub fn get_method(&self, ch: ClassHandle, name: StringHandle) -> Option<ClosureHandle> {
         self.methods[ch.index()].get(name)
     }
     pub fn set_method(&mut self, ch: ClassHandle, name: StringHandle, method: ClosureHandle) {
@@ -58,7 +55,7 @@ impl Classes {
         self.method_capacity = self.methods[ch.index()].capacity() - before;
     }
 
-    // todo: 
+    // todo:
     pub fn clone_methods(&mut self, super_class: ClassHandle, sub_class: ClassHandle) {
         self.methods[sub_class.index()] = self.methods[super_class.index()].clone();
     }
@@ -66,22 +63,28 @@ impl Classes {
     pub fn count(&self) -> usize {
         self.names.len()
     }
+}
 
-    pub fn sweep(&mut self, classes: BitArray) {
+impl Pool<CLASSES> for Classes {
+    fn byte_count(&self) -> usize {
+        self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 8) + self.method_capacity * 4
+    }
+    fn trace(&self, handle: Handle<CLASSES>, collector: &mut Collector) {
+        collector.push(self.names[handle.index()]);
+        self.methods[handle.index()].trace(collector);
+    }
+
+    fn sweep(&mut self, marks: &BitArray) {
         self.free.clear();
         for i in 0..self.names.len() {
-            if !classes.get(i) {
+            if !marks.get(i) {
                 // no accounting for this?
                 self.names[i] = StringHandle::EMPTY;
                 self.method_capacity = self.methods[i].capacity();
-                // todo: 
+                // todo:
                 self.methods[i] = Map::new();
                 self.free.push(ClassHandle::from(i as u32));
             }
         }
-    }
-
-    pub fn byte_code(&self) -> usize {
-        self.names.len() * (mem::size_of::<Map<ClosureHandle>>()+8)+self.method_capacity*4
     }
 }

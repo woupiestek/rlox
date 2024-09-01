@@ -11,4 +11,4 @@ pub const FUNCTIONS: u8 = 2;
 pub const OBJECTS: u8 = 3;
 pub const UPVALUES: u8 = 4;
 pub const CLOSURES: u8 = 5;
-pub const CLASSES: u8 = 5;
+pub const CLASSES: u8 = 6;

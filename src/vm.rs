@@ -87,13 +87,13 @@ impl VM {
     }
 
     fn roots(&mut self) -> Collector {
-        let mut collector = Collector::new();
+        let mut collector = Collector::new(&self.heap);
         #[cfg(feature = "log_gc")]
         {
             println!("collect stack objects");
         }
         for i in 0..self.stack_top {
-            collector.trace(self.values[i]);
+            self.values[i].trace(&mut collector);
         }
         #[cfg(feature = "log_gc")]
         {
@@ -116,7 +116,7 @@ impl VM {
             println!("collect init string");
         }
         self.functions.trace_roots(&mut collector);
-        collector.strings.push(self.init_string);
+        collector.push(self.init_string);
         collector
     }
 

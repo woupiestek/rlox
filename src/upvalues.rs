@@ -3,7 +3,7 @@ use std::mem;
 use crate::{
     bitarray::BitArray,
     common::UPVALUES,
-    heap::{Collector, Handle},
+    heap::{Collector, Handle, Pool},
     object::Value,
 };
 
@@ -74,38 +74,38 @@ impl Upvalues {
 
     const ENTRY_SIZE: usize = mem::size_of::<Value>();
 
-    pub fn byte_count(&self) -> usize {
-        self.values.capacity() * Self::ENTRY_SIZE
-    }
-
     pub fn trace_roots(&self, collector: &mut Collector) {
         for &i in &self.open.lower_handles {
-            collector.upvalues.push(Handle::from(i))
+            collector.push(Handle::from(i))
         }
         for &i in &self.open.higher_handles {
-            collector.upvalues.push(Handle::from(i))
-        }
-    }
-
-    pub fn sweep(&mut self, marked: BitArray) {
-        self.free.clear();
-        for i in 0..self.values.len() {
-            if !marked.get(i) {
-                self.values[i] = Value::Nil;
-                self.free.push(i as u32);
-            }
+            collector.push(Handle::from(i))
         }
     }
 
     pub fn reset(&mut self) {
         self.open.clear()
     }
-
-    pub fn trace(&self, handle: Handle<UPVALUES>, collector: &mut Collector) {
-        collector.trace(self.values[handle.index()])
-    }
 }
 
+impl Pool<UPVALUES> for Upvalues {
+    fn byte_count(&self) -> usize {
+        self.values.capacity() * Self::ENTRY_SIZE
+    }
+    fn trace(&self, handle: Handle<UPVALUES>, collector: &mut Collector) {
+        self.values[handle.index()].trace(collector)
+    }
+
+    fn sweep(&mut self, marks: &BitArray) {
+        self.free.clear();
+        for i in 0..self.values.len() {
+            if !marks.get(i) {
+                self.values[i] = Value::Nil;
+                self.free.push(i as u32);
+            }
+        }
+    }
+}
 // a heap would work given that always the highest locations are dropped
 // for now, a linked list mimic. Elements are moved, to keep it sorted
 struct OpenUpvalues {

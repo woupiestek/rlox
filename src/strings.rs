@@ -173,9 +173,9 @@ impl Map<ClosureHandle> {
         for i in 0..self.capacity() {
             // in case a string get resurrected
             if self.key_set.keys[i].is_valid() {
-                collector.strings.push(self.key_set.keys[i]);
+                collector.push(self.key_set.keys[i]);
                 if let Some(value) = self.values[i] {
-                    collector.closures.push(value)
+                    collector.push(value);
                 }
             }
         }
@@ -186,9 +186,9 @@ impl Map<Value> {
     pub fn trace(&self, collector: &mut Collector) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
-                collector.strings.push(self.key_set.keys[i]);
+                collector.push(self.key_set.keys[i]);
                 if let Some(value) = self.values[i] {
-                    collector.trace(value)
+                    value.trace(collector)
                 }
             }
         }
