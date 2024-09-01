@@ -1,10 +1,11 @@
 // run time data structures
 
 use crate::{
+    bound_methods::BoundMethodHandle,
     classes::ClassHandle,
     closures::ClosureHandle,
     functions::{FunctionHandle, Functions},
-    heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
+    heap::{Collector, Heap},
     instances::InstanceHandle,
     natives::NativeHandle,
     strings::StringHandle,
@@ -18,7 +19,7 @@ pub enum Value {
     Function(FunctionHandle),
     Native(NativeHandle),
     Number(f64),
-    Object(ObjectHandle),
+    BoundMethod(BoundMethodHandle),
     String(StringHandle),
     StackRef(u16), // for open upvalues
     Closure(ClosureHandle),
@@ -51,12 +52,6 @@ impl From<bool> for Value {
 impl From<f64> for Value {
     fn from(value: f64) -> Self {
         Value::Number(value)
-    }
-}
-
-impl From<ObjectHandle> for Value {
-    fn from(value: ObjectHandle) -> Self {
-        Value::Object(ObjectHandle::from(value))
     }
 }
 
@@ -94,10 +89,10 @@ impl Value {
             Value::False => format!("false"),
             Value::Nil => format!("nil"),
             Value::Number(a) => format!("{}", a),
-            Value::Object(a) => heap.to_string(*a, functions),
+            Value::BoundMethod(a) => heap.bound_methods.to_string(*a, heap, functions),
             Value::True => format!("true"),
             Value::Native(_) => format!("<native function>"),
-            Value::String(a) => heap.get_str(*a).to_owned(),
+            Value::String(a) => heap.strings.get(*a).unwrap().to_owned(),
             Value::Function(a) => functions.to_string(*a, heap),
             Value::StackRef(i) => format!("&{}", i),
             Value::Closure(a) => functions.to_string(heap.closures.function_handle(*a), heap),
@@ -108,37 +103,14 @@ impl Value {
 
     pub fn trace(&self, collector: &mut Collector) {
         match self {
-            Value::Object(h) => collector.push(*h),
+            Value::BoundMethod(h) => collector.push(*h),
             Value::String(h) => collector.push(*h),
             Value::Closure(h) => collector.push(*h),
             Value::Class(h) => collector.push(*h),
+            Value::Instance(h) => collector.push(*h),
             // Value::Function(_) => todo!(),
             // Value::Native(_) => todo!(),
             _ => (),
         }
-    }
-}
-
-pub struct BoundMethod {
-    pub receiver: ObjectHandle,
-    pub method: ClosureHandle,
-}
-
-impl BoundMethod {
-    pub fn new(receiver: ObjectHandle, method: ClosureHandle) -> Self {
-        Self { receiver, method }
-    }
-}
-
-impl Traceable for BoundMethod {
-    const KIND: Kind = Kind::BoundMethod;
-
-    fn byte_count(&self) -> usize {
-        16
-    }
-
-    fn trace(&self, collector: &mut Collector) {
-        collector.push(ObjectHandle::from(self.receiver));
-        collector.push(self.method);
     }
 }

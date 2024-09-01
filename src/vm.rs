@@ -7,12 +7,12 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     functions::{FunctionHandle, Functions},
-    heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
+    heap::{Collector, Heap},
     natives::Natives,
-    object::{BoundMethod, Value},
     op::Op,
     strings::{Map, StringHandle},
     upvalues::UpvalueHandle,
+    values::Value,
 };
 
 const MAX_FRAMES: usize = 64; // > 0, < 2^16 - 1
@@ -50,7 +50,10 @@ pub struct VM {
 
 impl VM {
     pub fn new(mut heap: Heap) -> Self {
-        let init_string = heap.intern_copy("init");
+        let init_string = {
+            let this = &mut heap;
+            this.strings.put("init")
+        };
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
@@ -72,11 +75,6 @@ impl VM {
 
     fn close_upvalues(&mut self, location: usize) {
         self.heap.upvalues.close(location as u16, &self.values);
-    }
-
-    fn new_obj<T: Traceable>(&mut self, t: T) -> ObjectHandle {
-        self.collect_garbage_if_needed();
-        self.heap.put(t)
     }
 
     fn collect_garbage_if_needed(&mut self) {
@@ -125,7 +123,10 @@ impl VM {
         name: &str,
         native_fn: fn(args: &[Value]) -> Result<Value, String>,
     ) {
-        let key = self.heap.intern_copy(name);
+        let key = {
+            let this = &mut self.heap;
+            this.strings.put(name)
+        };
         // are the protections still needed?
         self.push(Value::from(key));
         self.globals
@@ -172,17 +173,12 @@ impl VM {
                     return Ok(());
                 }
             }
-            Value::Object(handle) => match self.heap.kind(handle) {
-                Kind::BoundMethod => {
-                    let bm = self.heap.get_ref::<BoundMethod>(handle);
-                    self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
-                    return self.call(bm.method, arity);
-                }
-                _ => err!(
-                    "Can only call functions and classes, not '{}'",
-                    callee.to_string(&self.heap, &self.functions)
-                ),
-            },
+            Value::BoundMethod(handle) => {
+                let receiver = self.heap.bound_methods.get_receiver(handle);
+                self.values[self.stack_top - arity as usize - 1] = Value::Instance(receiver);
+                let method = self.heap.bound_methods.get_method(handle);
+                return self.call(method, arity);
+            }
             Value::Native(handle) => {
                 let result = self.natives.call(handle, self.tail(arity as usize)?)?;
                 self.stack_top -= arity as usize + 1;
@@ -204,7 +200,10 @@ impl VM {
         arity: u8,
     ) -> Result<(), String> {
         match self.heap.classes.get_method(class, name) {
-            None => err!("Undefined property '{}'", self.heap.get_str(name)),
+            None => err!(
+                "Undefined property '{}'",
+                self.heap.strings.get(name).unwrap()
+            ),
             Some(method) => self.call(method, arity),
         }
     }
@@ -221,19 +220,23 @@ impl VM {
 
     fn bind_method(&mut self, class: ClassHandle, name: StringHandle) -> Result<(), String> {
         match self.heap.classes.get_method(class, name) {
-            None => err!("Undefined property '{}'.", self.heap.get_str(name)),
+            None => err!(
+                "Undefined property '{}'.",
+                self.heap.strings.get(name).unwrap()
+            ),
             Some(method) => {
-                if let Value::Object(instance) = self.peek(0) {
-                    let bm = self.new_obj(BoundMethod::new(instance, method));
+                if let Value::Instance(instance) = self.peek(0) {
+                    self.collect_garbage_if_needed();
+                    let bm = self.heap.bound_methods.bind(instance, method);
                     self.pop();
-                    self.push(Value::from(bm));
+                    self.push(Value::BoundMethod(bm));
                     Ok(())
                 } else {
                     err!(
                         "Cannot bind method {} to {}",
                         self.functions
                             .to_string(self.heap.closures.function_handle(method), &self.heap),
-                        self.heap.get_str(name)
+                        self.heap.strings.get(name).unwrap()
                     )
                 }
             }
@@ -361,7 +364,10 @@ impl VM {
                     if let Some(value) = self.globals.get(name) {
                         self.push(value);
                     } else {
-                        return err!("Undefined variable '{}'.", self.heap.get_str(name));
+                        return err!(
+                            "Undefined variable '{}'.",
+                            self.heap.strings.get(name).unwrap()
+                        );
                     }
                 }
                 Op::GetLocal => {
@@ -458,7 +464,10 @@ impl VM {
                     let name = self.call_stack.read_string(&self.functions, &self.heap)?;
                     if !self.globals.set(name, self.peek(0)) {
                         self.globals.delete(name);
-                        return err!("Undefined variable '{}'.", self.heap.get_str(name));
+                        return err!(
+                            "Undefined variable '{}'.",
+                            self.heap.strings.get(name).unwrap()
+                        );
                     }
                 }
                 Op::SetLocal => {

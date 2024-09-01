@@ -2,9 +2,9 @@ use crate::{
     closures::ClosureHandle,
     functions::{Chunk, Functions},
     heap::{Collector, Heap},
-    object::Value,
     strings::StringHandle,
     upvalues::UpvalueHandle,
+    values::Value,
 };
 
 // the top frame should be fast, cannot say it looks that way

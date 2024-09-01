@@ -16,6 +16,7 @@ mod op;
 mod strings;
 // mod loxtr;
 // mod table;
+mod bound_methods;
 mod classes;
 mod closures;
 mod instances;
@@ -25,8 +26,8 @@ mod upvalues;
 mod heap;
 // mod memory;
 mod call_stack;
-mod object;
 mod scanner;
+mod values;
 mod vm;
 
 fn repl(vm: &mut VM) {

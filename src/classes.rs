@@ -3,12 +3,11 @@ use std::mem;
 use crate::{
     bitarray::BitArray,
     closures::ClosureHandle,
-    common::CLASSES,
-    heap::{Collector, Handle, Pool},
+    heap::{Collector, Handle, Kind, Pool},
     strings::{Map, StringHandle, Strings},
 };
 
-pub type ClassHandle = Handle<CLASSES>;
+pub type ClassHandle = Handle<{ Kind::Class as u8 }>;
 
 pub struct Classes {
     names: Vec<StringHandle>,
@@ -61,11 +60,11 @@ impl Classes {
     }
 }
 
-impl Pool<CLASSES> for Classes {
+impl Pool<{ Kind::Class as u8 }> for Classes {
     fn byte_count(&self) -> usize {
         self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 4) + self.method_capacity * 4
     }
-    fn trace(&self, handle: Handle<CLASSES>, collector: &mut Collector) {
+    fn trace(&self, handle: Handle<{ Kind::Class as u8 }>, collector: &mut Collector) {
         collector.push(self.names[handle.index()]);
         self.methods[handle.index()].trace(collector);
     }

@@ -1,9 +1,8 @@
 use crate::{
-    common::FUNCTIONS,
-    heap::{Collector, Handle, Heap},
-    object::Value,
+    heap::{Collector, Handle, Heap, Kind},
     op::Op,
     strings::StringHandle,
+    values::Value,
 };
 
 #[derive(Debug)]
@@ -125,7 +124,7 @@ impl Chunk {
     }
 }
 
-pub type FunctionHandle = Handle<FUNCTIONS>;
+pub type FunctionHandle = Handle<{ Kind::Function as u8 }>;
 
 impl FunctionHandle {
     pub const MAIN: Self = Self(0);
@@ -210,7 +209,7 @@ impl Functions {
         } else {
             format!(
                 "<fn {} ({}/{})>",
-                heap.get_str(name),
+                heap.strings.get(name).unwrap(),
                 self.arities[i],
                 self.upvalue_counts[i]
             )
@@ -227,12 +226,7 @@ impl Functions {
         }
         for chunk in &self.chunks {
             for value in &chunk.constants {
-                if let Value::Object(h) = value {
-                    collector.push(*h)
-                }
-                if let Value::String(h) = value {
-                    collector.push(*h)
-                }
+                value.trace(collector);
             }
         }
     }

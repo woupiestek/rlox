@@ -1,8 +1,11 @@
-use crate::{common::NATIVES, heap::Handle, object::Value};
+use crate::{
+    heap::{Handle, Kind},
+    values::Value,
+};
 
 pub struct Natives(Vec<fn(args: &[Value]) -> Result<Value, String>>);
 
-pub type NativeHandle = Handle<NATIVES>; // More than enough for now...
+pub type NativeHandle = Handle<{ Kind::Native as u8 }>; // More than enough for now...
 
 // All natives are collected on shut down.
 impl Natives {
@@ -23,7 +26,7 @@ impl Natives {
 
 #[cfg(test)]
 mod tests {
-    use crate::object::Value;
+    use crate::values::Value;
 
     use super::*;
 

@@ -4,10 +4,10 @@ use crate::{
     bitarray::BitArray,
     functions::{Chunk, FunctionHandle, Functions},
     heap::Heap,
-    object::Value,
     op::Op,
     scanner::{Scanner, Token, TokenType},
     strings::StringHandle,
+    values::Value,
 };
 
 #[derive(PartialEq, PartialOrd)]
@@ -174,8 +174,14 @@ struct Compiler<'src, 'hp> {
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
-        let this_name = heap.intern_copy("this");
-        let super_name = heap.intern_copy("super");
+        let this_name = {
+            let this = &mut *heap;
+            this.strings.put("this")
+        };
+        let super_name = {
+            let this = &mut *heap;
+            this.strings.put("super")
+        };
         let mut target = Functions::new();
         Self {
             data: Box::from(CompileData::new(
@@ -387,9 +393,11 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn string(&mut self) -> Result<(), String> {
-        let value = self
-            .heap
-            .intern_copy(self.source.scanner.get_str(self.source.previous.1)?);
+        let value = {
+            let this = &mut *self.heap;
+            let name = self.source.scanner.get_str(self.source.previous.1)?;
+            this.strings.put(name)
+        };
         self.emit_constant_op(Op::Constant, Value::from(value))
     }
 
@@ -495,7 +503,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .source
             .scanner
             .get_identifier_name(self.source.previous.1)?;
-        Ok(self.heap.intern_copy(str))
+        Ok({
+            let this = &mut *self.heap;
+            this.strings.put(str)
+        })
     }
 
     fn parse_prefix(&mut self, can_assign: bool) -> Result<(), String> {
@@ -605,7 +616,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .source
             .scanner
             .get_identifier_name((&self.source).previous.1)?;
-        let name = self.heap.intern_copy(name);
+        let name = {
+            let this = &mut *self.heap;
+            this.strings.put(name)
+        };
         let function = self.target.new_function(Some(name));
         // do the head of the linked list thing
         let enclosing = mem::replace(
@@ -647,7 +661,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         } else {
             FunctionType::Method
         };
-        let loxtr = self.heap.intern_copy(name);
+        let loxtr = {
+            let this = &mut *self.heap;
+            this.strings.put(name)
+        };
         self.function(function_type)?;
         self.emit_constant_op(Op::Method, Value::from(loxtr))?;
         Ok(())

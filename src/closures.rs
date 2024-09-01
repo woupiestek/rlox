@@ -2,13 +2,12 @@ use std::u32;
 
 use crate::{
     bitarray::BitArray,
-    common::CLOSURES,
     functions::{FunctionHandle, Functions},
-    heap::{Collector, Handle, Pool},
+    heap::{Collector, Handle, Kind, Pool},
     upvalues::UpvalueHandle,
 };
 
-pub type ClosureHandle = Handle<CLOSURES>;
+pub type ClosureHandle = Handle<{ Kind::Closure as u8 }>;
 
 pub struct Closures {
     functions: Vec<FunctionHandle>,
@@ -59,12 +58,12 @@ impl Closures {
     }
 }
 
-impl Pool<CLOSURES> for Closures {
+impl Pool<{ Kind::Closure as u8 }> for Closures {
     fn byte_count(&self) -> usize {
         // not collecting functions right now
         4 * self.upvalue_count + 8 * self.upvalues.capacity()
     }
-    fn trace(&self, handle: Handle<CLOSURES>, collector: &mut Collector) {
+    fn trace(&self, handle: Handle<{ Kind::Closure as u8 }>, collector: &mut Collector) {
         // not collecting functions right now
         for i in 0..self.upvalues[handle.index()].len() {
             collector.push(self.upvalues[handle.index()][i])
