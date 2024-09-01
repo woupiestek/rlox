@@ -59,15 +59,11 @@ impl Classes {
     pub fn clone_methods(&mut self, super_class: ClassHandle, sub_class: ClassHandle) {
         self.methods[sub_class.index()] = self.methods[super_class.index()].clone();
     }
-
-    pub fn count(&self) -> usize {
-        self.names.len()
-    }
 }
 
 impl Pool<CLASSES> for Classes {
     fn byte_count(&self) -> usize {
-        self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 8) + self.method_capacity * 4
+        self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 4) + self.method_capacity * 4
     }
     fn trace(&self, handle: Handle<CLASSES>, collector: &mut Collector) {
         collector.push(self.names[handle.index()]);
@@ -79,12 +75,17 @@ impl Pool<CLASSES> for Classes {
         for i in 0..self.names.len() {
             if !marks.get(i) {
                 // no accounting for this?
-                self.names[i] = StringHandle::EMPTY;
-                self.method_capacity = self.methods[i].capacity();
-                // todo:
+                // self.names[i] = StringHandle::EMPTY;
+                self.method_capacity -= self.methods[i].capacity();
+                // maybe use a clear method?
+                // 'maps' rather than 'map', with another family of handles...
                 self.methods[i] = Map::new();
                 self.free.push(ClassHandle::from(i as u32));
             }
         }
+    }
+
+    fn count(&self) -> usize {
+        self.names.len()
     }
 }

@@ -5,8 +5,9 @@ use crate::{
     closures::ClosureHandle,
     functions::{FunctionHandle, Functions},
     heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
+    instances::InstanceHandle,
     natives::NativeHandle,
-    strings::{Map, StringHandle},
+    strings::StringHandle,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -22,6 +23,7 @@ pub enum Value {
     StackRef(u16), // for open upvalues
     Closure(ClosureHandle),
     Class(ClassHandle),
+    Instance(InstanceHandle),
 }
 
 impl From<StringHandle> for Value {
@@ -67,7 +69,7 @@ impl Value {
         if let &Value::Class(handle) = self {
             Ok(handle)
         } else {
-            err!("Not an object")
+            err!("Not a class")
         }
     }
 
@@ -76,6 +78,14 @@ impl Value {
             Ok(handle)
         } else {
             err!("Not a function")
+        }
+    }
+
+    pub fn as_instance(&self) -> Result<InstanceHandle, String> {
+        if let &Value::Instance(handle) = self {
+            Ok(handle)
+        } else {
+            err!("Not a class")
         }
     }
 
@@ -92,6 +102,7 @@ impl Value {
             Value::StackRef(i) => format!("&{}", i),
             Value::Closure(a) => functions.to_string(heap.closures.function_handle(*a), heap),
             Value::Class(a) => heap.classes.to_string(*a, &heap.strings),
+            Value::Instance(a) => heap.instances.to_string(*a, heap),
         }
     }
 
@@ -104,34 +115,6 @@ impl Value {
             // Value::Function(_) => todo!(),
             // Value::Native(_) => todo!(),
             _ => (),
-        }
-    }
-}
-
-pub struct Instance {
-    pub class: ClassHandle,
-    // heap allocated
-    pub properties: Map<Value>,
-}
-
-impl Traceable for Instance {
-    const KIND: Kind = Kind::Instance;
-
-    fn byte_count(&self) -> usize {
-        40 + 24 * self.properties.capacity()
-    }
-
-    fn trace(&self, collector: &mut Collector) {
-        collector.push(self.class);
-        self.properties.trace(collector);
-    }
-}
-
-impl Instance {
-    pub fn new(class: ClassHandle) -> Self {
-        Self {
-            class,
-            properties: Map::new(),
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::{
     functions::{FunctionHandle, Functions},
     heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
     natives::Natives,
-    object::{BoundMethod, Instance, Value},
+    object::{BoundMethod, Value},
     op::Op,
     strings::{Map, StringHandle},
     upvalues::UpvalueHandle,
@@ -160,8 +160,10 @@ impl VM {
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
         match callee {
             Value::Class(handle) => {
-                let instance = self.new_obj(Instance::new(handle));
-                self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
+                self.collect_garbage_if_needed();
+                let instance = self.heap.instances.new_instance(handle);
+                // self.push(Value::Instance(instance));
+                self.values[self.stack_top - arity as usize - 1] = Value::Instance(instance);
                 if let Some(init) = self.heap.classes.get_method(handle, self.init_string) {
                     return self.call(init, arity);
                 } else if arity > 0 {
@@ -208,16 +210,12 @@ impl VM {
     }
 
     fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<(), String> {
-        let value = self.peek(arity as usize);
-        let instance = self
-            .heap
-            .try_ref::<Instance>(value)
-            .ok_or("Only instances have methods.")?;
-        if let Some(property) = instance.properties.get(name) {
+        let handle = self.peek(arity as usize).as_instance()?;
+        if let Some(property) = self.heap.instances.get_property(handle, name) {
             self.values[self.stack_top - arity as usize - 1] = property;
             self.call_value(property, arity)
         } else {
-            self.invoke_from_class(instance.class, name, arity)
+            self.invoke_from_class(self.heap.instances.get_class(handle), name, arity)
         }
     }
 
@@ -372,17 +370,13 @@ impl VM {
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
-                    let value = self.peek(0);
-                    let instance = self
-                        .heap
-                        .try_ref::<Instance>(value)
-                        .ok_or(String::from("Only instances have properties."))?;
+                    let handle = self.peek(0).as_instance()?;
                     let name = self.call_stack.read_string(&self.functions, &self.heap)?;
-                    if let Some(value) = instance.properties.get(name) {
+                    if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
                     } else {
-                        self.bind_method(instance.class, name)?;
+                        self.bind_method(self.heap.instances.get_class(handle), name)?;
                     }
                 }
                 Op::GetSuper => {
@@ -472,17 +466,22 @@ impl VM {
                     self.values[self.call_stack.slot() + index] = self.peek(0);
                 }
                 Op::SetProperty => {
-                    if let &[a, b] = self.tail(2)? {
-                        let instance = self
-                            .heap
-                            .try_mut::<Instance>(a)
-                            .ok_or(String::from("Only instances have fields."))?;
-                        let before_count = instance.byte_count();
-                        instance
-                            .properties
-                            .set(self.call_stack.read_string(&self.functions, &self.heap)?, b);
-                        self.heap
-                            .increase_byte_count(instance.byte_count() - before_count);
+                    if let &[Value::Instance(a), b] = self.tail(2)? {
+                        // let instance = self
+                        //     .heap
+                        //     .try_mut::<Instance>(a)
+                        //     .ok_or(String::from("Only instances have fields."))?;
+                        // let before_count = instance.byte_count();
+                        self.heap.instances.set_property(
+                            a,
+                            self.call_stack.read_string(&self.functions, &self.heap)?,
+                            b,
+                        );
+                        // instance
+                        //     .properties
+                        //     .set(self.call_stack.read_string(&self.functions, &self.heap)?, b);
+                        // self.heap
+                        //     .increase_byte_count(instance.byte_count() - before_count);
                         self.stack_top -= 2;
                         self.push(b);
                     }

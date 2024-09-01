@@ -18,6 +18,7 @@ mod strings;
 // mod table;
 mod classes;
 mod closures;
+mod instances;
 mod natives;
 mod upvalues;
 

@@ -68,10 +68,6 @@ impl Upvalues {
         self.open.higher_handles.clear();
     }
 
-    pub fn count(&self) -> usize {
-        self.values.len()
-    }
-
     const ENTRY_SIZE: usize = mem::size_of::<Value>();
 
     pub fn trace_roots(&self, collector: &mut Collector) {
@@ -104,6 +100,10 @@ impl Pool<UPVALUES> for Upvalues {
                 self.free.push(i as u32);
             }
         }
+    }
+
+    fn count(&self) -> usize {
+        self.values.len()
     }
 }
 // a heap would work given that always the highest locations are dropped

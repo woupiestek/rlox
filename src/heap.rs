@@ -4,9 +4,10 @@ use crate::{
     bitarray::BitArray,
     classes::Classes,
     closures::Closures,
-    common::{CLASSES, CLOSURES, OBJECTS, STRINGS, UPVALUES},
+    common::{CLASSES, CLOSURES, INSTANCES, OBJECTS, STRINGS, UPVALUES},
     functions::Functions,
-    object::{BoundMethod, Instance, Value},
+    instances::Instances,
+    object::BoundMethod,
     strings::{KeySet, StringHandle, Strings},
     upvalues::Upvalues,
 };
@@ -15,7 +16,6 @@ use crate::{
 pub enum Kind {
     BoundMethod = 1, // different (better?) miri errors
     Free,
-    Instance,
 }
 
 pub struct Collector {
@@ -31,14 +31,14 @@ impl Collector {
             handles: Default::default(),
             // resizeable, resettable arrays, length updates on collection
             marks: [
-                BitArray::new(0),                   //strings
-                BitArray::new(0),                   //natives
-                BitArray::new(0),                   //functions
-                BitArray::new(heap.pointers.len()), //objects
+                BitArray::new(0),            //strings
+                BitArray::new(0),            //natives
+                BitArray::new(0),            //functions
+                BitArray::new(heap.count()), //objects
                 BitArray::new(heap.upvalues.count()),
                 BitArray::new(heap.closures.count()),
                 BitArray::new(heap.classes.count()),
-                BitArray::new(0), // not yet used
+                BitArray::new(heap.instances.count()),
             ],
             strings: KeySet::with_capacity(heap.strings.capacity()),
         }
@@ -72,6 +72,7 @@ impl Collector {
             done &= heap.mark(self)
                 && heap.classes.mark(self)
                 && heap.closures.mark(self)
+                && heap.instances.mark(self)
                 && heap.upvalues.mark(self);
             if done {
                 break;
@@ -95,6 +96,7 @@ impl Collector {
         heap.strings
             .sweep(mem::replace(&mut self.strings, KeySet::with_capacity(0)));
         heap.upvalues.sweep(&self.marks[UPVALUES as usize]);
+        heap.instances.sweep(&self.marks[INSTANCES as usize]);
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -107,6 +109,7 @@ where
     Self: Sized,
 {
     fn byte_count(&self) -> usize;
+    fn count(&self) -> usize;
     fn trace(&self, handle: Handle<KIND>, collector: &mut Collector);
     fn sweep(&mut self, marks: &BitArray);
     // indicate that the collector has no more elements of a kind
@@ -161,6 +164,7 @@ pub struct Heap {
     pub upvalues: Upvalues,
     pub closures: Closures,
     pub classes: Classes,
+    pub instances: Instances,
     _byte_count: usize,
     next_gc: usize,
 }
@@ -175,6 +179,7 @@ impl Heap {
             upvalues: Upvalues::new(),
             closures: Closures::new(),
             classes: Classes::new(),
+            instances: Instances::new(),
             _byte_count: 0,
             next_gc: 1 << 20,
         }
@@ -201,30 +206,6 @@ impl Heap {
 
     pub fn get_ref<T: Traceable>(&self, handle: ObjectHandle) -> &T {
         unsafe { self.get_star_mut::<T>(handle).as_ref().unwrap() }
-    }
-
-    pub fn try_ref<T: Traceable>(&self, value: Value) -> Option<&T> {
-        if let Value::Object(handle) = value {
-            if T::KIND == self.kinds[handle.index()] {
-                unsafe { self.get_star_mut::<T>(handle).as_ref() }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    pub fn try_mut<T: Traceable>(&self, value: Value) -> Option<&mut T> {
-        if let Value::Object(handle) = value {
-            if T::KIND == self.kinds[handle.index()] {
-                unsafe { self.get_star_mut::<T>(handle).as_mut() }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
     }
 
     pub fn get_str(&self, handle: StringHandle) -> &str {
@@ -263,18 +244,9 @@ impl Heap {
                 drop(Box::from_raw(ptr));
             },
             Kind::Free => {}
-            Kind::Instance => unsafe {
-                let ptr = self.pointers[i] as *mut Instance;
-                self._byte_count -= &(*ptr).byte_count();
-                drop(Box::from_raw(ptr));
-            },
         }
         self.kinds[i] = Kind::Free;
         self.free.push(ObjectHandle::from(i as u32));
-    }
-
-    pub fn increase_byte_count(&mut self, diff: usize) {
-        self._byte_count += diff;
     }
 
     pub fn intern_copy(&mut self, name: &str) -> StringHandle {
@@ -293,6 +265,7 @@ impl Heap {
             + self.strings.byte_count()
             + self.closures.byte_count()
             + self.classes.byte_count()
+            + self.instances.byte_count()
             > self.next_gc
     }
 
@@ -308,13 +281,6 @@ impl Heap {
                 self,
             ),
             Kind::Free => format!("<free>"),
-            Kind::Instance => {
-                let instance = self.get_ref::<Instance>(handle);
-                format!(
-                    "<{} instance>",
-                    self.classes.get_name(instance.class, &self.strings)
-                )
-            }
         }
     }
 }
@@ -332,7 +298,6 @@ impl Pool<OBJECTS> for Heap {
         match self.kinds[handle.index()] {
             Kind::BoundMethod => self.get_ref::<BoundMethod>(handle).trace(collector),
             Kind::Free => {}
-            Kind::Instance => self.get_ref::<Instance>(handle).trace(collector),
         }
     }
 
@@ -346,5 +311,9 @@ impl Pool<OBJECTS> for Heap {
 
     fn byte_count(&self) -> usize {
         self._byte_count
+    }
+
+    fn count(&self) -> usize {
+        self.pointers.len()
     }
 }

@@ -57,10 +57,6 @@ impl Closures {
             ClosureHandle::from(i)
         }
     }
-
-    pub fn count(&self) -> usize {
-        self.functions.len()
-    }
 }
 
 impl Pool<CLOSURES> for Closures {
@@ -84,5 +80,9 @@ impl Pool<CLOSURES> for Closures {
                 self.free.push(Handle::from(i as u32));
             }
         }
+    }
+
+    fn count(&self) -> usize {
+        self.functions.len()
     }
 }
