@@ -5,8 +5,9 @@ use crate::{
     bound_methods::BoundMethods,
     classes::Classes,
     closures::Closures,
+    functions::Functions,
     instances::Instances,
-    strings::{KeySet, StringHandle, Strings},
+    strings::{KeySet, Strings},
     upvalues::Upvalues,
 };
 
@@ -35,12 +36,13 @@ impl Collector {
             handles: Default::default(),
             // resizeable, resettable arrays, length updates on collection
             marks: [
-                BitArray::new(heap.bound_methods.count()),
-                BitArray::new(heap.instances.count()),
-                BitArray::new(heap.classes.count()),
-                BitArray::new(heap.closures.count()),
-                BitArray::new(heap.upvalues.count()),
+                BitArray::new(),
+                BitArray::new(),
+                BitArray::new(),
+                BitArray::new(),
+                BitArray::new(),
             ],
+            // this is pain
             strings: KeySet::with_capacity(heap.strings.capacity()),
         }
     }
@@ -52,8 +54,27 @@ impl Collector {
     }
 
     fn mark_and_sweep(&mut self, heap: &mut Heap) {
+        #[cfg(feature = "log_gc")]
+        let before = self.byte_count;
+        #[cfg(feature = "log_gc")]
+        {
+            println!("-- gc begin");
+            println!("byte count: {}", before);
+        }
         self.mark(heap);
         self.sweep(heap);
+        #[cfg(feature = "log_gc")]
+        {
+            println!("-- gc end");
+            let after = self.byte_count;
+            println!(
+                "   collected {} byte (from {} to {}) next at {}",
+                before - after,
+                before,
+                after,
+                self.next_gc
+            );
+        }
     }
 
     fn mark(&mut self, heap: &mut Heap) {
@@ -145,55 +166,33 @@ impl<const KIND: u8> From<u32> for Handle<KIND> {
 }
 
 pub struct Heap {
+    pub bound_methods: BoundMethods,
+    pub classes: Classes,
+    pub closures: Closures,
+    pub functions: Functions,
+    pub instances: Instances,
     pub strings: Strings,
     pub upvalues: Upvalues,
-    pub closures: Closures,
-    pub classes: Classes,
-    pub instances: Instances,
-    pub bound_methods: BoundMethods,
     next_gc: usize,
 }
 
 impl Heap {
-    pub fn new(init_size: usize) -> Self {
+    pub fn new() -> Self {
         Self {
-            strings: Strings::with_capacity(init_size),
-            upvalues: Upvalues::new(),
-            closures: Closures::new(),
-            classes: Classes::new(),
-            instances: Instances::new(),
             bound_methods: BoundMethods::new(),
+            classes: Classes::new(),
+            closures: Closures::new(),
+            functions: Functions::new(),
+            instances: Instances::new(),
+            strings: Strings::with_capacity(0),
+            upvalues: Upvalues::new(),
             next_gc: 1 << 20,
         }
     }
 
     pub fn retain(&mut self, mut collector: Collector) {
-        #[cfg(feature = "log_gc")]
-        let before = self.byte_count;
-        #[cfg(feature = "log_gc")]
-        {
-            println!("-- gc begin");
-            println!("byte count: {}", before);
-        }
         collector.mark_and_sweep(self);
         self.next_gc *= 2;
-        #[cfg(feature = "log_gc")]
-        {
-            println!("-- gc end");
-            let after = self.byte_count;
-            println!(
-                "   collected {} byte (from {} to {}) next at {}",
-                before - after,
-                before,
-                after,
-                self.next_gc
-            );
-        }
-    }
-
-    pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> Option<StringHandle> {
-        // todo: count added bytes somehow
-        self.strings.concat(a, b)
     }
 
     pub fn needs_gc(&self) -> bool {

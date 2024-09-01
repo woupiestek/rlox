@@ -4,7 +4,7 @@ use crate::{
     bound_methods::BoundMethodHandle,
     classes::ClassHandle,
     closures::ClosureHandle,
-    functions::{FunctionHandle, Functions},
+    functions::FunctionHandle,
     heap::{Collector, Heap},
     instances::InstanceHandle,
     natives::NativeHandle,
@@ -84,18 +84,20 @@ impl Value {
         }
     }
 
-    pub fn to_string(&self, heap: &Heap, functions: &Functions) -> String {
+    pub fn to_string(&self, heap: &Heap) -> String {
         match self {
             Value::False => format!("false"),
             Value::Nil => format!("nil"),
             Value::Number(a) => format!("{}", a),
-            Value::BoundMethod(a) => heap.bound_methods.to_string(*a, heap, functions),
+            Value::BoundMethod(a) => heap.bound_methods.to_string(*a, heap),
             Value::True => format!("true"),
             Value::Native(_) => format!("<native function>"),
             Value::String(a) => heap.strings.get(*a).unwrap().to_owned(),
-            Value::Function(a) => functions.to_string(*a, heap),
+            Value::Function(a) => heap.functions.to_string(*a, heap),
             Value::StackRef(i) => format!("&{}", i),
-            Value::Closure(a) => functions.to_string(heap.closures.function_handle(*a), heap),
+            Value::Closure(a) => heap
+                .functions
+                .to_string(heap.closures.function_handle(*a), heap),
             Value::Class(a) => heap.classes.to_string(*a, &heap.strings),
             Value::Instance(a) => heap.instances.to_string(*a, heap),
         }

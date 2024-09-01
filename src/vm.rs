@@ -6,7 +6,7 @@ use crate::{
     closures::ClosureHandle,
     common::U8_COUNT,
     compiler::compile,
-    functions::{FunctionHandle, Functions},
+    functions::FunctionHandle,
     heap::{Collector, Heap},
     natives::Natives,
     op::Op,
@@ -44,16 +44,13 @@ pub struct VM {
     globals: Map<Value>,
     init_string: StringHandle,
     heap: Heap,
-    functions: Functions,
     natives: Natives,
 }
 
 impl VM {
-    pub fn new(mut heap: Heap) -> Self {
-        let init_string = {
-            let this = &mut heap;
-            this.strings.put("init")
-        };
+    pub fn new() -> Self {
+        let mut heap = Heap::new();
+        let init_string = heap.strings.put("init");
         let mut s = Self {
             values: [Value::Nil; STACK_SIZE],
             stack_top: 0,
@@ -61,7 +58,6 @@ impl VM {
             globals: Map::new(),
             init_string,
             heap,
-            functions: Functions::new(),
             natives: Natives::new(),
         };
         s.define_native("clock", clock_native);
@@ -113,7 +109,7 @@ impl VM {
         {
             println!("collect init string");
         }
-        self.functions.trace_roots(&mut collector);
+        self.heap.functions.trace_roots(&mut collector);
         collector.push(self.init_string);
         collector
     }
@@ -123,10 +119,7 @@ impl VM {
         name: &str,
         native_fn: fn(args: &[Value]) -> Result<Value, String>,
     ) {
-        let key = {
-            let this = &mut self.heap;
-            this.strings.put(name)
-        };
+        let key = self.heap.strings.put(name);
         // are the protections still needed?
         self.push(Value::from(key));
         self.globals
@@ -150,7 +143,7 @@ impl VM {
 
     fn call(&mut self, closure: ClosureHandle, arity: u8) -> Result<(), String> {
         let handle = self.heap.closures.function_handle(closure);
-        let expected = self.functions.arity(handle);
+        let expected = self.heap.functions.arity(handle);
         if arity != expected {
             return err!("Expected {} arguments but got {}.", expected, arity);
         }
@@ -188,7 +181,7 @@ impl VM {
             Value::Closure(ch) => return self.call(ch, arity),
             _ => err!(
                 "Can only call functions and classes, not '{}'",
-                callee.to_string(&self.heap, &self.functions)
+                callee.to_string(&self.heap)
             ),
         }
     }
@@ -234,7 +227,8 @@ impl VM {
                 } else {
                     err!(
                         "Cannot bind method {} to {}",
-                        self.functions
+                        self.heap
+                            .functions
                             .to_string(self.heap.closures.function_handle(method), &self.heap),
                         self.heap.strings.get(name).unwrap()
                     )
@@ -255,14 +249,14 @@ impl VM {
 
     fn run(&mut self) -> Result<(), String> {
         loop {
-            let instruction = Op::from(self.call_stack.read_byte(&self.functions, &self.heap));
+            let instruction = Op::from(self.call_stack.read_byte(&self.heap));
             #[cfg(feature = "trace")]
             {
                 print!("stack: ");
                 for i in 0..self.stack_top {
                     print!(
                         "{};",
-                        &self.values[i].to_string(&self.heap, &self.functions)
+                        &self.values[i].to_string(&self.heap, &self.heap.functions)
                     );
                 }
                 println!("");
@@ -275,12 +269,12 @@ impl VM {
                         self.globals
                             .get(k)
                             .unwrap()
-                            .to_string(&self.heap, &self.functions)
+                            .to_string(&self.heap, &self.heap.functions)
                     )
                 }
                 println!("");
 
-                self.call_stack.print_trace(&self.functions, &self.heap);
+                self.call_stack.print_trace(&self.heap);
                 println!("op code: {:?}", instruction);
                 println!();
             }
@@ -288,7 +282,7 @@ impl VM {
                 Op::Add => {
                     if let &[a, b] = self.tail(2)? {
                         if let (Value::String(a), Value::String(b)) = (a, b) {
-                            let c = self.heap.concat(a, b).ok_or("Missing strings")?;
+                            let c = self.heap.strings.concat(a, b).ok_or("Missing strings")?;
                             self.stack_top -= 2;
                             self.push(Value::String(c));
                             continue;
@@ -302,17 +296,17 @@ impl VM {
 
                         return err!(
                             "Operands must be either numbers or strings, found '{}' and '{}'",
-                            a.to_string(&self.heap, &self.functions),
-                            b.to_string(&self.heap, &self.functions),
+                            a.to_string(&self.heap),
+                            b.to_string(&self.heap),
                         );
                     }
                 }
                 Op::Call => {
-                    let arity = self.call_stack.read_byte(&self.functions, &self.heap);
+                    let arity = self.call_stack.read_byte(&self.heap);
                     self.call_value(self.peek(arity as usize), arity)?;
                 }
                 Op::Class => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     self.collect_garbage_if_needed();
                     let new_class = self.heap.classes.new_class(name);
                     self.push(Value::Class(new_class));
@@ -322,18 +316,18 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = self
-                        .call_stack
-                        .read_constant(&self.functions, &self.heap)
-                        .as_function()?;
+                    let function = self.call_stack.read_constant(&self.heap).as_function()?;
                     // garbage collection risks?
                     self.collect_garbage_if_needed();
-                    let closure = self.heap.closures.new_closure(function, &self.functions);
+                    let closure = self
+                        .heap
+                        .closures
+                        .new_closure(function, &self.heap.functions);
                     self.push(Value::Closure(closure));
-                    let capacity = self.functions.upvalue_count(function);
+                    let capacity = self.heap.functions.upvalue_count(function);
                     for i in 0..capacity {
-                        let is_local = self.call_stack.read_byte(&self.functions, &self.heap);
-                        let index = self.call_stack.read_byte(&self.functions, &self.heap) as usize;
+                        let is_local = self.call_stack.read_byte(&self.heap);
+                        let index = self.call_stack.read_byte(&self.heap) as usize;
                         let uh = if is_local > 0 {
                             let location = self.call_stack.slot() + index;
                             self.capture_upvalue(location)
@@ -344,11 +338,11 @@ impl VM {
                     }
                 }
                 Op::Constant => {
-                    let value = self.call_stack.read_constant(&self.functions, &self.heap);
+                    let value = self.call_stack.read_constant(&self.heap);
                     self.push(value)
                 }
                 Op::DefineGlobal => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     self.globals.set(name, self.peek(0));
                     self.pop();
                 }
@@ -360,7 +354,7 @@ impl VM {
                 }
                 Op::False => self.push(Value::False),
                 Op::GetGlobal => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     if let Some(value) = self.globals.get(name) {
                         self.push(value);
                     } else {
@@ -371,13 +365,13 @@ impl VM {
                     }
                 }
                 Op::GetLocal => {
-                    let index = self.call_stack.slot()
-                        + self.call_stack.read_byte(&self.functions, &self.heap) as usize;
+                    let index =
+                        self.call_stack.slot() + self.call_stack.read_byte(&self.heap) as usize;
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
                     let handle = self.peek(0).as_instance()?;
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
@@ -386,7 +380,7 @@ impl VM {
                     }
                 }
                 Op::GetSuper => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     let super_class = self.pop().as_class()?;
                     self.bind_method(super_class, name)?;
                 }
@@ -394,7 +388,7 @@ impl VM {
                     let value = self
                         .heap
                         .upvalues
-                        .get(self.call_stack.read_upvalue(&self.functions, &self.heap)?);
+                        .get(self.call_stack.read_upvalue(&self.heap)?);
                     if let Value::StackRef(location) = value {
                         self.push(self.values[location as usize]);
                     } else {
@@ -413,22 +407,22 @@ impl VM {
                     }
                 }
                 Op::Invoke => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
-                    let arity = self.call_stack.read_byte(&self.functions, &self.heap);
+                    let name = self.call_stack.read_string(&self.heap)?;
+                    let arity = self.call_stack.read_byte(&self.heap);
                     self.invoke(name, arity)?;
                 }
-                Op::Jump => self.call_stack.jump_forward(&self.functions, &self.heap),
+                Op::Jump => self.call_stack.jump_forward(&self.heap),
                 Op::JumpIfFalse => {
                     if self.peek(0).is_falsey() {
-                        self.call_stack.jump_forward(&self.functions, &self.heap);
+                        self.call_stack.jump_forward(&self.heap);
                     } else {
                         self.call_stack.skip();
                     }
                 }
                 Op::Less => binary_op!(self, a, b, a < b),
-                Op::Loop => self.call_stack.jump_back(&self.functions, &self.heap),
+                Op::Loop => self.call_stack.jump_back(&self.heap),
                 Op::Method => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     self.define_method(name)?
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
@@ -447,7 +441,7 @@ impl VM {
                 Op::Pop => {
                     self.pop();
                 }
-                Op::Print => println!("{}", self.pop().to_string(&self.heap, &self.functions)),
+                Op::Print => println!("{}", self.pop().to_string(&self.heap)),
                 Op::Return => {
                     let result = self.pop();
                     let location = self.call_stack.slot();
@@ -461,7 +455,7 @@ impl VM {
                     self.push(result);
                 }
                 Op::SetGlobal => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
+                    let name = self.call_stack.read_string(&self.heap)?;
                     if !self.globals.set(name, self.peek(0)) {
                         self.globals.delete(name);
                         return err!(
@@ -471,32 +465,22 @@ impl VM {
                     }
                 }
                 Op::SetLocal => {
-                    let index = self.call_stack.read_byte(&self.functions, &self.heap) as usize;
+                    let index = self.call_stack.read_byte(&self.heap) as usize;
                     self.values[self.call_stack.slot() + index] = self.peek(0);
                 }
                 Op::SetProperty => {
                     if let &[Value::Instance(a), b] = self.tail(2)? {
-                        // let instance = self
-                        //     .heap
-                        //     .try_mut::<Instance>(a)
-                        //     .ok_or(String::from("Only instances have fields."))?;
-                        // let before_count = instance.byte_count();
                         self.heap.instances.set_property(
                             a,
-                            self.call_stack.read_string(&self.functions, &self.heap)?,
+                            self.call_stack.read_string(&self.heap)?,
                             b,
                         );
-                        // instance
-                        //     .properties
-                        //     .set(self.call_stack.read_string(&self.functions, &self.heap)?, b);
-                        // self.heap
-                        //     .increase_byte_count(instance.byte_count() - before_count);
                         self.stack_top -= 2;
                         self.push(b);
                     }
                 }
                 Op::SetUpvalue => {
-                    let upvalue = self.call_stack.read_upvalue(&self.functions, &self.heap)?;
+                    let upvalue = self.call_stack.read_upvalue(&self.heap)?;
                     let value = self.heap.upvalues.get(upvalue);
                     if let Value::StackRef(location) = value {
                         self.values[location as usize] = self.peek(0)
@@ -506,8 +490,8 @@ impl VM {
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
-                    let name = self.call_stack.read_string(&self.functions, &self.heap)?;
-                    let arity = self.call_stack.read_byte(&self.functions, &self.heap);
+                    let name = self.call_stack.read_string(&self.heap)?;
+                    let arity = self.call_stack.read_byte(&self.heap);
                     let super_class = self.pop().as_class()?;
                     self.invoke_from_class(super_class, name, arity)?;
                 }
@@ -530,22 +514,21 @@ impl VM {
     }
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
-        self.functions = compile(source, &mut self.heap)?;
+        compile(source, &mut self.heap)?;
         #[cfg(feature = "trace")]
         {
             use crate::debug::Disassembler;
-            Disassembler::disassemble(&self.functions, &self.heap);
+            Disassembler::disassemble(&self.heap);
         }
         let closure = self
             .heap
             .closures
-            .new_closure(FunctionHandle::MAIN, &self.functions);
+            .new_closure(FunctionHandle::MAIN, &self.heap.functions);
         self.push(Value::Closure(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
-            self.call_stack
-                .print_stack_trace(&self.functions, &self.heap);
+            self.call_stack.print_stack_trace(&self.heap);
             self.reset_stack();
             err!("Runtime error!")
         } else {
@@ -560,12 +543,12 @@ mod tests {
 
     #[test]
     fn no_error_on_init() {
-        VM::new(Heap::new(1 << 8));
+        VM::new();
     }
 
     #[test]
     fn interpret_empty_string() {
-        let mut vm = VM::new(Heap::new(1 << 8));
+        let mut vm = VM::new();
         assert!(vm.interpret("").is_ok())
     }
 
@@ -574,7 +557,7 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -582,7 +565,7 @@ mod tests {
     #[test]
     fn boolean_logic() {
         let test = "print \"hi\" or 2; // \"hi\".";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -597,7 +580,7 @@ mod tests {
             temp = a;
             a = b;
         }";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -608,7 +591,7 @@ mod tests {
         for (var b = 0; b < 10; b = b + 1) {
             print \"test\";
         }";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -622,7 +605,7 @@ mod tests {
             print b;
             temp = b;
         }";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -641,7 +624,7 @@ mod tests {
             showA();
         }
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -655,7 +638,7 @@ mod tests {
           }
           for (var i = 0; i < 20; i = i + 1) { print fib(i); }
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -666,7 +649,7 @@ mod tests {
         if (true) print \"less\";
         print \"more\";
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -685,7 +668,7 @@ mod tests {
         var counter = makeCounter();
         counter();
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -703,7 +686,7 @@ mod tests {
             }
         }
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -714,7 +697,7 @@ mod tests {
         class Bagel { eat() { print \"Crunch crunch crunch!\"; } }
         var bagel = Bagel();
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -724,7 +707,7 @@ mod tests {
         let test = "
         print clock();
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
@@ -734,7 +717,7 @@ mod tests {
         let test = "
         print \"x\" == \"x\";
         ";
-        let mut vm = VM::new(Heap::new(0));
+        let mut vm = VM::new();
         let result = vm.interpret(test);
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }

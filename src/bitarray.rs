@@ -1,25 +1,33 @@
+#[derive(Default)]
 pub struct BitArray {
-    length: usize,
-    data: Box<[u8]>,
+    data: Vec<u8>,
 }
 
 impl BitArray {
-    pub fn new(length: usize) -> Self {
+    pub fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+    pub fn with_capacity(length: usize) -> Self {
         Self {
-            length,
-            data: vec![0; (length + 7) / 8].into_boxed_slice(),
+            data: Vec::with_capacity((length + 7) / 8),
         }
     }
     pub fn get(&self, index: usize) -> bool {
-        assert!(index < self.length, "Index out of bounds");
+        if index / 8 >= self.data.len() {
+            return false;
+        }
         self.data[index / 8] & (1 << (index & 7)) != 0
     }
     pub fn add(&mut self, index: usize) {
-        assert!(index < self.length, "Index out of bounds");
+        while index / 8 >= self.data.len() {
+            self.data.push(0);
+        }
         self.data[index / 8] |= 1 << (index & 7)
     }
     pub fn remove(&mut self, index: usize) {
-        assert!(index < self.length, "Index out of bounds");
+        if index / 8 >= self.data.len() {
+            return;
+        }
         self.data[index / 8] &= !(1 << (index & 7))
     }
 }
@@ -30,7 +38,7 @@ mod tests {
 
     #[test]
     fn primes() {
-        let mut bit_array = BitArray::new(10);
+        let mut bit_array = BitArray::with_capacity(10);
         bit_array.add(2);
         bit_array.add(3);
         bit_array.add(5);

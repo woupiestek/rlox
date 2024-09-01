@@ -1,7 +1,6 @@
 use crate::{
     bitarray::BitArray,
     closures::ClosureHandle,
-    functions::Functions,
     heap::{Collector, Handle, Heap, Kind, Pool},
     instances::InstanceHandle,
 };
@@ -44,13 +43,8 @@ impl BoundMethods {
         self.methods[handle.index()]
     }
 
-    pub fn to_string(
-        &self,
-        handle: BoundMethodHandle,
-        heap: &Heap,
-        functions: &Functions,
-    ) -> String {
-        functions.to_string(
+    pub fn to_string(&self, handle: BoundMethodHandle, heap: &Heap) -> String {
+        heap.functions.to_string(
             heap.closures.function_handle(self.methods[handle.index()]),
             heap,
         )

@@ -1,6 +1,6 @@
 use crate::{
     closures::ClosureHandle,
-    functions::{Chunk, Functions},
+    functions::Chunk,
     heap::{Collector, Heap},
     strings::StringHandle,
     upvalues::UpvalueHandle,
@@ -40,35 +40,30 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         Ok(())
     }
 
-    fn get_chunk<'b>(&self, functions: &'b Functions, heap: &Heap) -> &'b Chunk {
+    fn get_chunk<'b>(&self, heap: &'b Heap) -> &'b Chunk {
         let fi = heap
             .closures
             .function_handle(self.closures[self.top].unwrap());
-        functions.chunk_ref(fi)
+        heap.functions.chunk_ref(fi)
     }
 
-    pub fn read_byte(&mut self, functions: &Functions, heap: &Heap) -> u8 {
+    pub fn read_byte(&mut self, heap: &Heap) -> u8 {
         self.ips[self.top] += 1;
-        self.get_chunk(functions, heap)
-            .read_byte(self.ips[self.top] as usize)
+        self.get_chunk(heap).read_byte(self.ips[self.top] as usize)
     }
 
-    pub fn read_constant(&mut self, functions: &Functions, heap: &Heap) -> Value {
+    pub fn read_constant(&mut self, heap: &Heap) -> Value {
         self.ips[self.top] += 1;
-        self.get_chunk(functions, heap)
+        self.get_chunk(heap)
             .read_constant(self.ips[self.top] as usize)
     }
 
-    pub fn read_string(
-        &mut self,
-        functions: &Functions,
-        heap: &Heap,
-    ) -> Result<StringHandle, String> {
-        let value = self.read_constant(functions, heap);
+    pub fn read_string(&mut self, heap: &Heap) -> Result<StringHandle, String> {
+        let value = self.read_constant(heap);
         if let Value::String(handle) = value {
             Ok(handle)
         } else {
-            err!("'{}' is not a string", value.to_string(heap, functions))
+            err!("'{}' is not a string", value.to_string(heap))
         }
     }
 
@@ -79,12 +74,8 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn read_upvalue(
-        &mut self,
-        functions: &Functions,
-        heap: &Heap,
-    ) -> Result<UpvalueHandle, String> {
-        let index = self.read_byte(functions, heap) as usize;
+    pub fn read_upvalue(&mut self, heap: &Heap) -> Result<UpvalueHandle, String> {
+        let index = self.read_byte(heap) as usize;
         self.upvalue(index, heap)
     }
 
@@ -92,15 +83,15 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         self.slots[self.top] as usize
     }
 
-    pub fn jump_forward(&mut self, functions: &Functions, heap: &Heap) {
+    pub fn jump_forward(&mut self, heap: &Heap) {
         self.ips[self.top] += self
-            .get_chunk(functions, heap)
+            .get_chunk(heap)
             .read_short(self.ips[self.top] as usize + 1) as i32;
     }
 
-    pub fn jump_back(&mut self, functions: &Functions, heap: &Heap) {
+    pub fn jump_back(&mut self, heap: &Heap) {
         self.ips[self.top] -= self
-            .get_chunk(functions, heap)
+            .get_chunk(heap)
             .read_short(self.ips[self.top] as usize + 1) as i32;
     }
 
@@ -124,29 +115,28 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
         }
     }
 
-    pub fn print_stack_trace(&self, functions: &Functions, heap: &Heap) {
+    pub fn print_stack_trace(&self, heap: &Heap) {
         for i in self.top..STACK_SIZE {
             if let Some(closure) = self.closures[i as usize] {
                 let fh = heap.closures.function_handle(closure);
                 eprintln!(
                     "  at {} line {}",
-                    functions.to_string(fh, heap),
-                    self.get_chunk(functions, heap)
-                        .get_line(self.ips[i as usize])
+                    heap.functions.to_string(fh, heap),
+                    self.get_chunk(heap).get_line(self.ips[i as usize])
                 )
             }
         }
     }
 
     #[cfg(feature = "trace")]
-    pub fn print_trace(&self, functions: &Functions, heap: &Heap) {
+    pub fn print_trace(&self, heap: &Heap) {
         let ip = self.ips[self.top];
         println!("ip: {}", ip);
         let fh = heap
-            .get_ref::<Closure>(self.closures[self.top].unwrap())
-            .function;
-        println!("{}:", functions.to_string(fh, heap));
-        let chunk = functions.chunk_ref(fh);
+            .closures
+            .function_handle(self.closures[self.top].unwrap());
+        println!("{}:", heap.functions.to_string(fh, heap));
+        let chunk = heap.functions.chunk_ref(fh);
         println!("line: {}", chunk.get_line(ip));
     }
 }

@@ -1,7 +1,5 @@
 use std::{env, fs, io, process::exit};
 
-use heap::Heap;
-
 use crate::vm::VM;
 
 #[cfg(feature = "trace")]
@@ -10,23 +8,19 @@ mod debug;
 #[macro_use]
 mod common;
 mod bitarray;
-mod compiler;
-mod functions;
-mod op;
-mod strings;
-// mod loxtr;
-// mod table;
 mod bound_methods;
+mod call_stack;
 mod classes;
 mod closures;
+mod compiler;
+mod functions;
+mod heap;
 mod instances;
 mod natives;
-mod upvalues;
-
-mod heap;
-// mod memory;
-mod call_stack;
+mod op;
 mod scanner;
+mod strings;
+mod upvalues;
 mod values;
 mod vm;
 
@@ -58,7 +52,7 @@ fn run_file(file_path: &str, vm: &mut VM) {
 }
 
 fn main() {
-    let mut vm = VM::new(Heap::new(1 << 12));
+    let mut vm = VM::new();
     let args: Vec<String> = env::args().collect();
     match args.len() {
         1 => repl(&mut vm),

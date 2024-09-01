@@ -12,6 +12,21 @@ this requires a traversal, Than can be use to insert more efficiently afterward.
 New garbage collection causes duplicated code. No solution for this yet... Maybe
 use the KINDs and arrays instead of separate fields.
 
+### data oriented rlox: transform complete
+
+All unsafe code was booted from the project, since everyhwere memory pools are
+used implemented on top of vec. That is a big win, but I doubt this is fast. But
+maybe first look to clean up code.
+
+Looking forward:
+- put functions in heap
+- less code duplication
+- 'maps' instead of 'map'
+- buddy allocator for arrays and maps
+- other solutions for storing and finding open upvalues
+- keep garbage collector around, just refresh
+- test performace
+
 ## 2024-08-31
 
 ### new garbage collections

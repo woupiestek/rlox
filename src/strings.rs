@@ -218,6 +218,7 @@ pub struct Strings {
     key_set: KeySet,
     generations: Box<[u8]>,
     values: Box<[Option<Box<str>>]>,
+    str_byte_count: usize,
 }
 
 impl Strings {
@@ -226,6 +227,7 @@ impl Strings {
             key_set: KeySet::with_capacity(capacity),
             values: vec![None; capacity].into_boxed_slice(),
             generations: vec![0; capacity].into_boxed_slice(),
+            str_byte_count: 0,
         }
     }
 
@@ -262,6 +264,7 @@ impl Strings {
                 self.key_set.keys[j] = handle;
                 self.generations[j] = generation;
                 self.key_set.count += 1;
+                self.str_byte_count += str.len();
                 self.values[j] = Some(Box::from(str));
                 return handle;
             }
@@ -348,7 +351,7 @@ impl Strings {
 
     pub fn sweep(&mut self, key_set: KeySet) {
         let capacity = key_set.keys.len();
-        let mut values = vec![None; capacity].into_boxed_slice();
+        let mut values: Box<[Option<Box<str>>]> = vec![None; capacity].into_boxed_slice();
         let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
         for i in 0..self.key_set.keys.len() {
             let key = self.key_set.keys[i];
@@ -359,6 +362,8 @@ impl Strings {
             if found {
                 values[j] = self.values[i].take();
                 generations[j] = self.generations[i];
+            } else {
+                self.str_byte_count -= self.values[i].as_ref().unwrap().len()
             }
         }
         self.key_set = key_set;
@@ -369,7 +374,7 @@ impl Strings {
     const ENTRY_SIZE: usize = (mem::size_of::<Option<Box<str>>>() + mem::size_of::<StringHandle>());
 
     pub fn byte_count(&self) -> usize {
-        self.capacity() * Self::ENTRY_SIZE
+        self.capacity() * Self::ENTRY_SIZE + self.str_byte_count
     }
 }
 

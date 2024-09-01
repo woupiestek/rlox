@@ -2,7 +2,7 @@ use std::{mem, time::Instant, usize};
 
 use crate::{
     bitarray::BitArray,
-    functions::{Chunk, FunctionHandle, Functions},
+    functions::{Chunk, FunctionHandle},
     heap::Heap,
     op::Op,
     scanner::{Scanner, Token, TokenType},
@@ -64,17 +64,17 @@ struct CompileData {
 
 impl CompileData {
     fn new(function_type: FunctionType, function: FunctionHandle, this_name: StringHandle) -> Self {
-        let mut initialized = BitArray::new(256);
+        let mut initialized = BitArray::with_capacity(256);
         initialized.add(0); // first local
         Self {
             enclosing: None,
             function_type,
             function,
-            locals_captured: BitArray::new(256),
+            locals_captured: BitArray::with_capacity(256),
             locals_initialized: initialized,
             locals: vec![this_name],
             scopes: Vec::new(),
-            upvalues_local: BitArray::new(256),
+            upvalues_local: BitArray::with_capacity(256),
             upvalues: Vec::new(),
         }
     }
@@ -166,7 +166,6 @@ impl CompileData {
 struct Compiler<'src, 'hp> {
     data: Box<CompileData>,
     source: Source<'src>,
-    target: Functions,
     heap: &'hp mut Heap,
     this_name: StringHandle,
     super_name: StringHandle,
@@ -182,15 +181,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             let this = &mut *heap;
             this.strings.put("super")
         };
-        let mut target = Functions::new();
         Self {
             data: Box::from(CompileData::new(
                 function_type,
-                target.new_function(None),
+                heap.functions.new_function(None),
                 this_name,
             )),
             source,
-            target,
             heap,
             this_name,
             super_name,
@@ -199,12 +196,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn chunk_ref(&self) -> &Chunk {
         let fi = self.data.function;
-        self.target.chunk_ref(fi)
+        self.heap.functions.chunk_ref(fi)
     }
 
     fn chunk_mut(&mut self) -> &mut Chunk {
         let fi = self.data.function;
-        self.target.chunk_mut(fi)
+        self.heap.functions.chunk_mut(fi)
     }
 
     fn emit_return(&mut self) {
@@ -582,7 +579,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                self.target.incr_arity(self.data.function)?;
+                self.heap.functions.incr_arity(self.data.function)?;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index)?;
                 if !self.source.match_type(TokenType::Comma) {
@@ -620,7 +617,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             let this = &mut *self.heap;
             this.strings.put(name)
         };
-        let function = self.target.new_function(Some(name));
+        let function = self.heap.functions.new_function(Some(name));
         // do the head of the linked list thing
         let enclosing = mem::replace(
             &mut self.data,
@@ -635,7 +632,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let enclosing = self.data.enclosing.take().unwrap();
         let enclosed = mem::replace(&mut self.data, enclosing);
 
-        self.target
+        self.heap
+            .functions
             .set_upvalue_count(function, enclosed.upvalues.len() as u8);
         self.emit_constant_op(Op::Closure, Value::from(function))?;
         let line = self.line_and_column().0;
@@ -927,13 +925,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn script(mut self) -> Result<Functions, String> {
+    fn script(mut self) -> Result<(), String> {
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
         self.emit_return();
         match self.source.error_count {
-            0 => Ok(self.target),
+            0 => Ok(()),
             1 => err!("There was a compile time error."),
             more => err!("There were {} compile time errors.", more),
         }
@@ -967,7 +965,7 @@ impl<'src> Source<'src> {
             scanner,
             current,
             previous: Token(TokenType::Begin, usize::MAX),
-            has_super: BitArray::new(256),
+            has_super: BitArray::with_capacity(256),
             class_depth: 0,
             error_count: 0,
         }
@@ -1027,16 +1025,16 @@ impl<'src> Source<'src> {
     }
 }
 
-pub fn compile(source: &str, heap: &mut Heap) -> Result<Functions, String> {
+pub fn compile(source: &str, heap: &mut Heap) -> Result<(), String> {
     let start = Instant::now();
     let source = Source::new(source);
     let compiler = Compiler::new(FunctionType::Script, source, heap);
-    let byte_code = compiler.script()?;
+    compiler.script()?;
     println!(
         "Compilation finished in {} ns.",
         Instant::now().duration_since(start).as_nanos(),
     );
-    Ok(byte_code)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1066,7 +1064,7 @@ mod tests {
 
     #[test]
     fn compile_empty_string() {
-        let result = compile("", &mut Heap::new(0));
+        let result = compile("", &mut Heap::new());
         assert!(result.is_ok());
     }
 
@@ -1085,7 +1083,7 @@ mod tests {
             print b;
             print c;
           }";
-        let result = compile(test, &mut Heap::new(0));
+        let result = compile(test, &mut Heap::new());
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 
@@ -1103,7 +1101,7 @@ mod tests {
           
           print add; // \"<fn add>\".
           ";
-        let result = compile(test, &mut Heap::new(0));
+        let result = compile(test, &mut Heap::new());
         assert!(result.is_ok());
     }
 
@@ -1121,7 +1119,7 @@ mod tests {
         }
         var a = 1;
         ";
-        let result = compile(test, &mut Heap::new(0));
+        let result = compile(test, &mut Heap::new());
         assert!(result.is_ok());
     }
 
@@ -1130,7 +1128,7 @@ mod tests {
         let test = "var a = 1;
         var b = 2;
         print a + b;";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1139,7 +1137,7 @@ mod tests {
     #[test]
     fn printing() {
         let test = "print \"hi\"; // \"hi\".";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1148,7 +1146,7 @@ mod tests {
     #[test]
     fn boolean_logic() {
         let test = "print \"hi\" or 2; // \"hi\".";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1164,7 +1162,7 @@ mod tests {
             temp = a;
             a = b;
         }";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1176,7 +1174,7 @@ mod tests {
         for (var b = 0; b < 10; b = b + 1) {
             print \"test\";
         }";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1185,7 +1183,7 @@ mod tests {
     #[test]
     fn identity_function() {
         let test = "fun id(x) { return x; }";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1206,7 +1204,7 @@ mod tests {
           
           add(1, 2, 3);
         ";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1222,7 +1220,7 @@ mod tests {
             }
           }
                   ";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1252,7 +1250,7 @@ mod tests {
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
         a;a;a;a; a;a;a;a; a;a;a;a; a;a;a;a;
         ";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1269,7 +1267,7 @@ mod tests {
         }
         B.f(\"hello\");
         ";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
@@ -1289,7 +1287,7 @@ mod tests {
         var counter = makeCounter();
         counter();
         ";
-        let mut heap = Heap::new(0);
+        let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         disassemble!(&result.unwrap(), &heap);
