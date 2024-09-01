@@ -278,12 +278,15 @@ impl<'src> Scanner<'src> {
         }
     }
 
+    fn token(&self, typ: TokenType) -> Token {
+        Token(typ, self.token_start)
+    }
+
     fn identifier(&mut self) -> Token {
         while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
             self.advance();
         }
-
-        Token(self.identifier_type(), self.token_start)
+        self.token(self.identifier_type())
     }
 
     fn number(&mut self) -> Token {
@@ -296,28 +299,16 @@ impl<'src> Scanner<'src> {
                 self.advance();
             }
         }
-        {
-            let this = &self;
-            let typ = TokenType::Number;
-            Token(typ, this.token_start)
-        }
+        self.token(TokenType::Number)
     }
 
     fn string(&mut self) -> Token {
         loop {
             if self.is_at_end() {
-                return {
-                    let this = &self;
-                    let typ = TokenType::EndlessString;
-                    Token(typ, this.token_start)
-                };
+                return self.token(TokenType::EndlessString);
             }
             if self.advance() == b'"' {
-                return {
-                    let this = &self;
-                    let typ = TokenType::String;
-                    Token(typ, this.token_start)
-                };
+                return self.token(TokenType::String);
             }
         }
     }
@@ -326,11 +317,7 @@ impl<'src> Scanner<'src> {
         self.skip_whitespace();
         self.token_start = self.current;
         if self.is_at_end() {
-            return {
-                let this = &self;
-                let typ = TokenType::End;
-                Token(typ, this.token_start)
-            };
+            return self.token(TokenType::End);
         }
         let ch = self.advance();
         if ch.is_ascii_digit() {
@@ -340,127 +327,47 @@ impl<'src> Scanner<'src> {
             return self.identifier();
         }
         match ch {
-            b'(' => {
-                let this = &self;
-                let typ = TokenType::LeftParen;
-                Token(typ, this.token_start)
-            }
-            b')' => {
-                let this = &self;
-                let typ = TokenType::RightParen;
-                Token(typ, this.token_start)
-            }
-            b'{' => {
-                let this = &self;
-                let typ = TokenType::LeftBrace;
-                Token(typ, this.token_start)
-            }
-            b'}' => {
-                let this = &self;
-                let typ = TokenType::RightBrace;
-                Token(typ, this.token_start)
-            }
-            b';' => {
-                let this = &self;
-                let typ = TokenType::Semicolon;
-                Token(typ, this.token_start)
-            }
-            b',' => {
-                let this = &self;
-                let typ = TokenType::Comma;
-                Token(typ, this.token_start)
-            }
-            b'.' => {
-                let this = &self;
-                let typ = TokenType::Dot;
-                Token(typ, this.token_start)
-            }
-            b'-' => {
-                let this = &self;
-                let typ = TokenType::Minus;
-                Token(typ, this.token_start)
-            }
-            b'+' => {
-                let this = &self;
-                let typ = TokenType::Plus;
-                Token(typ, this.token_start)
-            }
-            b'/' => {
-                let this = &self;
-                let typ = TokenType::Slash;
-                Token(typ, this.token_start)
-            }
-            b'*' => {
-                let this = &self;
-                let typ = TokenType::Star;
-                Token(typ, this.token_start)
-            }
+            b'(' => self.token(TokenType::LeftParen),
+            b')' => self.token(TokenType::RightParen),
+            b'{' => self.token(TokenType::LeftBrace),
+            b'}' => self.token(TokenType::RightBrace),
+            b';' => self.token(TokenType::Semicolon),
+            b',' => self.token(TokenType::Comma),
+            b'.' => self.token(TokenType::Dot),
+            b'-' => self.token(TokenType::Minus),
+            b'+' => self.token(TokenType::Plus),
+            b'/' => self.token(TokenType::Slash),
+            b'*' => self.token(TokenType::Star),
             b'!' => {
                 if self.match_eq() {
-                    {
-                        let this = &self;
-                        let typ = TokenType::BangEqual;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::BangEqual)
                 } else {
-                    {
-                        let this = &self;
-                        let typ = TokenType::Bang;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::Bang)
                 }
             }
             b'=' => {
                 if self.match_eq() {
-                    {
-                        let this = &self;
-                        let typ = TokenType::EqualEqual;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::EqualEqual)
                 } else {
-                    {
-                        let this = &self;
-                        let typ = TokenType::Equal;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::Equal)
                 }
             }
             b'<' => {
                 if self.match_eq() {
-                    {
-                        let this = &self;
-                        let typ = TokenType::LessEqual;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::LessEqual)
                 } else {
-                    {
-                        let this = &self;
-                        let typ = TokenType::Less;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::Less)
                 }
             }
             b'>' => {
                 if self.match_eq() {
-                    {
-                        let this = &self;
-                        let typ = TokenType::GreaterEqual;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::GreaterEqual)
                 } else {
-                    {
-                        let this = &self;
-                        let typ = TokenType::Greater;
-                        Token(typ, this.token_start)
-                    }
+                    self.token(TokenType::Greater)
                 }
             }
             b'"' => self.string(),
-            _ => {
-                let this = &self;
-                let typ = TokenType::BadTokenStart;
-                Token(typ, this.token_start)
-            }
+            _ => self.token(TokenType::BadTokenStart),
         }
     }
 }

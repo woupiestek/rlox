@@ -70,7 +70,9 @@ impl VM {
     }
 
     fn close_upvalues(&mut self, location: usize) {
-        self.heap.upvalues.close(location as u16, &self.values);
+        self.heap
+            .upvalues
+            .close_upvalues(location as u16, &self.values);
     }
 
     fn collect_garbage_if_needed(&mut self) {

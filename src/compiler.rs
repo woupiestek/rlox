@@ -1,4 +1,4 @@
-use std::{mem, time::Instant, usize};
+use std::time::Instant;
 
 use crate::{
     bitarray::BitArray,
@@ -51,7 +51,6 @@ enum FunctionType {
 }
 
 struct CompileData {
-    enclosing: Option<Box<CompileData>>,
     function_type: FunctionType,
     function: FunctionHandle,
     locals_captured: BitArray,
@@ -67,7 +66,6 @@ impl CompileData {
         let mut initialized = BitArray::with_capacity(256);
         initialized.add(0); // first local
         Self {
-            enclosing: None,
             function_type,
             function,
             locals_captured: BitArray::with_capacity(256),
@@ -95,20 +93,6 @@ impl CompileData {
                 };
             }
         }
-    }
-
-    fn resolve_upvalue(&mut self, name: StringHandle) -> Result<Option<u8>, String> {
-        if let Some(enclosing) = &mut self.enclosing {
-            if let Some(index) = enclosing.resolve_local(name)? {
-                enclosing.locals_captured.add(index as usize);
-                return Ok(Some(self.add_upvalue(index, true)?));
-            }
-
-            if let Some(upvalue) = enclosing.resolve_upvalue(name)? {
-                return Ok(Some(self.add_upvalue(upvalue, false)?));
-            }
-        }
-        Ok(None)
     }
 
     fn add_upvalue(&mut self, index: u8, is_local: bool) -> Result<u8, String> {
@@ -164,7 +148,7 @@ impl CompileData {
 }
 
 struct Compiler<'src, 'hp> {
-    data: Box<CompileData>,
+    data: Vec<CompileData>,
     source: Source<'src>,
     heap: &'hp mut Heap,
     this_name: StringHandle,
@@ -173,20 +157,14 @@ struct Compiler<'src, 'hp> {
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
-        let this_name = {
-            let this = &mut *heap;
-            this.strings.put("this")
-        };
-        let super_name = {
-            let this = &mut *heap;
-            this.strings.put("super")
-        };
+        let this_name = { heap.strings.put("this") };
+        let super_name = { heap.strings.put("super") };
         Self {
-            data: Box::from(CompileData::new(
+            data: vec![CompileData::new(
                 function_type,
                 heap.functions.new_function(None),
                 this_name,
-            )),
+            )],
             source,
             heap,
             this_name,
@@ -194,18 +172,26 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
+    fn data_ref(&self) -> &CompileData {
+        self.data.last().unwrap()
+    }
+
+    fn data_mut(&mut self) -> &mut CompileData {
+        self.data.last_mut().unwrap()
+    }
+
     fn chunk_ref(&self) -> &Chunk {
-        let fi = self.data.function;
+        let fi = self.data_ref().function;
         self.heap.functions.chunk_ref(fi)
     }
 
     fn chunk_mut(&mut self) -> &mut Chunk {
-        let fi = self.data.function;
+        let fi = self.data_ref().function;
         self.heap.functions.chunk_mut(fi)
     }
 
     fn emit_return(&mut self) {
-        if self.data.function_type == FunctionType::Initializer {
+        if self.data_ref().function_type == FunctionType::Initializer {
             self.emit_byte_op(Op::GetLocal, 0);
         } else {
             self.emit_op(Op::Nil);
@@ -254,20 +240,21 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn begin_scope(&mut self) {
-        self.data.scopes.push(self.data.locals.len() as u8);
+        let scope_depth = self.data_ref().locals.len() as u8;
+        self.data_mut().scopes.push(scope_depth);
     }
 
     fn end_scope(&mut self) {
-        let l = self.data.scopes.pop().unwrap() as usize;
-        let mut index = self.data.locals.len();
+        let l = self.data_mut().scopes.pop().unwrap() as usize;
+        let mut index = self.data_ref().locals.len();
         while index > l {
             index -= 1;
-            self.emit_op(if self.data.locals_captured.get(index) {
+            self.emit_op(if self.data_ref().locals_captured.get(index) {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
             });
-            self.data.locals.pop();
+            self.data_mut().locals.pop();
         }
     }
 
@@ -391,11 +378,24 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn string(&mut self) -> Result<(), String> {
         let value = {
-            let this = &mut *self.heap;
             let name = self.source.scanner.get_str(self.source.previous.1)?;
-            this.strings.put(name)
+            self.heap.strings.put(name)
         };
         self.emit_constant_op(Op::Constant, Value::from(value))
+    }
+
+    fn resolve_upvalue(&mut self, i: usize, name: StringHandle) -> Result<Option<u8>, String> {
+        if i == 0 {
+            return Ok(None);
+        }
+        if let Some(index) = self.data[i - 1].resolve_local(name)? {
+            self.data[i - 1].locals_captured.add(index as usize);
+            return Ok(Some(self.data[i].add_upvalue(index, true)?));
+        }
+        if let Some(upvalue) = self.resolve_upvalue(i - 1, name)? {
+            return Ok(Some(self.data[i].add_upvalue(upvalue, false)?));
+        }
+        return Ok(None);
     }
 
     // emit code for variable access
@@ -404,7 +404,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if is_assignment {
             self.expression()?;
         }
-        if let Some(arg) = self.data.resolve_local(name)? {
+        if let Some(arg) = self.data_ref().resolve_local(name)? {
             self.emit_byte_op(
                 if is_assignment {
                     Op::SetLocal
@@ -415,7 +415,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             );
             return Ok(());
         }
-        if let Some(arg) = self.data.resolve_upvalue(name)? {
+        if let Some(arg) = self.resolve_upvalue(self.data.len() - 1, name)? {
             self.emit_byte_op(
                 if is_assignment {
                     Op::SetUpvalue
@@ -500,10 +500,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .source
             .scanner
             .get_identifier_name(self.source.previous.1)?;
-        Ok({
-            let this = &mut *self.heap;
-            this.strings.put(str)
-        })
+        Ok(self.heap.strings.put(str))
     }
 
     fn parse_prefix(&mut self, can_assign: bool) -> Result<(), String> {
@@ -554,8 +551,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn parse_variable(&mut self, error_msg: &str) -> Result<Option<StringHandle>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name: StringHandle = self.store_identifier()?;
-        self.data.declare_variable(name)?;
-        Ok(if self.data.scopes.len() > 0 {
+        self.data_mut().declare_variable(name)?;
+        Ok(if self.data_ref().scopes.len() > 0 {
             None
         } else {
             // global
@@ -579,7 +576,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                self.heap.functions.incr_arity(self.data.function)?;
+                self.heap.functions.incr_arity(self.data_ref().function)?;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index)?;
                 if !self.source.match_type(TokenType::Comma) {
@@ -600,7 +597,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::String(name))?;
         } else {
-            self.data.mark_initialized();
+            self.data_mut().mark_initialized();
         })
     }
 
@@ -613,24 +610,17 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .source
             .scanner
             .get_identifier_name((&self.source).previous.1)?;
-        let name = {
-            let this = &mut *self.heap;
-            this.strings.put(name)
-        };
+        let name = self.heap.strings.put(name);
         let function = self.heap.functions.new_function(Some(name));
-        // do the head of the linked list thing
-        let enclosing = mem::replace(
-            &mut self.data,
-            Box::from(CompileData::new(function_type, function, self.this_name)),
-        );
-        self.data.enclosing = Some(enclosing);
+
+        self.data
+            .push(CompileData::new(function_type, function, self.this_name));
 
         // the recursive call
         self.function_body()?;
 
         // another trick
-        let enclosing = self.data.enclosing.take().unwrap();
-        let enclosed = mem::replace(&mut self.data, enclosing);
+        let enclosed = self.data.pop().unwrap();
 
         self.heap
             .functions
@@ -659,10 +649,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         } else {
             FunctionType::Method
         };
-        let loxtr = {
-            let this = &mut *self.heap;
-            this.strings.put(name)
-        };
+        let loxtr = self.heap.strings.put(name);
         self.function(function_type)?;
         self.emit_constant_op(Op::Method, Value::from(loxtr))?;
         Ok(())
@@ -672,15 +659,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
-        self.data.declare_variable(class_name)?;
+        self.data_mut().declare_variable(class_name)?;
         self.emit_constant_op(Op::Class, Value::from(class_name))?;
-        self.define_variable(if self.data.scopes.len() == 0 {
+        self.define_variable(if self.data_ref().scopes.len() == 0 {
             Some(class_name)
         } else {
             None
         })?;
 
-        self.data.mark_initialized();
+        self.data_mut().mark_initialized();
 
         if self.source.class_depth == 127 {
             return err!("Cannot nest classes that deep");
@@ -697,8 +684,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                 return err!("A class can't inherit from itself.");
             }
             self.begin_scope();
-            self.data.add_local(self.super_name)?;
-            self.data.mark_initialized();
+            // yes, rust asks for this
+            let name = self.super_name;
+            self.data_mut().add_local(name)?;
+            self.data_mut().mark_initialized();
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
             self.source.has_super.add(self.source.class_depth as usize);
@@ -734,7 +723,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn fun_declaration(&mut self) -> Result<(), String> {
         let index = self.parse_variable("Expect function name.")?;
-        self.data.mark_initialized();
+        self.data_mut().mark_initialized();
         self.function(FunctionType::Function)?;
         if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::String(name))?;
@@ -842,7 +831,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn return_statement(&mut self) -> Result<(), String> {
-        if self.data.function_type == FunctionType::Script {
+        if self.data_ref().function_type == FunctionType::Script {
             return err!("Can't return from top-level code.");
         }
 
@@ -850,7 +839,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.emit_return();
             Ok(())
         } else {
-            if self.data.function_type == FunctionType::Initializer {
+            if self.data_ref().function_type == FunctionType::Initializer {
                 return err!("Can't return a value from an initializer.");
             }
 

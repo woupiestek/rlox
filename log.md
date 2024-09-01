@@ -19,13 +19,44 @@ used implemented on top of vec. That is a big win, but I doubt this is fast. But
 maybe first look to clean up code.
 
 Looking forward:
-- put functions in heap
+
+- ~~put functions in heap~~
 - less code duplication
 - 'maps' instead of 'map'
 - buddy allocator for arrays and maps
-- other solutions for storing and finding open upvalues
+- ~~other solutions for storing and finding open upvalues~~
 - keep garbage collector around, just refresh
-- test performace
+- test performañce
+- NaN Boxing
+- closures as arrays of u32
+- ~~get rid of linked list in compiler.~~
+
+### allocation strategies
+
+For the maps the buddy allocation looks like a great fit, since the underlying
+arrays how to have power of 2 lengths.
+
+Closures have arrays of upvalues which can have varied sizes. How do you
+allocate those? o/c the garbage collection provides a bit array, so after
+collection, The free list could contain runs of free slots, and Upvalues could
+try to find the tightest fits for new closures.
+
+It is easy to overlook something here. The closures cannot all have upvalues
+adjacent in the memory pool, since they share upvalue with eachother. Arrays of
+handles are needed in this case, not arrays of values, which is what my plan
+might do.
+
+A memory pool that provides arrays of arbitrary size, of any other type of
+value, could use the bitarrays to find free runs of values for the free list.
+When an array of certain length is requested, the pool searches the free list
+for a good fit. If more space has to be allocated, then the entire range becomes
+a big free run.
+
+Dual: if closures are done this way, allocate some extra space for the funcction
+handle, and hand out a handle that works for such an offset.
+
+The buddy allocator can allocator arbitrary sizes, just put the remainder on the
+free list again... Extra bookkeeping needed for freeing correctly...
 
 ## 2024-08-31
 
