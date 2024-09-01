@@ -16,6 +16,7 @@ mod op;
 mod strings;
 // mod loxtr;
 // mod table;
+mod classes;
 mod closures;
 mod natives;
 mod upvalues;

@@ -1,6 +1,7 @@
 // run time data structures
 
 use crate::{
+    classes::ClassHandle,
     closures::ClosureHandle,
     functions::{FunctionHandle, Functions},
     heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
@@ -20,6 +21,7 @@ pub enum Value {
     String(StringHandle),
     StackRef(u16), // for open upvalues
     Closure(ClosureHandle),
+    Class(ClassHandle),
 }
 
 impl From<StringHandle> for Value {
@@ -61,8 +63,8 @@ impl Value {
         matches!(self, Value::Nil | Value::False)
     }
 
-    pub fn as_object(&self) -> Result<ObjectHandle, String> {
-        if let &Value::Object(handle) = self {
+    pub fn as_class(&self) -> Result<ClassHandle, String> {
+        if let &Value::Class(handle) = self {
             Ok(handle)
         } else {
             err!("Not an object")
@@ -73,7 +75,7 @@ impl Value {
         if let &Value::Function(handle) = self {
             Ok(handle)
         } else {
-            err!("Not an object")
+            err!("Not a function")
         }
     }
 
@@ -89,42 +91,13 @@ impl Value {
             Value::Function(a) => functions.to_string(*a, heap),
             Value::StackRef(i) => format!("&{}", i),
             Value::Closure(a) => functions.to_string(heap.closures.function_handle(*a), heap),
+            Value::Class(a) => heap.classes.to_string(*a, &heap.strings),
         }
-    }
-}
-
-pub struct Class {
-    pub name: StringHandle,
-    // heap allocated
-    pub methods: Map<ClosureHandle>,
-}
-
-impl Class {
-    pub fn new(name: StringHandle) -> Self {
-        Self {
-            name,
-            methods: Map::new(),
-        }
-    }
-}
-
-impl Traceable for Class {
-    const KIND: Kind = Kind::Class;
-
-    fn byte_count(&self) -> usize {
-        // 32 is 8 for name and 32 for Table
-        // 16 is 8 for obj, 8 for closure
-        40 + 16 * self.methods.capacity()
-    }
-
-    fn trace(&self, collector: &mut Collector) {
-        collector.strings.push(self.name);
-        self.methods.trace(collector);
     }
 }
 
 pub struct Instance {
-    pub class: ObjectHandle,
+    pub class: ClassHandle,
     // heap allocated
     pub properties: Map<Value>,
 }
@@ -137,13 +110,13 @@ impl Traceable for Instance {
     }
 
     fn trace(&self, collector: &mut Collector) {
-        collector.objects.push(ObjectHandle::from(self.class));
+        collector.classes.push(self.class);
         self.properties.trace(collector);
     }
 }
 
 impl Instance {
-    pub fn new(class: ObjectHandle) -> Self {
+    pub fn new(class: ClassHandle) -> Self {
         Self {
             class,
             properties: Map::new(),

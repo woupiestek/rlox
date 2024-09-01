@@ -2,13 +2,14 @@ use std::time;
 
 use crate::{
     call_stack::CallStack,
+    classes::ClassHandle,
     closures::ClosureHandle,
     common::U8_COUNT,
     compiler::compile,
     functions::{FunctionHandle, Functions},
     heap::{Collector, Heap, Kind, ObjectHandle, Traceable},
     natives::Natives,
-    object::{BoundMethod, Class, Instance, Value},
+    object::{BoundMethod, Instance, Value},
     op::Op,
     strings::{Map, StringHandle},
     upvalues::UpvalueHandle,
@@ -158,23 +159,22 @@ impl VM {
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
         match callee {
+            Value::Class(handle) => {
+                let instance = self.new_obj(Instance::new(handle));
+                self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
+                if let Some(init) = self.heap.classes.get_method(handle, self.init_string) {
+                    return self.call(init, arity);
+                } else if arity > 0 {
+                    return err!("Expected no arguments but got {}.", arity);
+                } else {
+                    return Ok(());
+                }
+            }
             Value::Object(handle) => match self.heap.kind(handle) {
                 Kind::BoundMethod => {
                     let bm = self.heap.get_ref::<BoundMethod>(handle);
                     self.values[self.stack_top - arity as usize - 1] = Value::from(bm.receiver);
                     return self.call(bm.method, arity);
-                }
-                Kind::Class => {
-                    let instance = self.new_obj(Instance::new(handle));
-                    self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
-                    let obj = self.heap.get_ref::<Class>(handle);
-                    if let Some(init) = obj.methods.get(self.init_string) {
-                        return self.call(init, arity);
-                    } else if arity > 0 {
-                        return err!("Expected no arguments but got {}.", arity);
-                    } else {
-                        return Ok(());
-                    }
                 }
                 _ => err!(
                     "Can only call functions and classes, not '{}'",
@@ -197,11 +197,11 @@ impl VM {
 
     fn invoke_from_class(
         &mut self,
-        class: ObjectHandle,
+        class: ClassHandle,
         name: StringHandle,
         arity: u8,
     ) -> Result<(), String> {
-        match self.heap.get_ref::<Class>(class).methods.get(name) {
+        match self.heap.classes.get_method(class, name) {
             None => err!("Undefined property '{}'", self.heap.get_str(name)),
             Some(method) => self.call(method, arity),
         }
@@ -221,8 +221,8 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: ObjectHandle, name: StringHandle) -> Result<(), String> {
-        match self.heap.get_ref::<Class>(class).methods.get(name) {
+    fn bind_method(&mut self, class: ClassHandle, name: StringHandle) -> Result<(), String> {
+        match self.heap.classes.get_method(class, name) {
             None => err!("Undefined property '{}'.", self.heap.get_str(name)),
             Some(method) => {
                 if let Value::Object(instance) = self.peek(0) {
@@ -243,24 +243,13 @@ impl VM {
     }
 
     fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
-        if let Ok(&[Value::Object(class), Value::Closure(method)]) = self.tail(2) {
-            let class: &mut Class = self.heap.get_mut(class);
-            let before_count = class.byte_count();
-            class.methods.set(name, method);
-            let after_count = class.byte_count();
-            self.heap.increase_byte_count(after_count - before_count);
+        if let Ok(&[Value::Class(class), Value::Closure(method)]) = self.tail(2) {
+            self.heap.classes.set_method(class, name, method);
             self.pop();
             Ok(())
         } else {
             err!("Method definition failed")
         }
-    }
-
-    // combined to avoid gc errors
-    fn push_traceable<T: Traceable>(&mut self, traceable: T) -> ObjectHandle {
-        let value = self.new_obj(traceable);
-        self.push(Value::from(value));
-        value
     }
 
     fn run(&mut self) -> Result<(), String> {
@@ -323,7 +312,9 @@ impl VM {
                 }
                 Op::Class => {
                     let name = self.call_stack.read_string(&self.functions, &self.heap)?;
-                    self.push_traceable(Class::new(name));
+                    self.collect_garbage_if_needed();
+                    let new_class = self.heap.classes.new_class(name);
+                    self.push(Value::Class(new_class));
                 }
                 Op::CloseUpvalue => {
                     self.close_upvalues(self.stack_top - 1);
@@ -396,7 +387,7 @@ impl VM {
                 }
                 Op::GetSuper => {
                     let name = self.call_stack.read_string(&self.functions, &self.heap)?;
-                    let super_class = self.pop().as_object()?;
+                    let super_class = self.pop().as_class()?;
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
@@ -414,20 +405,11 @@ impl VM {
                     binary_op!(self, a, b, a > b)
                 }
                 Op::Inherit => {
-                    if let &[a, b] = self.tail(2)? {
-                        let super_class = self
-                            .heap
-                            .try_ref::<Class>(a)
-                            .ok_or(String::from("Super class must be a class."))?;
-                        let sub_class = self
-                            .heap
-                            .try_mut::<Class>(b)
-                            .ok_or(String::from("Sub class must be a class."))?;
-                        let bytes_before = sub_class.byte_count();
-                        sub_class.methods.set_all(&super_class.methods);
-                        self.heap
-                            .increase_byte_count(sub_class.byte_count() - bytes_before);
+                    if let &[Value::Class(super_class), Value::Class(sub_class)] = self.tail(2)? {
+                        self.heap.classes.clone_methods(super_class, sub_class);
                         self.pop();
+                    } else {
+                        return err!("Super and sub classes must be classes");
                     }
                 }
                 Op::Invoke => {
@@ -518,7 +500,7 @@ impl VM {
                 Op::SuperInvoke => {
                     let name = self.call_stack.read_string(&self.functions, &self.heap)?;
                     let arity = self.call_stack.read_byte(&self.functions, &self.heap);
-                    let super_class = self.pop().as_object()?;
+                    let super_class = self.pop().as_class()?;
                     self.invoke_from_class(super_class, name, arity)?;
                 }
                 Op::True => self.push(Value::True),

@@ -45,15 +45,14 @@ impl Upvalues {
     }
 
     fn store(&mut self, value: Value) -> Handle<4> {
-        let handle = UpvalueHandle::from(if let Some(i) = self.free.pop() {
+        UpvalueHandle::from(if let Some(i) = self.free.pop() {
             self.values[i as usize] = value;
             i
         } else {
             let i = self.values.len() as u32;
             self.values.push(value);
             i
-        });
-        handle
+        })
     }
 
     // alternative to messing with a linked list
@@ -79,10 +78,6 @@ impl Upvalues {
         self.values.capacity() * Self::ENTRY_SIZE
     }
 
-    pub fn trace(&self, handle: UpvalueHandle, collector: &mut Collector) {
-        collector.trace(self.values[handle.index()])
-    }
-
     pub fn trace_roots(&self, collector: &mut Collector) {
         for &i in &self.open.lower_handles {
             collector.upvalues.push(Handle::from(i))
@@ -104,6 +99,10 @@ impl Upvalues {
 
     pub fn reset(&mut self) {
         self.open.clear()
+    }
+
+    pub fn trace(&self, handle: Handle<UPVALUES>, collector: &mut Collector) {
+        collector.trace(self.values[handle.index()])
     }
 }
 

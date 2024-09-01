@@ -1,5 +1,17 @@
 # Rlox
 
+## 2024-09-01
+
+### binary heap search
+
+What happen if you start from the end? Can a heap have duplicate values? Perhaps
+this requires a traversal, Than can be use to insert more efficiently afterward.
+
+### new garbage collector
+
+New garbage collection causes duplicated code. No solution for this yet... Maybe
+use the KINDs and arrays instead of separate fields.
+
 ## 2024-08-31
 
 ### new garbage collections

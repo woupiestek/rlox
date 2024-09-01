@@ -143,26 +143,28 @@ impl<V: Clone> Map<V> {
         }
     }
 
-    pub fn set_all(&mut self, other: &Self) {
-        if self.capacity() < other.capacity() {
-            self.grow(other.capacity())
-        }
-        for i in 0..other.capacity() {
-            let key = other.key_set.keys[i];
-            if key.is_valid() {
-                if let Some(v) = &other.values[i] {
-                    self.set(key, v.clone());
-                }
-            }
-        }
-    }
-
     #[cfg(feature = "trace")]
     pub fn keys(&self) -> KeyIterator {
         KeyIterator {
             key_set: &self.key_set,
             index: self.key_set.keys.len(),
         }
+    }
+}
+
+impl<V: Clone> Clone for Map<V> {
+    fn clone(&self) -> Self {
+        let mut clone = Map::new();
+        clone.grow(self.capacity());
+        for i in 0..self.capacity() {
+            let key = self.key_set.keys[i];
+            if key.is_valid() {
+                if let Some(v) = &self.values[i] {
+                    clone.set(key, v.clone());
+                }
+            }
+        }
+        clone
     }
 }
 
