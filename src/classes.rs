@@ -3,11 +3,11 @@ use std::mem;
 use crate::{
     bitarray::BitArray,
     closures::ClosureHandle,
-    heap::{Collector, Handle, Kind, Pool},
+    heap::{Collector, Handle, Pool, CLASS},
     strings::{Map, StringHandle, Strings},
 };
 
-pub type ClassHandle = Handle<{ Kind::Class as u8 }>;
+pub type ClassHandle = Handle<CLASS>;
 
 pub struct Classes {
     names: Vec<StringHandle>,
@@ -60,26 +60,24 @@ impl Classes {
     }
 }
 
-impl Pool<{ Kind::Class as u8 }> for Classes {
+impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
         self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 4) + self.method_capacity * 4
     }
-    fn trace(&self, handle: Handle<{ Kind::Class as u8 }>, collector: &mut Collector) {
+    fn trace(&self, handle: Handle<CLASS>, collector: &mut Collector) {
         collector.push(self.names[handle.index()]);
         self.methods[handle.index()].trace(collector);
     }
 
     fn sweep(&mut self, marks: &BitArray) {
         self.free.clear();
+        self.method_capacity = 0;
         for i in 0..self.names.len() {
             if !marks.get(i) {
-                // no accounting for this?
-                // self.names[i] = StringHandle::EMPTY;
-                self.method_capacity -= self.methods[i].capacity();
-                // maybe use a clear method?
-                // 'maps' rather than 'map', with another family of handles...
                 self.methods[i] = Map::new();
                 self.free.push(ClassHandle::from(i as u32));
+            } else {
+                self.method_capacity += self.methods[i].capacity();
             }
         }
     }

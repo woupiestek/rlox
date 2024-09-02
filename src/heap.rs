@@ -12,22 +12,19 @@ use crate::{
 };
 
 pub struct Collector {
-    pub handles: [Vec<u32>; 5],
-    pub marks: [BitArray; 5],
+    pub handles: [Vec<u32>; 6],
+    pub marks: [BitArray; 6],
     pub strings: KeySet,
 }
 
-#[repr(u8)]
-pub enum Kind {
-    BoundMethod,
-    Instance,
-    Class,
-    Closure,
-    Upvalue,
-    String,
-    Native,
-    Function,
-}
+pub const BOUND_METHOD: usize = 0;
+pub const INSTANCE: usize = 1;
+pub const CLASS: usize = 2;
+pub const CLOSURE: usize = 3;
+pub const UPVALUE: usize = 4;
+pub const STRING: usize = 5;
+pub const NATIVE: usize = 6;
+pub const FUNCTION: usize = 7;
 
 // todo: currently, this is reconstructed every GC cycle. Keeping it may help performance
 impl Collector {
@@ -41,13 +38,14 @@ impl Collector {
                 BitArray::new(),
                 BitArray::new(),
                 BitArray::new(),
+                BitArray::new(),
             ],
             // this is pain
             strings: KeySet::with_capacity(heap.strings.capacity()),
         }
     }
 
-    pub fn push<const KIND: u8>(&mut self, handle: Handle<KIND>) {
+    pub fn push<const KIND: usize>(&mut self, handle: Handle<KIND>) {
         if !self.marks[KIND as usize].get(handle.index()) {
             self.handles[KIND as usize].push(handle.0);
         }
@@ -87,7 +85,7 @@ impl Collector {
         }
         loop {
             let mut done = true;
-            if let Some(i) = self.handles[Kind::String as usize].pop() {
+            if let Some(i) = self.handles[STRING].pop() {
                 self.strings.put(Handle::from(i));
                 done = false
             }
@@ -111,16 +109,14 @@ impl Collector {
         {
             println!("Start sweeping.");
         }
-        heap.classes.sweep(&self.marks[Kind::Class as usize]);
-        heap.closures
-            .sweep(&self.marks[{ Kind::Closure as u8 } as usize]);
-        heap.bound_methods
-            .sweep(&self.marks[{ Kind::BoundMethod as u8 } as usize]);
+        heap.classes.sweep(&self.marks[CLASS]);
+        heap.closures.sweep(&self.marks[CLOSURE]);
+        heap.bound_methods.sweep(&self.marks[BOUND_METHOD]);
         // this is pain.
         heap.strings
             .sweep(mem::replace(&mut self.strings, KeySet::with_capacity(0)));
-        heap.upvalues.sweep(&self.marks[Kind::Upvalue as usize]);
-        heap.instances.sweep(&self.marks[Kind::Instance as usize]);
+        heap.upvalues.sweep(&self.marks[UPVALUE]);
+        heap.instances.sweep(&self.marks[INSTANCE]);
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -128,7 +124,7 @@ impl Collector {
     }
 }
 
-pub trait Pool<const KIND: u8>
+pub trait Pool<const KIND: usize>
 where
     Self: Sized,
 {
@@ -151,15 +147,15 @@ where
 
 // Handle64, Handle32, Handle16 etc. More options?
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct Handle<const KIND: u8>(pub u32);
+pub struct Handle<const KIND: usize>(pub u32);
 
-impl<const KIND: u8> Handle<KIND> {
+impl<const KIND: usize> Handle<KIND> {
     pub fn index(&self) -> usize {
         self.0 as usize
     }
 }
 
-impl<const KIND: u8> From<u32> for Handle<KIND> {
+impl<const KIND: usize> From<u32> for Handle<KIND> {
     fn from(value: u32) -> Self {
         Self(value)
     }

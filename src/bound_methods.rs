@@ -1,11 +1,11 @@
 use crate::{
     bitarray::BitArray,
     closures::ClosureHandle,
-    heap::{Collector, Handle, Heap, Kind, Pool},
+    heap::{Collector, Handle, Heap, Pool, BOUND_METHOD},
     instances::InstanceHandle,
 };
 
-pub type BoundMethodHandle = Handle<{ Kind::BoundMethod as u8 }>;
+pub type BoundMethodHandle = Handle<BOUND_METHOD>;
 
 pub struct BoundMethods {
     receivers: Vec<InstanceHandle>,
@@ -51,11 +51,11 @@ impl BoundMethods {
     }
 }
 
-impl Pool<{ Kind::BoundMethod as u8 }> for BoundMethods {
+impl Pool<BOUND_METHOD> for BoundMethods {
     fn byte_count(&self) -> usize {
         self.receivers.len() * 8
     }
-    fn trace(&self, handle: Handle<{ Kind::BoundMethod as u8 }>, collector: &mut Collector) {
+    fn trace(&self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
         collector.push(self.receivers[handle.index()]);
         collector.push(self.methods[handle.index()]);
     }

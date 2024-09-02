@@ -1,11 +1,11 @@
 use crate::{
-    heap::{Handle, Kind},
+    heap::{Handle, NATIVE},
     values::Value,
 };
 
 pub struct Natives(Vec<fn(args: &[Value]) -> Result<Value, String>>);
 
-pub type NativeHandle = Handle<{ Kind::Native as u8 }>; // More than enough for now...
+pub type NativeHandle = Handle<NATIVE>; // More than enough for now...
 
 // All natives are collected on shut down.
 impl Natives {

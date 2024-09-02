@@ -3,12 +3,12 @@ use std::mem;
 use crate::{
     bitarray::BitArray,
     classes::ClassHandle,
-    heap::{Collector, Handle, Heap, Kind, Pool},
+    heap::{Collector, Handle, Heap, Pool, INSTANCE},
     strings::{Map, StringHandle},
     values::Value,
 };
 
-pub type InstanceHandle = Handle<{ Kind::Instance as u8 }>;
+pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
     classes: Vec<ClassHandle>,
@@ -61,25 +61,24 @@ impl Instances {
     }
 }
 
-impl Pool<{ Kind::Instance as u8 }> for Instances {
+impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
         self.classes.len() * (mem::size_of::<Map<Value>>() + 4)
             + self.property_capacity * mem::size_of::<Value>()
     }
-    fn trace(&self, handle: Handle<{ Kind::Instance as u8 }>, collector: &mut Collector) {
+    fn trace(&self, handle: Handle<INSTANCE>, collector: &mut Collector) {
         collector.push(self.classes[handle.index()]);
         self.properties[handle.index()].trace(collector);
     }
     fn sweep(&mut self, marks: &BitArray) {
         self.free.clear();
+        self.property_capacity = 0;
         for i in 0..self.classes.len() {
             if !marks.get(i) {
-                // no accounting for this?
-                // self.classes[i] = StringHandle::EMPTY;
-                self.property_capacity -= self.properties[i].capacity();
-                // todo: properties.clear instead?
                 self.properties[i] = Map::new();
                 self.free.push(InstanceHandle::from(i as u32));
+            } else {
+                self.property_capacity += self.properties[i].capacity();
             }
         }
     }

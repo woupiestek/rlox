@@ -2,11 +2,11 @@ use std::mem;
 
 use crate::{
     bitarray::BitArray,
-    heap::{Collector, Handle, Kind, Pool},
+    heap::{Collector, Handle, Pool, UPVALUE},
     values::Value,
 };
 
-pub type UpvalueHandle = Handle<{ Kind::Upvalue as u8 }>;
+pub type UpvalueHandle = Handle<UPVALUE>;
 
 pub struct Upvalues {
     // never throw away an upvalue.
@@ -77,11 +77,11 @@ impl Upvalues {
     }
 }
 
-impl Pool<{ Kind::Upvalue as u8 }> for Upvalues {
+impl Pool<UPVALUE> for Upvalues {
     fn byte_count(&self) -> usize {
         self.values.capacity() * Self::ENTRY_SIZE
     }
-    fn trace(&self, handle: Handle<{ Kind::Upvalue as u8 }>, collector: &mut Collector) {
+    fn trace(&self, handle: Handle<UPVALUE>, collector: &mut Collector) {
         self.values[handle.index()].trace(collector)
     }
 

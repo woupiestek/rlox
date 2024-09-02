@@ -465,16 +465,6 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.variable(self.this_name, can_assign)
     }
 
-    fn unary(&mut self) -> Result<(), String> {
-        self.parse_precedence(Prec::Unary)?;
-        match self.source.previous.0 {
-            TokenType::Bang => self.emit_op(Op::Not),
-            TokenType::Minus => self.emit_op(Op::Negative),
-            _ => panic!(),
-        }
-        Ok(())
-    }
-
     fn parse_infix(&mut self, can_assign: bool) -> Result<(), String> {
         match self.source.previous.0 {
             TokenType::LeftParen => self.call(),
@@ -506,7 +496,16 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn parse_prefix(&mut self, can_assign: bool) -> Result<(), String> {
         match self.source.previous.0 {
             TokenType::LeftParen => self.grouping(),
-            TokenType::Minus | TokenType::Bang => self.unary(),
+            TokenType::Minus => {
+                self.parse_precedence(Prec::Unary)?;
+                self.emit_op(Op::Negative);
+                Ok(())
+            }
+            TokenType::Bang => {
+                self.parse_precedence(Prec::Unary)?;
+                self.emit_op(Op::Not);
+                Ok(())
+            }
             TokenType::Identifier => {
                 let name = self.store_identifier()?;
                 self.variable(name, can_assign)

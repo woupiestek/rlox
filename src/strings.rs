@@ -2,11 +2,11 @@ use std::{mem, u32};
 
 use crate::{
     closures::ClosureHandle,
-    heap::{Collector, Handle, Kind},
+    heap::{Collector, Handle, STRING},
     values::Value,
 };
 
-pub type StringHandle = Handle<{ Kind::String as u8 }>;
+pub type StringHandle = Handle<STRING>;
 
 impl StringHandle {
     pub const EMPTY: Self = Self(0);

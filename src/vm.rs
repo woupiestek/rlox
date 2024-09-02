@@ -163,7 +163,11 @@ impl VM {
                 if let Some(init) = self.heap.classes.get_method(handle, self.init_string) {
                     return self.call(init, arity);
                 } else if arity > 0 {
-                    return err!("Expected no arguments but got {}.", arity);
+                    return err!(
+                        "Expected no arguments for {} but got {}.",
+                        callee.to_string(&self.heap),
+                        arity
+                    );
                 } else {
                     return Ok(());
                 }

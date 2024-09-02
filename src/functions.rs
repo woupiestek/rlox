@@ -1,5 +1,5 @@
 use crate::{
-    heap::{Collector, Handle, Heap, Kind},
+    heap::{Collector, Handle, Heap, FUNCTION},
     op::Op,
     strings::StringHandle,
     values::Value,
@@ -124,7 +124,7 @@ impl Chunk {
     }
 }
 
-pub type FunctionHandle = Handle<{ Kind::Function as u8 }>;
+pub type FunctionHandle = Handle<FUNCTION>;
 
 impl FunctionHandle {
     pub const MAIN: Self = Self(0);

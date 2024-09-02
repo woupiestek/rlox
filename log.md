@@ -1,5 +1,88 @@
 # Rlox
 
+## 2024-09-02
+
+### one array of upvalue handles
+
+Idea: have one vec of upvalue handles in Closures, and gice each closure an
+offset into this array. Problem: how to handle free space there?
+
+Initially, this seemed like a simple matter of moving all the upvalues together
+to the start of the vec, and then updating offsets. After doing that once,
+however, the freed handles get space at the end of the list, and then... there
+is a risk that not enough space was allocated to move the out of order offsets
+into. And it is an issue that we need the free lengths.
+
+General advice is to sort by size, Which is entirely possible. Technically, each
+upvalue count could be treated as a separate type with a seperate pool.
+
+What about this: Allocate space in batches of 256 Attach a subdivision to each
+batch, like 'each element should take up 5 slots.' Towards the larger sizes,
+this is as bad as buddy, but consider this: out of 256 only 1 slot is wasted,
+and 51 elements are stored while buddy would roun dup to 8 and only fit 32
+element because of it.
+
+Every time a new allocation is needed, it goes out of the last available batch
+for that size, until full. It is easy to move objects in and between chunks of
+the same size, So all that is left is to keep track of those sizes? Some the
+chunks may not be full and
+
+I imagine that this batchtes comon interleaved out of a larger memory pool, but
+the interleaving could be an issue.
+
+1. Each chunk could know how much space is left, and where to look for more
+   space of the same size
+2. The allocator has for each size, the first chunk with space available
+
+What handles does this give? It would just be the 'broken' system, where the
+first part of the handle points to a chunk, and the second part to of offset
+into the chunk.
+
+{ item_size next_ptr free_ptr ... } How big can allocations get? Note, for
+really big objects, don't use this stuff. This memory pooling is just for tiny
+objects. The size of the chunk is a fair upperbound, but it schoukd probably be
+less The item_size requires one byte, the next prt could be usize the free port
+point within the chunk, so one byte is sufficient again. Maybe these details
+should be stored externally...
+
+I don't see this solution moving around objects yet. Perhaps that is simply
+correct: the system uses a free list, differentiated by size. The handles don't
+change
+
+### testing
+
+Cannot run the all benchmarks because of some bugs.
+
+- binary_trees: failures
+- equality: loop 5.858097553253174 elapsed 6.3113532066345215 equals
+  0.45325565338134766
+- fib: 2.7665443420410156
+- instantiation: 0.8608591556549072
+- invocations: 0.8606352806091309
+- method_call: 0.5624816417694092
+- properties: 1.2129974365234375
+- string_equality:loop 2.1379945278167725 elapsed 2.297173500061035 equals
+  0.1591789722442627
+- trees: failures
+- zoo_batch: 113580000 1893 10.005820751190186
+- zoo: 10000002 0.8029170036315918
+
+for comparison:
+
+- binary_trees: 6.599929571151733
+- equality: loop 3.3784124851226807 elapsed 3.054243803024292
+- fib: 1.9488043785095215
+- instantiation: 1.4910368919372559
+- invocation: 0.614128828048706
+- method_call: 0.9227621555328369
+- properties: 1.6836957931518555
+- trees: 12.388887405395508
+- zoo_batch: 1324
+- zoo: 1.33463716506958
+
+So fib is slower and tree tests fail for some reason. Equality tests are slow as
+well. Much appears to be faster, without me trying very hard, though.
+
 ## 2024-09-01
 
 ### binary heap search
