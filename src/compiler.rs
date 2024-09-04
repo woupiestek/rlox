@@ -432,7 +432,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             } else {
                 Op::GetGlobal
             },
-            Value::String(name),
+            Value::from(name),
         )
     }
 
@@ -594,7 +594,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn define_variable(&mut self, index: Option<StringHandle>) -> Result<(), String> {
         Ok(if let Some(name) = index {
-            self.emit_constant_op(Op::DefineGlobal, Value::String(name))?;
+            self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
         } else {
             self.data_mut().mark_initialized();
         })
@@ -725,7 +725,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.data_mut().mark_initialized();
         self.function(FunctionType::Function)?;
         if let Some(name) = index {
-            self.emit_constant_op(Op::DefineGlobal, Value::String(name))?;
+            self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
         }
         Ok(())
     }

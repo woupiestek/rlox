@@ -1,5 +1,6 @@
 use crate::{
-    heap::{Collector, Handle, Heap, FUNCTION},
+    bitarray::BitArray,
+    heap::{Collector, Handle, Heap, Pool, FUNCTION},
     op::Op,
     strings::StringHandle,
     values::Value,
@@ -144,7 +145,7 @@ pub struct Functions {
 }
 
 impl Functions {
-    // it might help to specify some sizes up front, but these 5 array don't all need the same
+    // it might help to specify some sizes up front, but these 5 arrays don't all need the same
     pub fn new() -> Self {
         Self {
             names: Vec::new(), // run time data structure
@@ -215,18 +216,36 @@ impl Functions {
             )
         }
     }
+}
 
-    // we are moving toward not using the garbage collector for static data
-    // here is why: this method does the same thing on every cycle.
-    pub fn trace_roots(&self, collector: &mut Collector) {
-        for name in &self.names {
-            if name.is_valid() {
-                collector.push(*name);
-            }
+impl Pool<FUNCTION> for Functions {
+    fn byte_count(&self) -> usize {
+        // replace with more realstic number
+        self.names.capacity() * 102
+    }
+
+    fn count(&self) -> usize {
+        self.names.len()
+    }
+
+    fn trace(&self, handle: Handle<FUNCTION>, collector: &mut Collector) {
+        if self.names[handle.index()] != StringHandle::EMPTY {
+            collector.push(self.names[handle.index()])
         }
-        for chunk in &self.chunks {
-            for value in &chunk.constants {
-                value.trace(collector);
+        for constant in &self.chunks[handle.index()].constants {
+            constant.trace(collector)
+        }
+    }
+
+    fn sweep(&mut self, marks: &BitArray) {
+        for i in 0..self.count() {
+            if !marks.get(i) {
+                self.names[i] = StringHandle::EMPTY;
+                self.arities[i] = 0;
+                self.chunks[i].code.clear();
+                self.chunks[i].constants.clear();
+                self.chunks[i].lines.clear();
+                self.chunks[i].run_lengths.clear();
             }
         }
     }

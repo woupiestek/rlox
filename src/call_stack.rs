@@ -60,11 +60,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
 
     pub fn read_string(&mut self, heap: &Heap) -> Result<StringHandle, String> {
         let value = self.read_constant(heap);
-        if let Value::String(handle) = value {
-            Ok(handle)
-        } else {
-            err!("'{}' is not a string", value.to_string(heap))
-        }
+        StringHandle::try_from(value)
     }
 
     pub fn upvalue(&self, index: usize, heap: &Heap) -> Result<UpvalueHandle, String> {

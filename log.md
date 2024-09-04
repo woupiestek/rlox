@@ -1,5 +1,55 @@
 # Rlox
 
+## 2024-09-04
+
+### nanboxing
+
+The verdict is in:
+
+- binary_trees: failures
+- equality: loop 5.19995379447937 elapsed 5.391582727432251 equals
+  0.19162893295288086
+- fib: 2.4675538539886475
+- instantiation: 0.7299289703369141
+- invocation: 0.6673479080200195
+- method_call: 0.46359729766845703
+- properties: 0.9386715888977051
+- string_equality: loop 1.5483124256134033 elapsed 1.6908936500549316 equals
+  0.14258122444152832
+- trees: failures
+- zoo_batch: 134940000 2249 10.003165483474731
+- zoo: 10000002 0.6845400333404541
+
+It helped. The difference between equality and string equality is rather
+notable. In one test the data is on the stack While in the other it is on the
+heap as constants of functions, so that may explain it. I guess it has to do
+with constant lookup, since that is the apparent difference. the reason we
+didn't put all constants into a master list, is that functions can be nested, so
+constants would also show up that way.
+
+The tree and binary tree test still fail rather mysteriously.
+
+okay, not so mysterious, apparently the initialized is forgotten during the mark
+operation, after which
+
+### restoring the bytecode idea
+
+There could simply be two stacks: One for functions that are in progress and one
+for functions that are done. once a nested function is closed, its code,
+constants and lines are moved to the done stack, and the compilation of the
+parent functions continues. The end result is that on both sides only one array
+of code, constants, lines and run lengths is needed. The compression of lines
+could even wait until that point. Also note that the order of the code could be
+reversed, so the ip would decrement every time.
+
+### todo
+
+- keep garbage collector around, just refresh
+- test performance
+- ~~NaN Boxing~~
+- two stack repository for functions
+- memory pooling for array of upvalues & maps of closrures and functions
+
 ## 2024-09-02
 
 ### one array of upvalue handles

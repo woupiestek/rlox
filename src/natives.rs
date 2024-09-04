@@ -47,6 +47,6 @@ mod tests {
     fn store_native_function() {
         let mut natives = Natives::new();
         let handle = natives.store(first);
-        assert_eq!(natives.call(handle, &[Value::Nil]), Ok(Value::Nil));
+        assert_eq!(natives.call(handle, &[Value::NIL]), Ok(Value::NIL));
     }
 }

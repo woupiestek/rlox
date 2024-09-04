@@ -1,14 +1,16 @@
 use std::time;
 
 use crate::{
+    bound_methods::BoundMethodHandle,
     call_stack::CallStack,
     classes::ClassHandle,
     closures::ClosureHandle,
     common::U8_COUNT,
     compiler::compile,
     functions::FunctionHandle,
-    heap::{Collector, Heap},
-    natives::Natives,
+    heap::{Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
+    instances::InstanceHandle,
+    natives::{NativeHandle, Natives},
     op::Op,
     strings::{Map, StringHandle},
     upvalues::UpvalueHandle,
@@ -27,13 +29,9 @@ fn clock_native(_args: &[Value]) -> Result<Value, String> {
 
 macro_rules! binary_op {
     ($self:ident, $a:ident, $b:ident, $value:expr) => {{
-        let tail = $self.tail(2)?;
-        if let &[Value::Number($a), Value::Number($b)] = tail {
-            $self.stack_top -= 2;
-            $self.push(Value::from($value));
-        } else {
-            return err!("Operands must be numbers, but were {:?}.", tail);
-        }
+        let $b = f64::try_from($self.pop())?;
+        let $a = f64::try_from($self.pop())?;
+        $self.push(Value::from($value));
     }};
 }
 
@@ -52,7 +50,7 @@ impl VM {
         let mut heap = Heap::new();
         let init_string = heap.strings.put("init");
         let mut s = Self {
-            values: [Value::Nil; STACK_SIZE],
+            values: [Value::NIL; STACK_SIZE],
             stack_top: 0,
             call_stack: CallStack::new(),
             globals: Map::new(),
@@ -111,7 +109,6 @@ impl VM {
         {
             println!("collect init string");
         }
-        self.heap.functions.trace_roots(&mut collector);
         collector.push(self.init_string);
         collector
     }
@@ -125,7 +122,7 @@ impl VM {
         // are the protections still needed?
         self.push(Value::from(key));
         self.globals
-            .set(key, Value::Native(self.natives.store(native_fn)));
+            .set(key, Value::from(self.natives.store(native_fn)));
         self.pop();
     }
 
@@ -154,13 +151,13 @@ impl VM {
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
-        match callee {
-            Value::Class(handle) => {
+        match callee.kind() {
+            Some(CLASS) => {
                 self.collect_garbage_if_needed();
-                let instance = self.heap.instances.new_instance(handle);
-                // self.push(Value::Instance(instance));
-                self.values[self.stack_top - arity as usize - 1] = Value::Instance(instance);
-                if let Some(init) = self.heap.classes.get_method(handle, self.init_string) {
+                let class = ClassHandle::try_from(callee)?;
+                let instance = self.heap.instances.new_instance(class);
+                self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
+                if let Some(init) = self.heap.classes.get_method(class, self.init_string) {
                     return self.call(init, arity);
                 } else if arity > 0 {
                     return err!(
@@ -172,19 +169,22 @@ impl VM {
                     return Ok(());
                 }
             }
-            Value::BoundMethod(handle) => {
-                let receiver = self.heap.bound_methods.get_receiver(handle);
-                self.values[self.stack_top - arity as usize - 1] = Value::Instance(receiver);
-                let method = self.heap.bound_methods.get_method(handle);
+            Some(BOUND_METHOD) => {
+                let bound_method = BoundMethodHandle::try_from(callee)?;
+                let receiver = self.heap.bound_methods.get_receiver(bound_method);
+                self.values[self.stack_top - arity as usize - 1] = Value::from(receiver);
+                let method = self.heap.bound_methods.get_method(bound_method);
                 return self.call(method, arity);
             }
-            Value::Native(handle) => {
-                let result = self.natives.call(handle, self.tail(arity as usize)?)?;
+            Some(NATIVE) => {
+                let result = self
+                    .natives
+                    .call(NativeHandle::try_from(callee)?, self.tail(arity as usize)?)?;
                 self.stack_top -= arity as usize + 1;
                 self.push(result);
                 return Ok(());
             }
-            Value::Closure(ch) => return self.call(ch, arity),
+            Some(CLOSURE) => return self.call(ClosureHandle::try_from(callee)?, arity),
             _ => err!(
                 "Can only call functions and classes, not '{}'",
                 callee.to_string(&self.heap)
@@ -208,7 +208,7 @@ impl VM {
     }
 
     fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<(), String> {
-        let handle = self.peek(arity as usize).as_instance()?;
+        let handle = InstanceHandle::try_from(self.peek(arity as usize))?;
         if let Some(property) = self.heap.instances.get_property(handle, name) {
             self.values[self.stack_top - arity as usize - 1] = property;
             self.call_value(property, arity)
@@ -224,33 +224,22 @@ impl VM {
                 self.heap.strings.get(name).unwrap()
             ),
             Some(method) => {
-                if let Value::Instance(instance) = self.peek(0) {
-                    self.collect_garbage_if_needed();
-                    let bm = self.heap.bound_methods.bind(instance, method);
-                    self.pop();
-                    self.push(Value::BoundMethod(bm));
-                    Ok(())
-                } else {
-                    err!(
-                        "Cannot bind method {} to {}",
-                        self.heap
-                            .functions
-                            .to_string(self.heap.closures.function_handle(method), &self.heap),
-                        self.heap.strings.get(name).unwrap()
-                    )
-                }
+                let instance = Handle::try_from(self.peek(0))?;
+                self.collect_garbage_if_needed();
+                let bm = self.heap.bound_methods.bind(instance, method);
+                self.pop();
+                self.push(Value::from(bm));
+                Ok(())
             }
         }
     }
 
     fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
-        if let Ok(&[Value::Class(class), Value::Closure(method)]) = self.tail(2) {
-            self.heap.classes.set_method(class, name, method);
-            self.pop();
-            Ok(())
-        } else {
-            err!("Method definition failed")
-        }
+        let class = Handle::try_from(self.peek(1))?;
+        let method = Handle::try_from(self.peek(0))?;
+        self.heap.classes.set_method(class, name, method);
+        self.pop();
+        Ok(())
     }
 
     fn run(&mut self) -> Result<(), String> {
@@ -286,25 +275,14 @@ impl VM {
             }
             match instruction {
                 Op::Add => {
-                    if let &[a, b] = self.tail(2)? {
-                        if let (Value::String(a), Value::String(b)) = (a, b) {
-                            let c = self.heap.strings.concat(a, b).ok_or("Missing strings")?;
-                            self.stack_top -= 2;
-                            self.push(Value::String(c));
-                            continue;
-                        }
-
-                        if let (Value::Number(a), Value::Number(b)) = (a, b) {
-                            self.stack_top -= 2;
-                            self.push(Value::from(a + b));
-                            continue;
-                        }
-
-                        return err!(
-                            "Operands must be either numbers or strings, found '{}' and '{}'",
-                            a.to_string(&self.heap),
-                            b.to_string(&self.heap),
-                        );
+                    if self.peek(0).is_number() {
+                        binary_op!(self, x, y, x + y);
+                    } else {
+                        let a = Handle::try_from(self.peek(0))?;
+                        let b = Handle::try_from(self.peek(1))?;
+                        let c = self.heap.strings.concat(a, b).ok_or("Missing strings")?;
+                        self.stack_top -= 2;
+                        self.push(Value::from(c));
                     }
                 }
                 Op::Call => {
@@ -315,21 +293,21 @@ impl VM {
                     let name = self.call_stack.read_string(&self.heap)?;
                     self.collect_garbage_if_needed();
                     let new_class = self.heap.classes.new_class(name);
-                    self.push(Value::Class(new_class));
+                    self.push(Value::from(new_class));
                 }
                 Op::CloseUpvalue => {
                     self.close_upvalues(self.stack_top - 1);
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = self.call_stack.read_constant(&self.heap).as_function()?;
+                    let function = Handle::try_from(self.call_stack.read_constant(&self.heap))?;
                     // garbage collection risks?
                     self.collect_garbage_if_needed();
                     let closure = self
                         .heap
                         .closures
                         .new_closure(function, &self.heap.functions);
-                    self.push(Value::Closure(closure));
+                    self.push(Value::from(closure));
                     let capacity = self.heap.functions.upvalue_count(function);
                     for i in 0..capacity {
                         let is_local = self.call_stack.read_byte(&self.heap);
@@ -358,7 +336,7 @@ impl VM {
                     let b = self.pop();
                     self.push(Value::from(a == b));
                 }
-                Op::False => self.push(Value::False),
+                Op::False => self.push(Value::FALSE),
                 Op::GetGlobal => {
                     let name = self.call_stack.read_string(&self.heap)?;
                     if let Some(value) = self.globals.get(name) {
@@ -376,7 +354,7 @@ impl VM {
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
-                    let handle = self.peek(0).as_instance()?;
+                    let handle = Handle::try_from(self.peek(0))?;
                     let name = self.call_stack.read_string(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
@@ -387,7 +365,7 @@ impl VM {
                 }
                 Op::GetSuper => {
                     let name = self.call_stack.read_string(&self.heap)?;
-                    let super_class = self.pop().as_class()?;
+                    let super_class = Handle::try_from(self.pop())?;
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
@@ -395,7 +373,7 @@ impl VM {
                         .heap
                         .upvalues
                         .get(self.call_stack.read_upvalue(&self.heap)?);
-                    if let Value::StackRef(location) = value {
+                    if let Some(location) = value.as_stack_ref() {
                         self.push(self.values[location as usize]);
                     } else {
                         self.push(value);
@@ -405,12 +383,11 @@ impl VM {
                     binary_op!(self, a, b, a > b)
                 }
                 Op::Inherit => {
-                    if let &[Value::Class(super_class), Value::Class(sub_class)] = self.tail(2)? {
-                        self.heap.classes.clone_methods(super_class, sub_class);
-                        self.pop();
-                    } else {
-                        return err!("Super and sub classes must be classes");
-                    }
+                    let super_class = Handle::try_from(self.peek(1))?;
+                    let sub_class = Handle::try_from(self.peek(0))?;
+                    self.heap.classes.clone_methods(super_class, sub_class);
+                    // to check: only pop one?
+                    self.pop();
                 }
                 Op::Invoke => {
                     let name = self.call_stack.read_string(&self.heap)?;
@@ -433,13 +410,10 @@ impl VM {
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
                 Op::Negative => {
-                    if let Value::Number(a) = self.peek(0) {
-                        self.values[self.stack_top - 1] = Value::from(-a);
-                    } else {
-                        return err!("Operand must be a number.");
-                    }
+                    let a = f64::try_from(self.peek(0))?;
+                    self.values[self.stack_top - 1] = Value::from(-a);
                 }
-                Op::Nil => self.push(Value::Nil),
+                Op::Nil => self.push(Value::NIL),
                 Op::Not => {
                     let pop = &self.pop();
                     self.push(Value::from(pop.is_falsey()));
@@ -475,20 +449,19 @@ impl VM {
                     self.values[self.call_stack.slot() + index] = self.peek(0);
                 }
                 Op::SetProperty => {
-                    if let &[Value::Instance(a), b] = self.tail(2)? {
-                        self.heap.instances.set_property(
-                            a,
-                            self.call_stack.read_string(&self.heap)?,
-                            b,
-                        );
-                        self.stack_top -= 2;
-                        self.push(b);
-                    }
+                    let b = self.pop();
+                    let a = Handle::try_from(self.pop())?;
+                    self.heap.instances.set_property(
+                        a,
+                        self.call_stack.read_string(&self.heap)?,
+                        b,
+                    );
+                    self.push(b);
                 }
                 Op::SetUpvalue => {
                     let upvalue = self.call_stack.read_upvalue(&self.heap)?;
                     let value = self.heap.upvalues.get(upvalue);
-                    if let Value::StackRef(location) = value {
+                    if let Some(location) = value.as_stack_ref() {
                         self.values[location as usize] = self.peek(0)
                     } else {
                         self.heap.upvalues.set(upvalue, self.peek(0))
@@ -498,10 +471,10 @@ impl VM {
                 Op::SuperInvoke => {
                     let name = self.call_stack.read_string(&self.heap)?;
                     let arity = self.call_stack.read_byte(&self.heap);
-                    let super_class = self.pop().as_class()?;
+                    let super_class = Handle::try_from(self.pop())?;
                     self.invoke_from_class(super_class, name, arity)?;
                 }
-                Op::True => self.push(Value::True),
+                Op::True => self.push(Value::TRUE),
             }
         }
     }
@@ -530,7 +503,7 @@ impl VM {
             .heap
             .closures
             .new_closure(FunctionHandle::MAIN, &self.heap.functions);
-        self.push(Value::Closure(closure));
+        self.push(Value::from(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);

@@ -37,7 +37,7 @@ impl Upvalues {
         if let Some(h) = self.open.get(location) {
             return h;
         }
-        let value = Value::StackRef(location);
+        let value = Value::from_stack_ref(location);
         let handle = self.store(value);
         self.open.add(location, handle);
         handle
@@ -89,7 +89,7 @@ impl Pool<UPVALUE> for Upvalues {
         self.free.clear();
         for i in 0..self.values.len() {
             if !marks.get(i) {
-                self.values[i] = Value::Nil;
+                self.values[i] = Value::NIL;
                 self.free.push(i as u32);
             }
         }

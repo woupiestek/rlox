@@ -245,7 +245,36 @@ impl Strings {
         hash >> 24 ^ hash & 0xFFFFFF
     }
 
-    fn intern(&mut self, str: &str) -> StringHandle {
+    fn grow(&mut self, capacity: usize) {
+        let mut key_set = KeySet::with_capacity(capacity);
+        let mut values: Box<[Option<Box<str>>]> = vec![None; capacity].into_boxed_slice();
+        let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
+        for i in 0..self.key_set.keys.len() {
+            let key = self.key_set.keys[i];
+            if key.is_valid() {
+                let j = key_set.add(key).1;
+                values[j] = self.values[i].take();
+                generations[j] = self.generations[i];
+            }
+        }
+        self.key_set = key_set;
+        self.values = values;
+        self.generations = generations;
+    }
+
+    fn grow_if_necessary(&mut self) {
+        let capacity = self.capacity();
+        if 4 * (self.key_set.count + 1) <= 3 * capacity {
+            return;
+        }
+        self.grow(if capacity < 8 {
+            8
+        } else {
+            2 * self.key_set.keys.len()
+        })
+    }
+
+    pub fn put(&mut self, str: &str) -> StringHandle {
         self.grow_if_necessary();
         let hash = Self::hash(str);
         let mask = self.key_set.keys.len() - 1;
@@ -291,40 +320,6 @@ impl Strings {
         }
     }
 
-    fn grow(&mut self, capacity: usize) {
-        let mut key_set = KeySet::with_capacity(capacity);
-        let mut values: Box<[Option<Box<str>>]> = vec![None; capacity].into_boxed_slice();
-        let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
-        for i in 0..self.key_set.keys.len() {
-            let key = self.key_set.keys[i];
-            if key.is_valid() {
-                let j = key_set.add(key).1;
-                values[j] = self.values[i].take();
-                generations[j] = self.generations[i];
-            }
-        }
-        self.key_set = key_set;
-        self.values = values;
-        self.generations = generations;
-    }
-
-    fn grow_if_necessary(&mut self) {
-        let capacity = self.capacity();
-        if 4 * (self.key_set.count + 1) <= 3 * capacity {
-            return;
-        }
-        self.grow(if capacity < 8 {
-            8
-        } else {
-            2 * self.key_set.keys.len()
-        })
-    }
-
-    pub fn put(&mut self, str: &str) -> StringHandle {
-        self.grow_if_necessary();
-        self.intern(str)
-    }
-
     pub fn get(&self, handle: StringHandle) -> Option<&str> {
         let (found, index) = self.key_set.find(handle);
         if found {
@@ -335,15 +330,11 @@ impl Strings {
     }
 
     pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> Option<StringHandle> {
-        if let Some(a) = self.get(a) {
-            if let Some(b) = self.get(b) {
-                let mut c = String::new();
-                c.push_str(a);
-                c.push_str(b);
-                Some(self.put(&c))
-            } else {
-                None
-            }
+        if let (Some(a), Some(b)) = (self.get(a), self.get(b)) {
+            let mut c = String::new();
+            c.push_str(a);
+            c.push_str(b);
+            Some(self.put(&c))
         } else {
             None
         }

@@ -12,8 +12,8 @@ use crate::{
 };
 
 pub struct Collector {
-    pub handles: [Vec<u32>; 6],
-    pub marks: [BitArray; 6],
+    pub handles: [Vec<u32>; 7],
+    pub marks: [BitArray; 7],
     pub strings: KeySet,
 }
 
@@ -23,8 +23,8 @@ pub const CLASS: usize = 2;
 pub const CLOSURE: usize = 3;
 pub const UPVALUE: usize = 4;
 pub const STRING: usize = 5;
-pub const NATIVE: usize = 6;
-pub const FUNCTION: usize = 7;
+pub const FUNCTION: usize = 6;
+pub const NATIVE: usize = 7;
 
 // todo: currently, this is reconstructed every GC cycle. Keeping it may help performance
 impl Collector {
@@ -33,6 +33,7 @@ impl Collector {
             handles: Default::default(),
             // resizeable, resettable arrays, length updates on collection
             marks: [
+                BitArray::new(),
                 BitArray::new(),
                 BitArray::new(),
                 BitArray::new(),
@@ -53,7 +54,7 @@ impl Collector {
 
     fn mark_and_sweep(&mut self, heap: &mut Heap) {
         #[cfg(feature = "log_gc")]
-        let before = self.byte_count;
+        let before = heap.byte_count();
         #[cfg(feature = "log_gc")]
         {
             println!("-- gc begin");
@@ -64,13 +65,13 @@ impl Collector {
         #[cfg(feature = "log_gc")]
         {
             println!("-- gc end");
-            let after = self.byte_count;
+            let after = heap.byte_count();
             println!(
                 "   collected {} byte (from {} to {}) next at {}",
                 before - after,
                 before,
                 after,
-                self.next_gc
+                heap.next_gc
             );
         }
     }
@@ -78,9 +79,13 @@ impl Collector {
     fn mark(&mut self, heap: &mut Heap) {
         #[cfg(feature = "log_gc")]
         {
+            let mut count = 0;
+            for i in 0..6 {
+                count += self.handles[i].len();
+            }
             println!(
                 "Start marking objects & tracing references. Number of roots: {}",
-                roots.len()
+                count
             );
         }
         loop {
@@ -92,6 +97,7 @@ impl Collector {
             done &= heap.bound_methods.mark(self)
                 && heap.classes.mark(self)
                 && heap.closures.mark(self)
+                && heap.functions.mark(self)
                 && heap.instances.mark(self)
                 && heap.upvalues.mark(self);
             if done {
@@ -109,14 +115,15 @@ impl Collector {
         {
             println!("Start sweeping.");
         }
-        heap.classes.sweep(&self.marks[CLASS]);
-        heap.closures.sweep(&self.marks[CLOSURE]);
-        heap.bound_methods.sweep(&self.marks[BOUND_METHOD]);
         // this is pain.
         heap.strings
             .sweep(mem::replace(&mut self.strings, KeySet::with_capacity(0)));
-        heap.upvalues.sweep(&self.marks[UPVALUE]);
+        heap.bound_methods.sweep(&self.marks[BOUND_METHOD]);
+        heap.classes.sweep(&self.marks[CLASS]);
+        heap.closures.sweep(&self.marks[CLOSURE]);
+        heap.functions.sweep(&self.marks[FUNCTION]);
         heap.instances.sweep(&self.marks[INSTANCE]);
+        heap.upvalues.sweep(&self.marks[UPVALUE]);
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -192,6 +199,10 @@ impl Heap {
     }
 
     pub fn needs_gc(&self) -> bool {
+        self.byte_count() > self.next_gc
+    }
+
+    fn byte_count(&self) -> usize {
         self.upvalues.byte_count()
             + self.strings.byte_count()
             + self.closures.byte_count()
@@ -199,6 +210,6 @@ impl Heap {
             + self.instances.byte_count()
             + self.bound_methods.byte_count()
             + self.strings.byte_count()
-            > self.next_gc
+            + self.functions.byte_count()
     }
 }
