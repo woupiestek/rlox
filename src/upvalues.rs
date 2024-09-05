@@ -88,7 +88,7 @@ impl Pool<UPVALUE> for Upvalues {
     fn sweep(&mut self, marks: &BitArray) {
         self.free.clear();
         for i in 0..self.values.len() {
-            if !marks.get(i) {
+            if !marks.has(i) {
                 self.values[i] = Value::NIL;
                 self.free.push(i as u32);
             }

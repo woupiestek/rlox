@@ -47,7 +47,7 @@ impl Collector {
     }
 
     pub fn push<const KIND: usize>(&mut self, handle: Handle<KIND>) {
-        if !self.marks[KIND as usize].get(handle.index()) {
+        if !self.marks[KIND as usize].has(handle.index()) {
             self.handles[KIND as usize].push(handle.0);
         }
     }
@@ -80,7 +80,7 @@ impl Collector {
         #[cfg(feature = "log_gc")]
         {
             let mut count = 0;
-            for i in 0..6 {
+            for i in 0..7 {
                 count += self.handles[i].len();
             }
             println!(
@@ -89,11 +89,12 @@ impl Collector {
             );
         }
         loop {
-            let mut done = true;
-            if let Some(i) = self.handles[STRING].pop() {
+            let mut done = self.handles[STRING].is_empty();
+            while let Some(i) = self.handles[STRING].pop() {
                 self.strings.put(Handle::from(i));
                 done = false
             }
+            // short cirquiting can make this behave unpredictably, but that does not explain the problems
             done &= heap.bound_methods.mark(self)
                 && heap.classes.mark(self)
                 && heap.closures.mark(self)
@@ -141,14 +142,16 @@ where
     fn sweep(&mut self, marks: &BitArray);
     // indicate that the collector has no more elements of a kind
     fn mark(&mut self, collector: &mut Collector) -> bool {
-        if let Some(i) = collector.handles[KIND as usize].pop() {
-            if !collector.marks[KIND as usize].get(i as usize) {
+        if collector.handles[KIND as usize].is_empty() {
+            return true;
+        }
+        while let Some(i) = collector.handles[KIND as usize].pop() {
+            if !collector.marks[KIND as usize].has(i as usize) {
+                collector.marks[KIND as usize].add(i as usize);
                 self.trace(Handle::from(i), collector);
             }
-            false
-        } else {
-            true
         }
+        false
     }
 }
 

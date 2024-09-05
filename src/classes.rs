@@ -73,7 +73,11 @@ impl Pool<CLASS> for Classes {
         self.free.clear();
         self.method_capacity = 0;
         for i in 0..self.names.len() {
-            if !marks.get(i) {
+            if !marks.has(i) {
+                // if the name remains valid, then the error messages still shows the class name,
+                // while the methods are gone...
+                // a null for maps might be good as well...
+                self.names[i] = StringHandle::EMPTY;
                 self.methods[i] = Map::new();
                 self.free.push(ClassHandle::from(i as u32));
             } else {

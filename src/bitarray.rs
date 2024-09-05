@@ -12,7 +12,7 @@ impl BitArray {
             data: Vec::with_capacity((length + 7) / 8),
         }
     }
-    pub fn get(&self, index: usize) -> bool {
+    pub fn has(&self, index: usize) -> bool {
         if index / 8 >= self.data.len() {
             return false;
         }
@@ -43,9 +43,9 @@ mod tests {
         bit_array.add(3);
         bit_array.add(5);
         bit_array.add(7);
-        assert!(!bit_array.get(4));
-        assert!(bit_array.get(5));
+        assert!(!bit_array.has(4));
+        assert!(bit_array.has(5));
         bit_array.remove(5);
-        assert!(!bit_array.get(5));
+        assert!(!bit_array.has(5));
     }
 }

@@ -74,7 +74,7 @@ impl Pool<INSTANCE> for Instances {
         self.free.clear();
         self.property_capacity = 0;
         for i in 0..self.classes.len() {
-            if !marks.get(i) {
+            if !marks.has(i) {
                 self.properties[i] = Map::new();
                 self.free.push(InstanceHandle::from(i as u32));
             } else {

@@ -62,7 +62,7 @@ impl Pool<BOUND_METHOD> for BoundMethods {
     fn sweep(&mut self, marks: &BitArray) {
         self.free.clear();
         for i in 0..self.receivers.len() {
-            if !marks.get(i) {
+            if !marks.has(i) {
                 self.free.push(BoundMethodHandle::from(i as u32));
             }
         }

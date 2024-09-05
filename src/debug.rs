@@ -1,20 +1,18 @@
 use crate::{
-    functions::{Chunk, FunctionHandle, Functions},
+    functions::{Chunk, FunctionHandle},
     heap::Heap,
     op::Op,
 };
 
-pub struct Disassembler<'src, 'hp> {
-    functions: &'src Functions,
+pub struct Disassembler<'hp> {
     heap: &'hp Heap,
     fh: FunctionHandle,
     ip: usize,
 }
 
-impl<'src, 'hp> Disassembler<'src, 'hp> {
-    pub fn disassemble(functions: &'src Functions, heap: &'hp Heap) {
+impl<'hp> Disassembler<'hp> {
+    pub fn disassemble(heap: &'hp Heap) {
         Self {
-            functions,
             heap,
             fh: FunctionHandle::MAIN,
             ip: 0,
@@ -23,13 +21,13 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
     }
 
     fn chunk(&self) -> &Chunk {
-        self.functions.chunk_ref(self.fh)
+        self.heap.functions.chunk_ref(self.fh)
     }
 
     fn run(&mut self) {
-        for i in 0..self.functions.count() {
-            self.fh = FunctionHandle::from_index(i);
-            println!("{}:", self.functions.to_string(self.fh, self.heap));
+        for i in 0..self.heap.functions.count() {
+            self.fh = FunctionHandle::from(i as u32);
+            println!("{}:", self.heap.functions.to_string(self.fh, self.heap));
             self.ip = 0;
             self.code();
         }
@@ -78,15 +76,13 @@ impl<'src, 'hp> Disassembler<'src, 'hp> {
     }
     fn constant(&mut self) {
         let value = self.chunk().read_constant(self.ip);
-        print!(" {}", value.to_string(&self.heap, &self.functions));
+        print!(" {}", value.to_string(&self.heap));
         self.ip += 1;
     }
     fn invoke(&mut self) {
         print!(
             " {} ({})",
-            self.chunk()
-                .read_constant(self.ip)
-                .to_string(&self.heap, &self.functions),
+            self.chunk().read_constant(self.ip).to_string(&self.heap),
             self.chunk().read_byte(self.ip + 1)
         );
         self.ip += 2;

@@ -242,7 +242,7 @@ impl Strings {
             hash ^= byte as u32;
             hash = hash.wrapping_mul(16777619u32);
         }
-        hash >> 24 ^ hash & 0xFFFFFF
+        (hash >> 24) ^ hash & 0xFFFFFF
     }
 
     fn grow(&mut self, capacity: usize) {

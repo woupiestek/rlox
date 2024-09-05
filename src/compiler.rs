@@ -86,7 +86,7 @@ impl CompileData {
                 i -= 1;
             }
             if self.locals[i] == name {
-                return if !self.locals_initialized.get(i) {
+                return if !self.locals_initialized.has(i) {
                     err!("Can't read local variable in its own initializer.")
                 } else {
                     Ok(Some(i as u8))
@@ -99,7 +99,7 @@ impl CompileData {
         let count = self.upvalues.len();
         for i in 0..count {
             let upvalue = self.upvalues[i];
-            if upvalue == index && self.upvalues_local.get(upvalue as usize) == is_local {
+            if upvalue == index && self.upvalues_local.has(upvalue as usize) == is_local {
                 return Ok(i as u8);
             }
         }
@@ -249,7 +249,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let mut index = self.data_ref().locals.len();
         while index > l {
             index -= 1;
-            self.emit_op(if self.data_ref().locals_captured.get(index) {
+            self.emit_op(if self.data_ref().locals_captured.has(index) {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
@@ -440,7 +440,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if self.source.class_depth == 0 {
             return err!("Can't use 'super' outside of a class.");
         }
-        if !self.source.has_super.get(self.source.class_depth as usize) {
+        if !self.source.has_super.has(self.source.class_depth as usize) {
             return err!("Can't use 'super' in a class with no superclass.");
         }
         self.source
@@ -629,7 +629,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
             self.chunk_mut().write(
-                &[enclosed.upvalues_local.get(upvalue as usize) as u8, upvalue],
+                &[enclosed.upvalues_local.has(upvalue as usize) as u8, upvalue],
                 line,
             );
         }
@@ -709,7 +709,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
         self.emit_op(Op::Pop);
 
-        if self.source.has_super.get(self.source.class_depth as usize) {
+        if self.source.has_super.has(self.source.class_depth as usize) {
             self.end_scope();
         }
 

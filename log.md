@@ -1,5 +1,40 @@
 # Rlox
 
+## 2024-09-05
+
+### debug & benchmark
+
+- binary_trees: 4.429989576339722
+- trees: 8.258971929550171
+
+The bugs are fixed and the results form the garbaeg collected tests are quite
+good.
+
+### compiling with many stacks.
+
+It remains a question o/c. Tighter packing is nice, but groups of 4 or 8 should
+eliminate much waste, while keeping data close together.
+
+For functions: each has a name, code, constants, line numbers But these are to
+be replaces with offsets and maybe lengths in an array Is it better to keep
+these together?
+
+### todo
+
+- keep garbage collector around, just refresh
+- test performance
+- two stack repository for functions
+- memory pooling for array of upvalues & maps of closures and functions
+
+Note: only a few allocation strategies make sense. Varied size, but nested
+lifetimes? Use a stack. Fixed sized but random lifetimes? Use a memory pool. The
+rest requires more creativity.
+
+The two stack solution for functions presupposes that functions are never freed,
+something that is possible now. Maybe that is an optimization for rlox, as it
+give the garbage collector less to manage. I think I mostly need a break from
+this project, though, maybe try these ideas on my other projects.
+
 ## 2024-09-04
 
 ### nanboxing
@@ -21,7 +56,7 @@ The verdict is in:
 - zoo: 10000002 0.6845400333404541
 
 It helped. The difference between equality and string equality is rather
-notable. In one test the data is on the stack While in the other it is on the
+notable. In one test the data is on the stack, while in the other it is on the
 heap as constants of functions, so that may explain it. I guess it has to do
 with constant lookup, since that is the apparent difference. the reason we
 didn't put all constants into a master list, is that functions can be nested, so
@@ -48,7 +83,7 @@ reversed, so the ip would decrement every time.
 - test performance
 - ~~NaN Boxing~~
 - two stack repository for functions
-- memory pooling for array of upvalues & maps of closrures and functions
+- memory pooling for array of upvalues & maps of closures and functions
 
 ## 2024-09-02
 

@@ -8,7 +8,7 @@ use crate::{
     common::U8_COUNT,
     compiler::compile,
     functions::FunctionHandle,
-    heap::{Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
+    heap::{Collector, Handle, Heap, Pool, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
     instances::InstanceHandle,
     natives::{NativeHandle, Natives},
     op::Op,
@@ -75,8 +75,16 @@ impl VM {
 
     fn collect_garbage_if_needed(&mut self) {
         if self.heap.needs_gc() {
+            #[cfg(feature = "trace")]
+            {
+                println!("collect garbage");
+            }
             let collector = self.roots();
             self.heap.retain(collector);
+            #[cfg(feature = "trace")]
+            {
+                println!("garbage collected");
+            }
         }
     }
 
@@ -110,6 +118,13 @@ impl VM {
             println!("collect init string");
         }
         collector.push(self.init_string);
+        #[cfg(feature = "log_gc")]
+        {
+            println!("collect main function");
+        }
+        self.heap
+            .functions
+            .trace(FunctionHandle::MAIN, &mut collector);
         collector
     }
 
@@ -160,6 +175,7 @@ impl VM {
                 if let Some(init) = self.heap.classes.get_method(class, self.init_string) {
                     return self.call(init, arity);
                 } else if arity > 0 {
+                    // after garbage collection, classes get method init string is empty... why!?
                     return err!(
                         "Expected no arguments for {} but got {}.",
                         callee.to_string(&self.heap),
@@ -249,10 +265,7 @@ impl VM {
             {
                 print!("stack: ");
                 for i in 0..self.stack_top {
-                    print!(
-                        "{};",
-                        &self.values[i].to_string(&self.heap, &self.heap.functions)
-                    );
+                    print!("{};", &self.values[i].to_string(&self.heap));
                 }
                 println!("");
 
@@ -260,11 +273,8 @@ impl VM {
                 for k in self.globals.keys() {
                     print!(
                         "{}:{};",
-                        self.heap.get_str(k),
-                        self.globals
-                            .get(k)
-                            .unwrap()
-                            .to_string(&self.heap, &self.heap.functions)
+                        self.heap.strings.get(k).unwrap(),
+                        self.globals.get(k).unwrap().to_string(&self.heap)
                     )
                 }
                 println!("");

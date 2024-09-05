@@ -129,11 +129,6 @@ pub type FunctionHandle = Handle<FUNCTION>;
 
 impl FunctionHandle {
     pub const MAIN: Self = Self(0);
-
-    #[cfg(feature = "trace")]
-    pub fn from_index(i: usize) -> Self {
-        Self(i as u16)
-    }
 }
 
 #[derive(Debug)]
@@ -239,7 +234,7 @@ impl Pool<FUNCTION> for Functions {
 
     fn sweep(&mut self, marks: &BitArray) {
         for i in 0..self.count() {
-            if !marks.get(i) {
+            if !marks.has(i) {
                 self.names[i] = StringHandle::EMPTY;
                 self.arities[i] = 0;
                 self.chunks[i].code.clear();

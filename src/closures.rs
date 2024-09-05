@@ -68,8 +68,8 @@ impl Pool<CLOSURE> for Closures {
         4 * self.upvalue_count + 8 * self.upvalues.capacity()
     }
     fn trace(&self, handle: Handle<CLOSURE>, collector: &mut Collector) {
+        collector.push(self.functions[handle.index()]);
         if let Some(upvalues) = &self.upvalues[handle.index()] {
-            // not collecting functions right now
             for i in 0..upvalues.len() {
                 collector.push(upvalues[i])
             }
@@ -78,7 +78,7 @@ impl Pool<CLOSURE> for Closures {
     fn sweep(&mut self, marked: &BitArray) {
         self.free.clear();
         for i in 0..self.upvalues.len() {
-            if !marked.get(i) {
+            if !marked.has(i) {
                 if let Some(upvalues) = &self.upvalues[i] {
                     self.upvalue_count -= upvalues.len()
                 }
