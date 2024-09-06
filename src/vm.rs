@@ -43,6 +43,7 @@ pub struct VM {
     init_string: StringHandle,
     heap: Heap,
     natives: Natives,
+    collector: Collector,
 }
 
 impl VM {
@@ -57,6 +58,7 @@ impl VM {
             init_string,
             heap,
             natives: Natives::new(),
+            collector: Collector::new(),
         };
         s.define_native("clock", clock_native);
         s
@@ -79,8 +81,8 @@ impl VM {
             {
                 println!("collect garbage");
             }
-            let collector = self.roots();
-            self.heap.retain(collector);
+            self.collect_roots();
+            self.heap.retain(&mut self.collector);
             #[cfg(feature = "trace")]
             {
                 println!("garbage collected");
@@ -88,44 +90,41 @@ impl VM {
         }
     }
 
-    fn roots(&mut self) -> Collector {
-        let mut collector = Collector::new(&self.heap);
+    fn collect_roots(&mut self) {
+        // let mut collector = Collector::new(&self.heap.strings.key_set);
         #[cfg(feature = "log_gc")]
         {
             println!("collect stack objects");
         }
         for i in 0..self.stack_top {
-            self.values[i].trace(&mut collector);
+            self.values[i].trace(&mut self.collector);
         }
         #[cfg(feature = "log_gc")]
         {
             println!("collect frames");
         }
-        self.call_stack.trace(&mut collector);
+        self.call_stack.trace(&mut self.collector);
         #[cfg(feature = "log_gc")]
         {
             println!("collect upvalues");
         }
-        self.heap.upvalues.trace_roots(&mut collector);
+        self.heap.upvalues.trace_roots(&mut self.collector);
         #[cfg(feature = "log_gc")]
         {
             println!("collect globals");
         }
-        self.globals.trace(&mut collector);
+        self.globals.trace(&mut self.collector);
         // no compiler roots
         #[cfg(feature = "log_gc")]
         {
             println!("collect init string");
         }
-        collector.push(self.init_string);
+        self.collector.keys.push(self.init_string);
         #[cfg(feature = "log_gc")]
         {
             println!("collect main function");
         }
-        self.heap
-            .functions
-            .trace(FunctionHandle::MAIN, &mut collector);
-        collector
+        self.heap.functions.trace(FunctionHandle::MAIN, &mut self.collector);
     }
 
     fn define_native(
@@ -288,8 +287,8 @@ impl VM {
                     if self.peek(0).is_number() {
                         binary_op!(self, x, y, x + y);
                     } else {
-                        let a = Handle::try_from(self.peek(0))?;
-                        let b = Handle::try_from(self.peek(1))?;
+                        let a = StringHandle::try_from(self.peek(0))?;
+                        let b = StringHandle::try_from(self.peek(1))?;
                         let c = self.heap.strings.concat(a, b).ok_or("Missing strings")?;
                         self.stack_top -= 2;
                         self.push(Value::from(c));

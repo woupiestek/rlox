@@ -1,114 +1,11 @@
 // run time data structures
 
-use crate::heap::{
-    Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE, STRING,
+use crate::{
+    heap::{
+        Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE, UPVALUE,
+    },
+    strings::StringHandle,
 };
-
-// #[derive(Copy, Clone, Debug, PartialEq)]
-// pub enum Value {
-//     Nil,
-//     True,
-//     False,
-//     Function(FunctionHandle),
-//     Native(NativeHandle),
-//     Number(f64),
-//     BoundMethod(BoundMethodHandle),
-//     String(StringHandle),
-//     StackRef(u16), // for open upvalues
-//     Closure(ClosureHandle),
-//     Class(ClassHandle),
-//     Instance(InstanceHandle),
-// }
-
-// impl From<StringHandle> for Value {
-//     fn from(value: StringHandle) -> Self {
-//         Self::String(value)
-//     }
-// }
-
-// impl From<FunctionHandle> for Value {
-//     fn from(value: FunctionHandle) -> Self {
-//         Self::Function(value)
-//     }
-// }
-
-// impl From<bool> for Value {
-//     fn from(value: bool) -> Self {
-//         if value {
-//             Value::True
-//         } else {
-//             Value::False
-//         }
-//     }
-// }
-
-// impl From<f64> for Value {
-//     fn from(value: f64) -> Self {
-//         Value::Number(value)
-//     }
-// }
-
-// impl Value {
-//     pub fn is_falsey(&self) -> bool {
-//         matches!(self, Value::Nil | Value::False)
-//     }
-
-//     pub fn as_class(&self) -> Result<ClassHandle, String> {
-//         if let &Value::Class(handle) = self {
-//             Ok(handle)
-//         } else {
-//             err!("Not a class")
-//         }
-//     }
-
-//     pub fn as_function(&self) -> Result<FunctionHandle, String> {
-//         if let &Value::Function(handle) = self {
-//             Ok(handle)
-//         } else {
-//             err!("Not a function")
-//         }
-//     }
-
-//     pub fn as_instance(&self) -> Result<InstanceHandle, String> {
-//         if let &Value::Instance(handle) = self {
-//             Ok(handle)
-//         } else {
-//             err!("Not a class")
-//         }
-//     }
-
-//     pub fn to_string(&self, heap: &Heap) -> String {
-//         match self {
-//             Value::False => format!("false"),
-//             Value::Nil => format!("nil"),
-//             Value::Number(a) => format!("{}", a),
-//             Value::BoundMethod(a) => heap.bound_methods.to_string(*a, heap),
-//             Value::True => format!("true"),
-//             Value::Native(_) => format!("<native function>"),
-//             Value::String(a) => heap.strings.get(*a).unwrap().to_owned(),
-//             Value::Function(a) => heap.functions.to_string(*a, heap),
-//             Value::StackRef(i) => format!("&{}", i),
-//             Value::Closure(a) => heap
-//                 .functions
-//                 .to_string(heap.closures.function_handle(*a), heap),
-//             Value::Class(a) => heap.classes.to_string(*a, &heap.strings),
-//             Value::Instance(a) => heap.instances.to_string(*a, heap),
-//         }
-//     }
-
-//     pub fn trace(&self, collector: &mut Collector) {
-//         match self {
-//             Value::BoundMethod(h) => collector.push(*h),
-//             Value::String(h) => collector.push(*h),
-//             Value::Closure(h) => collector.push(*h),
-//             Value::Class(h) => collector.push(*h),
-//             Value::Instance(h) => collector.push(*h),
-//             // Value::Function(_) => todo!(),
-//             // Value::Native(_) => todo!(),
-//             _ => (),
-//         }
-//     }
-// }
 
 // nan box?
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -130,6 +27,25 @@ impl TryFrom<Value> for f64 {
             Ok(f64::from_bits(value.0))
         } else {
             err!("value is not a number")
+        }
+    }
+}
+
+const STRING_TAG: u64 = 0xffff_0000_0000_0000;
+impl From<StringHandle> for Value {
+    fn from(value: StringHandle) -> Self {
+        Self(STRING_TAG ^ (value.0 as u64))
+    }
+}
+
+impl TryFrom<Value> for StringHandle {
+    type Error = String;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        if value.0 & STRING_TAG == STRING_TAG {
+            Ok(Self((STRING_TAG ^ value.0) as u32))
+        } else {
+            err!("value is not a string")
         }
     }
 }
@@ -196,16 +112,19 @@ impl Value {
     }
 
     pub fn trace(&self, collector: &mut Collector) {
-        if 0xffff_0000_0000_0000 & self.0 != 0xfffc_0000_0000_0000 {
-            return;
-        }
         let index = (self.0 & 0xffff_ffff) as u32;
-        match (self.0 >> 32 & 0xffff) as usize {
-            BOUND_METHOD => collector.push(Handle::<BOUND_METHOD>::from(index)),
-            CLASS => collector.push(Handle::<CLASS>::from(index)),
-            CLOSURE => collector.push(Handle::<CLOSURE>::from(index)),
-            INSTANCE => collector.push(Handle::<INSTANCE>::from(index)),
-            STRING => collector.push(Handle::<STRING>::from(index)),
+        match self.0 & STRING_TAG {
+            STRING_TAG => collector.keys.push(StringHandle(index)),
+            0xfffc_0000_0000_0000 => match (self.0 >> 32 & 0xffff) as usize {
+                BOUND_METHOD => collector.push(Handle::<BOUND_METHOD>::from(index)),
+                INSTANCE => collector.push(Handle::<INSTANCE>::from(index)),
+                CLASS => collector.push(Handle::<CLASS>::from(index)),
+                CLOSURE => collector.push(Handle::<CLOSURE>::from(index)),
+                // these should never be used.
+                UPVALUE => collector.push(Handle::<UPVALUE>::from(index)),
+                FUNCTION => collector.push(Handle::<FUNCTION>::from(index)),
+                _ => (),
+            },
             _ => (),
         }
     }
@@ -222,6 +141,14 @@ impl Value {
             return format!("{}", f64::from_bits(self.0));
         }
 
+        if self.0 & STRING_TAG == STRING_TAG {
+            return heap
+                .strings
+                .get(StringHandle((STRING_TAG ^ self.0) as u32))
+                .unwrap()
+                .to_owned();
+        }
+
         if 0x8000_0000_0000_0000 & self.0 == 0x8000_0000_0000_0000 {
             let index = (self.0 & 0xffff_ffff) as u32;
             match ((self.0 >> 32) & 0x000f) as usize {
@@ -233,7 +160,6 @@ impl Value {
                         .to_string(heap.closures.function_handle(Handle::from(index)), heap)
                 }
                 INSTANCE => return heap.instances.to_string(Handle::from(index), heap),
-                STRING => return heap.strings.get(Handle::from(index)).unwrap().to_owned(),
                 FUNCTION => {
                     return heap.functions.to_string(Handle::from(index), heap);
                 }

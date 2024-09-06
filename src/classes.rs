@@ -65,7 +65,7 @@ impl Pool<CLASS> for Classes {
         self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 4) + self.method_capacity * 4
     }
     fn trace(&self, handle: Handle<CLASS>, collector: &mut Collector) {
-        collector.push(self.names[handle.index()]);
+        collector.keys.push(self.names[handle.index()]);
         self.methods[handle.index()].trace(collector);
     }
 

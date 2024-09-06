@@ -225,7 +225,7 @@ impl Pool<FUNCTION> for Functions {
 
     fn trace(&self, handle: Handle<FUNCTION>, collector: &mut Collector) {
         if self.names[handle.index()] != StringHandle::EMPTY {
-            collector.push(self.names[handle.index()])
+            collector.keys.push(self.names[handle.index()])
         }
         for constant in &self.chunks[handle.index()].constants {
             constant.trace(collector)

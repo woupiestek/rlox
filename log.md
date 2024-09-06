@@ -1,5 +1,11 @@
 # Rlox
 
+## 2024-09-06
+
+### refactoring string garbage collection
+
+...and fixing a number of bugs
+
 ## 2024-09-05
 
 ### debug & benchmark

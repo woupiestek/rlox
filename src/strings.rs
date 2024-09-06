@@ -1,12 +1,15 @@
 use std::{mem, u32};
 
 use crate::{
+    bitarray::BitArray,
     closures::ClosureHandle,
-    heap::{Collector, Handle, STRING},
+    heap::{Collector, Handle, Pool, STRING},
     values::Value,
 };
 
-pub type StringHandle = Handle<STRING>;
+// deliberately distinct
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct StringHandle(pub u32);
 
 impl StringHandle {
     pub const EMPTY: Self = Self(0);
@@ -60,11 +63,6 @@ impl KeySet {
             self.count += 1;
         }
         (found, index)
-    }
-
-    // pub for garbage collection purposes...
-    pub fn put(&mut self, key: StringHandle) {
-        self.add(key);
     }
 
     // keyset in map need to say when a value can be evicted.
@@ -172,7 +170,7 @@ impl Map<ClosureHandle> {
         for i in 0..self.capacity() {
             // in case a string get resurrected
             if self.key_set.keys[i].is_valid() {
-                collector.push(self.key_set.keys[i]);
+                collector.keys.push(self.key_set.keys[i]);
                 if let Some(value) = self.values[i] {
                     collector.push(value);
                 }
@@ -185,7 +183,7 @@ impl Map<Value> {
     pub fn trace(&self, collector: &mut Collector) {
         for i in 0..self.capacity() {
             if self.key_set.keys[i].is_valid() {
-                collector.push(self.key_set.keys[i]);
+                collector.keys.push(self.key_set.keys[i]);
                 if let Some(value) = self.values[i] {
                     value.trace(collector)
                 }
@@ -289,7 +287,7 @@ impl Strings {
             if key == StringHandle::EMPTY {
                 let j = tombstone.unwrap_or(index);
                 // combine generations
-                let handle = StringHandle::from(hash ^ ((generation as u32) << 24));
+                let handle = StringHandle(hash ^ ((generation as u32) << 24));
                 self.key_set.keys[j] = handle;
                 self.generations[j] = generation;
                 self.key_set.count += 1;
@@ -301,17 +299,15 @@ impl Strings {
                 tombstone = Some(index);
                 continue;
             }
-            if key.0 as usize == index {
+            if key.0 & 0xffffff == hash {
                 if let Some(x) = &self.values[index as usize & mask] {
-                    if Self::hash(x.as_ref()) == hash {
-                        if x.as_ref() == str {
-                            return key;
-                        }
-                        let g = self.generations[index];
-                        if generation <= g {
-                            assert!(g < u8::MAX, "string pool failed: too many hash collisions");
-                            generation = g + 1;
-                        }
+                    if x.as_ref() == str {
+                        return key;
+                    }
+                    let g = self.generations[index];
+                    if generation <= g {
+                        assert!(g < u8::MAX, "string pool failed: too many hash collisions");
+                        generation = g + 1;
                     }
                 }
             }
@@ -340,32 +336,42 @@ impl Strings {
         }
     }
 
-    pub fn sweep(&mut self, key_set: KeySet) {
-        let capacity = key_set.keys.len();
-        let mut values: Box<[Option<Box<str>>]> = vec![None; capacity].into_boxed_slice();
-        let mut generations: Box<[u8]> = vec![0; capacity].into_boxed_slice();
-        for i in 0..self.key_set.keys.len() {
-            let key = self.key_set.keys[i];
-            if !key.is_valid() {
-                continue;
-            }
-            let (found, j) = key_set.find(key);
-            if found {
-                values[j] = self.values[i].take();
-                generations[j] = self.generations[i];
-            } else {
-                self.str_byte_count -= self.values[i].as_ref().unwrap().len()
-            }
-        }
-        self.key_set = key_set;
-        self.values = values;
-        self.generations = generations;
+    const ENTRY_SIZE: usize = (mem::size_of::<Option<Box<str>>>() + mem::size_of::<StringHandle>());
+}
+
+impl Pool<STRING> for Strings {
+    fn byte_count(&self) -> usize {
+        self.capacity() * Self::ENTRY_SIZE + self.str_byte_count
     }
 
-    const ENTRY_SIZE: usize = (mem::size_of::<Option<Box<str>>>() + mem::size_of::<StringHandle>());
+    fn count(&self) -> usize {
+        self.key_set.count
+    }
 
-    pub fn byte_count(&self) -> usize {
-        self.capacity() * Self::ENTRY_SIZE + self.str_byte_count
+    fn trace(&self, _handle: Handle<STRING>, _collector: &mut Collector) {}
+
+    fn sweep(&mut self, marks: &BitArray) {
+        for i in 0..self.capacity() {
+            if !marks.has(i) {
+                self.key_set.delete(self.key_set.keys[i]);
+                if let Some(str) = self.values[i].take() {
+                    self.str_byte_count -= str.len();
+                }
+            }
+        }
+    }
+
+    fn mark(&self, collector: &mut Collector) -> bool {
+        if collector.keys.is_empty() {
+            return true;
+        }
+        while let Some(key) = collector.keys.pop() {
+            let (found, i) = self.key_set.find(key);
+            if found {
+                collector.marks[STRING].add(i);
+            }
+        }
+        false
     }
 }
 

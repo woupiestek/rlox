@@ -1,5 +1,3 @@
-use std::mem;
-
 use crate::{
     bitarray::BitArray,
     bound_methods::BoundMethods,
@@ -7,14 +5,14 @@ use crate::{
     closures::Closures,
     functions::Functions,
     instances::Instances,
-    strings::{KeySet, Strings},
+    strings::{StringHandle, Strings},
     upvalues::Upvalues,
 };
 
 pub struct Collector {
-    pub handles: [Vec<u32>; 7],
+    pub handles: [Vec<u32>; 6],
+    pub keys: Vec<StringHandle>,
     pub marks: [BitArray; 7],
-    pub strings: KeySet,
 }
 
 pub const BOUND_METHOD: usize = 0;
@@ -22,13 +20,13 @@ pub const INSTANCE: usize = 1;
 pub const CLASS: usize = 2;
 pub const CLOSURE: usize = 3;
 pub const UPVALUE: usize = 4;
-pub const STRING: usize = 5;
-pub const FUNCTION: usize = 6;
+pub const FUNCTION: usize = 5;
+pub const STRING: usize = 6;
 pub const NATIVE: usize = 7;
 
 // todo: currently, this is reconstructed every GC cycle. Keeping it may help performance
 impl Collector {
-    pub fn new(heap: &Heap) -> Self {
+    pub fn new() -> Self {
         Self {
             handles: Default::default(),
             // resizeable, resettable arrays, length updates on collection
@@ -41,14 +39,13 @@ impl Collector {
                 BitArray::new(),
                 BitArray::new(),
             ],
-            // this is pain
-            strings: KeySet::with_capacity(heap.strings.capacity()),
+            keys: Vec::new(),
         }
     }
 
     pub fn push<const KIND: usize>(&mut self, handle: Handle<KIND>) {
-        if !self.marks[KIND as usize].has(handle.index()) {
-            self.handles[KIND as usize].push(handle.0);
+        if !self.marks[KIND].has(handle.index()) {
+            self.handles[KIND].push(handle.0);
         }
     }
 
@@ -76,7 +73,7 @@ impl Collector {
         }
     }
 
-    fn mark(&mut self, heap: &mut Heap) {
+    fn mark(&mut self, heap: &Heap) {
         #[cfg(feature = "log_gc")]
         {
             let mut count = 0;
@@ -89,19 +86,15 @@ impl Collector {
             );
         }
         loop {
-            let mut done = self.handles[STRING].is_empty();
-            while let Some(i) = self.handles[STRING].pop() {
-                self.strings.put(Handle::from(i));
-                done = false
-            }
             // short cirquiting can make this behave unpredictably, but that does not explain the problems
-            done &= heap.bound_methods.mark(self)
+            if heap.bound_methods.mark(self)
                 && heap.classes.mark(self)
                 && heap.closures.mark(self)
                 && heap.functions.mark(self)
                 && heap.instances.mark(self)
-                && heap.upvalues.mark(self);
-            if done {
+                && heap.strings.mark(self) // somehow do the conversion key -> handle here
+                && heap.upvalues.mark(self)
+            {
                 break;
             }
         }
@@ -116,15 +109,16 @@ impl Collector {
         {
             println!("Start sweeping.");
         }
-        // this is pain.
-        heap.strings
-            .sweep(mem::replace(&mut self.strings, KeySet::with_capacity(0)));
+        heap.strings.sweep(&self.marks[STRING]);
         heap.bound_methods.sweep(&self.marks[BOUND_METHOD]);
         heap.classes.sweep(&self.marks[CLASS]);
         heap.closures.sweep(&self.marks[CLOSURE]);
         heap.functions.sweep(&self.marks[FUNCTION]);
         heap.instances.sweep(&self.marks[INSTANCE]);
         heap.upvalues.sweep(&self.marks[UPVALUE]);
+        for bit_set in &mut self.marks {
+            bit_set.clear();
+        }
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -141,13 +135,13 @@ where
     fn trace(&self, handle: Handle<KIND>, collector: &mut Collector);
     fn sweep(&mut self, marks: &BitArray);
     // indicate that the collector has no more elements of a kind
-    fn mark(&mut self, collector: &mut Collector) -> bool {
-        if collector.handles[KIND as usize].is_empty() {
+    fn mark(&self, collector: &mut Collector) -> bool {
+        if collector.handles[KIND].is_empty() {
             return true;
         }
-        while let Some(i) = collector.handles[KIND as usize].pop() {
-            if !collector.marks[KIND as usize].has(i as usize) {
-                collector.marks[KIND as usize].add(i as usize);
+        while let Some(i) = collector.handles[KIND].pop() {
+            if !collector.marks[KIND].has(i as usize) {
+                collector.marks[KIND].add(i as usize);
                 self.trace(Handle::from(i), collector);
             }
         }
@@ -196,7 +190,7 @@ impl Heap {
         }
     }
 
-    pub fn retain(&mut self, mut collector: Collector) {
+    pub fn retain(&mut self,  collector: &mut Collector) {
         collector.mark_and_sweep(self);
         self.next_gc *= 2;
     }
