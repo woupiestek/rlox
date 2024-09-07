@@ -5,41 +5,35 @@ use crate::{
     closures::ClosureHandle,
     heap::{Collector, Handle, Pool, CLASS},
     strings::{Map, StringHandle, Strings},
+    u32s::U32s,
 };
 
 pub type ClassHandle = Handle<CLASS>;
 
 pub struct Classes {
-    names: Vec<StringHandle>,
+    names: U32s,
     methods: Vec<Map<ClosureHandle>>,
-    free: Vec<ClassHandle>,
     method_capacity: usize,
 }
 
 impl Classes {
     pub fn new() -> Self {
         Self {
-            names: Vec::new(),
+            names: U32s::new(),
             methods: Vec::new(),
-            free: Vec::new(),
             method_capacity: 0,
         }
     }
     pub fn new_class(&mut self, name: StringHandle) -> ClassHandle {
-        if let Some(i) = self.free.pop() {
-            self.names[i.index()] = name;
-            self.methods[i.index()] = Map::new();
-            i
-        } else {
-            let i = self.names.len() as u32;
-            self.names.push(name);
-            self.methods.push(Map::new());
-            ClassHandle::from(i)
+        let i = self.names.store(name.0);
+        while self.methods.len() < self.names.count() {
+            self.methods.push(Map::new())
         }
+        ClassHandle::from(i)
     }
 
     pub fn get_name<'s>(&self, ch: ClassHandle, strings: &'s Strings) -> &'s str {
-        strings.get(self.names[ch.index()]).unwrap()
+        strings.get(StringHandle(self.names.get(ch.0))).unwrap()
     }
 
     pub fn to_string(&self, ch: ClassHandle, strings: &Strings) -> String {
@@ -49,44 +43,37 @@ impl Classes {
         self.methods[ch.index()].get(name)
     }
     pub fn set_method(&mut self, ch: ClassHandle, name: StringHandle, method: ClosureHandle) {
-        let before = self.methods[ch.index()].capacity();
+        self.method_capacity -= self.methods[ch.index()].capacity();
         self.methods[ch.index()].set(name, method);
-        self.method_capacity = self.methods[ch.index()].capacity() - before;
+        self.method_capacity += self.methods[ch.index()].capacity();
     }
 
     // todo:
     pub fn clone_methods(&mut self, super_class: ClassHandle, sub_class: ClassHandle) {
         self.methods[sub_class.index()] = self.methods[super_class.index()].clone();
+        self.method_capacity += self.methods[sub_class.index()].capacity();
     }
 }
 
 impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
-        self.names.len() * (mem::size_of::<Map<ClosureHandle>>() + 4) + self.method_capacity * 4
+        self.names.capacity() * 4
+            + self.methods.len() * mem::size_of::<Map<ClosureHandle>>()
+            + self.method_capacity * 4
     }
     fn trace(&self, handle: Handle<CLASS>, collector: &mut Collector) {
-        collector.keys.push(self.names[handle.index()]);
+        collector.keys.push(StringHandle(self.names.get(handle.0)));
         self.methods[handle.index()].trace(collector);
     }
 
     fn sweep(&mut self, marks: &BitArray) {
-        self.free.clear();
-        self.method_capacity = 0;
-        for i in 0..self.names.len() {
-            if !marks.has(i) {
-                // if the name remains valid, then the error messages still shows the class name,
-                // while the methods are gone...
-                // a null for maps might be good as well...
-                self.names[i] = StringHandle::EMPTY;
-                self.methods[i] = Map::new();
-                self.free.push(ClassHandle::from(i as u32));
-            } else {
-                self.method_capacity += self.methods[i].capacity();
-            }
+        self.names.sweep(marks);
+        for &i in self.names.free_indices() {
+            self.method_capacity -= self.methods[i as usize].capacity();
+            self.methods[i as usize] = Map::new();
         }
     }
-
     fn count(&self) -> usize {
-        self.names.len()
+        self.names.count()
     }
 }

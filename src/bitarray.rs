@@ -30,7 +30,7 @@ impl BitArray {
         }
         self.data[index / 8] &= !(1 << (index & 7))
     }
-    
+
     pub fn clear(&mut self) {
         self.data.clear()
     }

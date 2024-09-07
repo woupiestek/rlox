@@ -124,7 +124,9 @@ impl VM {
         {
             println!("collect main function");
         }
-        self.heap.functions.trace(FunctionHandle::MAIN, &mut self.collector);
+        self.heap
+            .functions
+            .trace(FunctionHandle::MAIN, &mut self.collector);
     }
 
     fn define_native(
@@ -155,7 +157,7 @@ impl VM {
     }
 
     fn call(&mut self, closure: ClosureHandle, arity: u8) -> Result<(), String> {
-        let handle = self.heap.closures.function_handle(closure);
+        let handle = self.heap.closures.get_function(closure);
         let expected = self.heap.functions.arity(handle);
         if arity != expected {
             return err!("Expected {} arguments but got {}.", expected, arity);

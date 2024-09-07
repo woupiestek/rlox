@@ -120,8 +120,8 @@ impl Value {
                 INSTANCE => collector.push(Handle::<INSTANCE>::from(index)),
                 CLASS => collector.push(Handle::<CLASS>::from(index)),
                 CLOSURE => collector.push(Handle::<CLOSURE>::from(index)),
-                // these should never be used.
                 UPVALUE => collector.push(Handle::<UPVALUE>::from(index)),
+                // these should never be used.
                 FUNCTION => collector.push(Handle::<FUNCTION>::from(index)),
                 _ => (),
             },
@@ -157,7 +157,7 @@ impl Value {
                 CLOSURE => {
                     return heap
                         .functions
-                        .to_string(heap.closures.function_handle(Handle::from(index)), heap)
+                        .to_string(heap.closures.get_function(Handle::from(index)), heap)
                 }
                 INSTANCE => return heap.instances.to_string(Handle::from(index), heap),
                 FUNCTION => {

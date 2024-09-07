@@ -190,7 +190,7 @@ impl Heap {
         }
     }
 
-    pub fn retain(&mut self,  collector: &mut Collector) {
+    pub fn retain(&mut self, collector: &mut Collector) {
         collector.mark_and_sweep(self);
         self.next_gc *= 2;
     }

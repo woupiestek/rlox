@@ -41,9 +41,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     }
 
     fn get_chunk<'b>(&self, heap: &'b Heap) -> &'b Chunk {
-        let fi = heap
-            .closures
-            .function_handle(self.closures[self.top].unwrap());
+        let fi = heap.closures.get_function(self.closures[self.top].unwrap());
         heap.functions.chunk_ref(fi)
     }
 
@@ -114,7 +112,7 @@ impl<const STACK_SIZE: usize> CallStack<STACK_SIZE> {
     pub fn print_stack_trace(&self, heap: &Heap) {
         for i in self.top..STACK_SIZE {
             if let Some(closure) = self.closures[i as usize] {
-                let fh = heap.closures.function_handle(closure);
+                let fh = heap.closures.get_function(closure);
                 eprintln!(
                     "  at {} line {}",
                     heap.functions.to_string(fh, heap),

@@ -5,46 +5,39 @@ use crate::{
     classes::ClassHandle,
     heap::{Collector, Handle, Heap, Pool, INSTANCE},
     strings::{Map, StringHandle},
+    u32s::U32s,
     values::Value,
 };
 
 pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
-    classes: Vec<ClassHandle>,
+    classes: U32s,
     properties: Vec<Map<Value>>,
-    free: Vec<InstanceHandle>,
     property_capacity: usize,
 }
 
 impl Instances {
     pub fn new() -> Self {
         Self {
-            classes: Vec::new(),
+            classes: U32s::new(),
             properties: Vec::new(),
-            free: Vec::new(),
             property_capacity: 0,
         }
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
-        if let Some(i) = self.free.pop() {
-            self.classes[i.index()] = class;
-            self.properties[i.index()] = Map::new();
-            i
-        } else {
-            let i = self.classes.len() as u32;
-            self.classes.push(class);
+        let index = self.classes.store(class.0);
+        while self.properties.len() < self.classes.count() {
             self.properties.push(Map::new());
-            InstanceHandle::from(i)
         }
+        InstanceHandle::from(index)
     }
 
     pub fn to_string(&self, handle: InstanceHandle, heap: &Heap) -> String {
         format!(
             "<{} instance>",
-            heap.classes
-                .get_name(self.classes[handle.index()], &heap.strings)
+            heap.classes.get_name(self.get_class(handle), &heap.strings)
         )
     }
 
@@ -53,37 +46,34 @@ impl Instances {
     }
 
     pub fn get_class(&self, handle: InstanceHandle) -> ClassHandle {
-        self.classes[handle.index()]
+        Handle::from(self.classes.get(handle.0))
     }
 
     pub fn set_property(&mut self, a: InstanceHandle, name: StringHandle, b: Value) {
+        self.property_capacity -= self.properties[a.index()].capacity();
         self.properties[a.index()].set(name, b);
+        self.property_capacity += self.properties[a.index()].capacity();
     }
 }
 
 impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
-        self.classes.len() * (mem::size_of::<Map<Value>>() + 4)
+        self.classes.capacity() * 4
+            + self.properties.capacity() * mem::size_of::<Map<Value>>()
             + self.property_capacity * mem::size_of::<Value>()
     }
     fn trace(&self, handle: Handle<INSTANCE>, collector: &mut Collector) {
-        collector.push(self.classes[handle.index()]);
+        collector.push(self.get_class(handle));
         self.properties[handle.index()].trace(collector);
     }
     fn sweep(&mut self, marks: &BitArray) {
-        self.free.clear();
-        self.property_capacity = 0;
-        for i in 0..self.classes.len() {
-            if !marks.has(i) {
-                self.properties[i] = Map::new();
-                self.free.push(InstanceHandle::from(i as u32));
-            } else {
-                self.property_capacity += self.properties[i].capacity();
-            }
+        self.classes.sweep(marks);
+        for &i in self.classes.free_indices() {
+            self.property_capacity -= self.properties[i as usize].capacity();
+            self.properties[i as usize] = Map::new();
         }
     }
-
     fn count(&self) -> usize {
-        self.classes.len()
+        self.classes.count()
     }
 }

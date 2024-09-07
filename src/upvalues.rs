@@ -9,9 +9,7 @@ use crate::{
 pub type UpvalueHandle = Handle<UPVALUE>;
 
 pub struct Upvalues {
-    // never throw away an upvalue.
-    // just put its handle on the free list.
-    free: Vec<u32>,
+    count: usize,
     open: UpvalueHeap,
     values: Vec<Value>,
 }
@@ -19,7 +17,7 @@ pub struct Upvalues {
 impl Upvalues {
     pub fn new() -> Self {
         Self {
-            free: Vec::new(),
+            count: 0,
             open: UpvalueHeap::new(),
             values: Vec::new(),
         }
@@ -44,14 +42,16 @@ impl Upvalues {
     }
 
     fn store(&mut self, value: Value) -> Handle<4> {
-        UpvalueHandle::from(if let Some(i) = self.free.pop() {
-            self.values[i as usize] = value;
+        let l = self.values.len();
+        if l > self.count {
+            let i = UpvalueHandle::try_from(self.values.pop().unwrap()).unwrap();
+            self.values[i.index()] = value;
             i
         } else {
-            let i = self.values.len() as u32;
             self.values.push(value);
-            i
-        })
+            self.count += 1;
+            UpvalueHandle::from(l as u32)
+        }
     }
 
     pub fn close_upvalues(&mut self, location: u16, stack: &[Value]) {
@@ -86,11 +86,11 @@ impl Pool<UPVALUE> for Upvalues {
     }
 
     fn sweep(&mut self, marks: &BitArray) {
-        self.free.clear();
-        for i in 0..self.values.len() {
-            if !marks.has(i) {
-                self.values[i] = Value::NIL;
-                self.free.push(i as u32);
+        self.values.truncate(self.count as usize);
+        for i in 0..self.count {
+            if !marks.has(i as usize) {
+                self.values.push(Value::from(UpvalueHandle::from(i as u32)));
+                self.values[i as usize] = Value::NIL;
             }
         }
     }

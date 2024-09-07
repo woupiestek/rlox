@@ -14,6 +14,23 @@ with all the logic for mark & sweep attached.
 Upvalues are the exception here, as the are pointers to values, but values are
 big enough, and a conversion to and from upvalues is easily added.
 
+Eliminating independent free lists seems to make rlox a little slower, except
+where garbage collection actually happens. Odd.
+
+- binary_trees: 3.8152577877044678
+- equality: loop 5.290778398513794 elapsed 5.792621612548828 equals
+  0.5018432140350342
+- fib: 2.6560192108154297
+- instantiation: 0.9986624717712402
+- invocation: 0.6791610717773438
+- method_call: 0.47519421577453613
+- properties: 0.9306488037109375
+- string_equality: loop 1.5972368717193604 elapsed 1.7262482643127441 equals
+  0.1290113925933838
+- trees: 7.590463161468506
+- zoo_batch: 10.002305746078491
+- zoo: 0.7005958557128906
+
 ### buddy allocator
 
 Since maps and keysets use 2 \*\* (i + 3) amount of space to store data, so this

@@ -131,7 +131,6 @@ impl FunctionHandle {
     pub const MAIN: Self = Self(0);
 }
 
-#[derive(Debug)]
 pub struct Functions {
     names: Vec<StringHandle>, // run time data structure
     arities: Vec<u8>,
