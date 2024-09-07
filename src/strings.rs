@@ -19,7 +19,7 @@ impl StringHandle {
     }
 }
 
-pub struct KeySet {
+struct KeySet {
     count: usize,
     keys: Box<[StringHandle]>,
 }

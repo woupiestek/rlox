@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn primes() {
-        let mut bit_array = BitArray::with_capacity(10);
+        let mut bit_array = BitArray::new();
         bit_array.add(2);
         bit_array.add(3);
         bit_array.add(5);

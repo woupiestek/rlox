@@ -2,6 +2,70 @@
 
 ## 2024-09-06
 
+### optimizing current pools
+
+Aassuming that each table has a column of at least 4 byte size, once of the
+columns could play the role of the keyset and keep track of free space for the
+rest. The 4 byte size lets the storage place free handles beyond the end of the
+allocated range. Then when the allocated range catches up to used range, new
+handles are created. Like having a 'handles pool' as part of every pool, perhaps
+with all the logic for mark & sweep attached.
+
+Upvalues are the exception here, as the are pointers to values, but values are
+big enough, and a conversion to and from upvalues is easily added.
+
+### buddy allocator
+
+Since maps and keysets use 2 \*\* (i + 3) amount of space to store data, so this
+might be an opportunity to use a buddy allocator.
+
+How is free space managed?
+
+A free list for each power perhaps. If one of the smaller has non empty, find
+one bigger. A free heap, with priority by what? Largest power at the root, since
+there a relatively few. Or smallest at the root, since these are needed most
+often? Finding the best fitting is hard either way. Free list can be implemented
+as linked list with links inside the memory. At least, one always works with the
+free list, instead of elements at the end.
+
+Note: allocation each power of object happens with a specific alignment. Perhaps
+aligning by own size is a space saving mechanism are all sizes... No, I don't
+believe it is.
+
+### small object pooling
+
+This is mainly about the closures: many are mere functions, most of the rest
+will have a small number of upvalues. This idea is that beyond a threshold, the
+'allocator' requests dedicated space for these upvalues, but the smaller cases
+are pooled by size. Using buddy allocation more sizes can be supported. One can
+reduce waste by having buddy allocators for small odd numbers, so for larger odd
+sized objects less rounding up is needed to fit them in one. Lots to tune here.
+
+My first idea was not to use buddies but just slabs dedicated to a size. If one
+of the slabs comes free it could be repurposed for storing differently sized
+objects. Is that something to build for? A slab could store two sizes by
+starting from opposite ends, to waste less space, especially if pairings of
+relatively large and small are made.
+
+The handles would break up into a subhandle for the slab and an offset within
+each slab. This could say something about the boundary between large and small.
+e.g. of offset in the slab must be a byte, so at most 255. To waste at most 5%
+when full the element needs to be about 10% of the size of the slab, e.g. 25
+bytes. Now pair sizes: 1 & 25, 2 & 24, 3 & 23 and so on. Perhaps the very lowest
+should be special cases if that gives faster access.
+
+Because complementary sizes are pared, we can just take 25 & 24 as starting
+point, and work down to 48 & 1, 48 being the threshold for largeness.
+
+### data oriented abstract syntax trees
+
+For a project that uses them: pool the nodes by type. Not sure if I see the
+benefit here yet, except... strong typing while locally using bump allocators.
+Operations specific to a type of node don't have to search the whole tree for
+them. The type checker can do the same thing: pool by type constructor.
+
+## 2024-09-06
+
 ### refactoring string garbage collection
 
 ...and fixing a number of bugs
@@ -27,7 +91,7 @@ these together?
 
 ### todo
 
-- keep garbage collector around, just refresh
+- ~~keep garbage collector around, just refresh~~
 - test performance
 - two stack repository for functions
 - memory pooling for array of upvalues & maps of closures and functions

@@ -63,16 +63,16 @@ struct CompileData {
 
 impl CompileData {
     fn new(function_type: FunctionType, function: FunctionHandle, this_name: StringHandle) -> Self {
-        let mut initialized = BitArray::with_capacity(256);
+        let mut initialized = BitArray::new();
         initialized.add(0); // first local
         Self {
             function_type,
             function,
-            locals_captured: BitArray::with_capacity(256),
+            locals_captured: BitArray::new(),
             locals_initialized: initialized,
             locals: vec![this_name],
             scopes: Vec::new(),
-            upvalues_local: BitArray::with_capacity(256),
+            upvalues_local: BitArray::new(),
             upvalues: Vec::new(),
         }
     }
@@ -157,8 +157,8 @@ struct Compiler<'src, 'hp> {
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
-        let this_name = { heap.strings.put("this") };
-        let super_name = { heap.strings.put("super") };
+        let this_name = heap.strings.put("this");
+        let super_name = heap.strings.put("super");
         Self {
             data: vec![CompileData::new(
                 function_type,
@@ -377,10 +377,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn string(&mut self) -> Result<(), String> {
-        let value = {
-            let name = self.source.scanner.get_str(self.source.previous.1)?;
-            self.heap.strings.put(name)
-        };
+        let name = self.source.scanner.get_str(self.source.previous.1)?;
+        let value = self.heap.strings.put(name);
         self.emit_constant_op(Op::Constant, Value::from(value))
     }
 
@@ -615,10 +613,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.data
             .push(CompileData::new(function_type, function, self.this_name));
 
-        // the recursive call
+        // the 'recursive' call
         self.function_body()?;
 
-        // another trick
         let enclosed = self.data.pop().unwrap();
 
         self.heap
@@ -953,7 +950,7 @@ impl<'src> Source<'src> {
             scanner,
             current,
             previous: Token(TokenType::Begin, usize::MAX),
-            has_super: BitArray::with_capacity(256),
+            has_super: BitArray::new(),
             class_depth: 0,
             error_count: 0,
         }

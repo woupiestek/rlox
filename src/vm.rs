@@ -167,8 +167,8 @@ impl VM {
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
         match callee.kind() {
             Some(CLASS) => {
-                self.collect_garbage_if_needed();
                 let class = ClassHandle::try_from(callee)?;
+                self.collect_garbage_if_needed();
                 let instance = self.heap.instances.new_instance(class);
                 self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
                 if let Some(init) = self.heap.classes.get_method(class, self.init_string) {
