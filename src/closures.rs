@@ -8,6 +8,12 @@ use crate::{
 
 pub type ClosureHandle = Handle<CLOSURE>;
 
+impl Default for ClosureHandle {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
 pub struct Closures {
     functions: U32s,
     upvalues: Vec<Option<Box<[UpvalueHandle]>>>,

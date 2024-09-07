@@ -49,6 +49,12 @@ Note: allocation each power of object happens with a specific alignment. Perhaps
 aligning by own size is a space saving mechanism are all sizes... No, I don't
 believe it is.
 
+The trouble her is that I don't knwo if what I am doing is any smarter than the
+standard library already provides. especially as space requirements grow, it
+seems an extra layer of indirection is needed, to allow for multiple base
+pointers, or a lot of code has to be moved around. Maybe try this after figuring
+out profiling.
+
 ### small object pooling
 
 This is mainly about the closures: many are mere functions, most of the rest

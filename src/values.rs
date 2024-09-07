@@ -11,6 +11,12 @@ use crate::{
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Value(u64);
 
+impl Default for Value {
+    fn default() -> Self {
+        Self::NIL
+    }
+}
+
 const QNAN: u64 = 0x7ffc_0000_0000_0000;
 
 impl From<f64> for Value {
