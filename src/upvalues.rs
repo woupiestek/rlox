@@ -9,7 +9,6 @@ use crate::{
 pub type UpvalueHandle = Handle<UPVALUE>;
 
 pub struct Upvalues {
-    count: usize,
     open: UpvalueHeap,
     values: Vec<Value>,
 }
@@ -17,9 +16,8 @@ pub struct Upvalues {
 impl Upvalues {
     pub fn new() -> Self {
         Self {
-            count: 0,
             open: UpvalueHeap::new(),
-            values: Vec::new(),
+            values: vec![Value::from(UpvalueHandle::from(0))],
         }
     }
 
@@ -41,17 +39,21 @@ impl Upvalues {
         handle
     }
 
+    fn count(&self) -> usize {
+        self.values.len() - 1
+    }
+
     fn store(&mut self, value: Value) -> Handle<4> {
-        let l = self.values.len();
-        if l > self.count {
-            let i = UpvalueHandle::try_from(self.values.pop().unwrap()).unwrap();
-            self.values[i.index()] = value;
-            i
+        let count = self.count();
+        let free = UpvalueHandle::try_from(self.values[count]).unwrap();
+        if count == free.index() {
+            self.values
+                .push(Value::from(UpvalueHandle::from(free.0 + 1)));
         } else {
-            self.values.push(value);
-            self.count += 1;
-            UpvalueHandle::from(l as u32)
+            self.values[count] = self.values[free.index()];
         }
+        self.values[free.index()] = value;
+        free
     }
 
     pub fn close_upvalues(&mut self, location: u16, stack: &[Value]) {
@@ -84,15 +86,15 @@ impl Pool<UPVALUE> for Upvalues {
     fn trace(&self, handle: Handle<UPVALUE>, collector: &mut Collector) {
         self.values[handle.index()].trace(collector)
     }
-
     fn sweep(&mut self, marks: &BitArray) {
-        self.values.truncate(self.count as usize);
-        for i in 0..self.count {
+        let mut free = self.count();
+        for i in 0..self.values.len() {
             if !marks.has(i as usize) {
-                self.values.push(Value::from(UpvalueHandle::from(i as u32)));
-                self.values[i as usize] = Value::NIL;
+                self.values[i] = Value::from(UpvalueHandle::from(free as u32));
+                free = i;
             }
         }
+        assert_eq!(free, self.count());
     }
 
     fn count(&self) -> usize {

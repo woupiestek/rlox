@@ -68,7 +68,7 @@ impl Pool<INSTANCE> for Instances {
     }
     fn sweep(&mut self, marks: &BitArray) {
         self.classes.sweep(marks);
-        for &i in self.classes.free_indices() {
+        for i in self.classes.free_indices() {
             self.property_capacity -= self.properties[i as usize].capacity();
             self.properties[i as usize] = Map::new();
         }

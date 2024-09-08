@@ -75,7 +75,7 @@ impl Pool<CLOSURE> for Closures {
     }
     fn sweep(&mut self, marks: &BitArray) {
         self.functions.sweep(marks);
-        for &i in self.functions.free_indices() {
+        for i in self.functions.free_indices() {
             let option = self.upvalues[i as usize].take();
             if let Some(upvalues) = option {
                 self.upvalue_count -= upvalues.len()
