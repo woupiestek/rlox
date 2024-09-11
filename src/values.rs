@@ -17,8 +17,6 @@ impl Default for Value {
     }
 }
 
-const QNAN: u64 = 0x7ffc_0000_0000_0000;
-
 impl From<f64> for Value {
     fn from(value: f64) -> Self {
         Self(value.to_bits())
@@ -83,6 +81,9 @@ impl<const KIND: usize> TryFrom<Value> for Handle<KIND> {
 
     type Error = String;
 }
+
+const QNAN: u64 = 0x7ffc_0000_0000_0000;
+// 0x7ffc, 0x7ffd, 0x7ffe, 0x7fff, 0xfffc, 0xffd, 0xfffe, 0xffff
 
 impl Value {
     pub fn is_number(&self) -> bool {

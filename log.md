@@ -1,5 +1,66 @@
 # Rlox
 
+## 2024-09-11
+
+### two ideas
+
+The point is higher efficiency for certain tiny objects, mainly the closures.
+The first is that if the data can easily fit in 64 bits, then allocating space
+and using a pointer dies not make much sense. So split between small and large,
+and use pointers only in the large case. The second is changing the way the data
+is stored. 64 bits is 8 times 8, and could therefore represent and array of 8
+indices below 256. Such small indices won't be uncommon.
+
+The question is mainly where to do all this. The closure handle has little
+space, but if we can fit a function pointer and one or two upvalues in, then the
+actual pointers can be used for anything that does not fit.
+
+### options
+
+- use a union of `Box<[u32]>` and `[u8;8]` inside closures, or something like
+  that
+- turn the closure handle into an array, e.g. `[u8;6]`
+
+Dealing with lots of small but varied size objects is frustrating.
+
+As I see it, the larger porblem of lots of small objects in not resolved, and it
+may even have gotten worse. I found no better idea than segregating by size.
+
+### further subdivisions
+
+`0x4000_0000` for small closures, instead of a pointer, [u32;2] is stored for up
+to 2 upvalues. Alternative: [u8;8] with variable length number encodings, but
+this means some unlucky functions and upvalues will wind up with a pointer. What
+is a bigger problem: whether small or large is not determined by the upvalue
+count alone, but also by the specific sizes fo the function and upvalue handles,
+which leads to much more complicated code for creating the closures.
+
+## 2024-09-10
+
+### closure trick
+
+Boxes are 8 byte pointers, which can store two upvalues. So make that switch:
+for closures with 0, 1 or 2 upvalues use the same space to store the upvalue
+handles directly. Only use pointers for at least three upvalues. It may still be
+worth considering other solutions for the lower arities.
+
+Perhaps it is on the upvalues themselves as well: if the handles are small
+numbers, an array of them can be encoded with something like the midi encoding,
+and it could help if the differences are small.
+
+This is something: because rlox uses handles for upvalues, and these handles are
+likely small numbers, multiple can fit into a u32 or u64. Only arrays with many
+upvalues with high handles need extra storage, for which additional space could
+be allocated.
+
+The basis was the switch from a pointer to direct storage of values when the
+upvalue count is low. The midi encoding idea is secondary.
+
+We need: function handle and a sequence of upvalue handles. No reason to waste
+32 bit on a function if they typically only need 16. We just come up with a
+structure can store: functions handle, upvalue count, and either a few upvalues,
+or an indicator of where values are stored.
+
 ## 2024-09-06
 
 ### optimizing current pools

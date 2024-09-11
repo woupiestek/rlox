@@ -319,8 +319,8 @@ impl VM {
                         .closures
                         .new_closure(function, &self.heap.functions);
                     self.push(Value::from(closure));
-                    let capacity = self.heap.functions.upvalue_count(function);
-                    for i in 0..capacity {
+                    let count = self.heap.functions.upvalue_count(function);
+                    for i in 0..count {
                         let is_local = self.call_stack.read_byte(&self.heap);
                         let index = self.call_stack.read_byte(&self.heap) as usize;
                         let uh = if is_local > 0 {
