@@ -1,3 +1,5 @@
+use std::mem::transmute;
+
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Op {
@@ -40,49 +42,9 @@ pub enum Op {
     Method,
 }
 
-const OP_COUNT: usize = Op::Method as usize + 1;
-const OP_CODES: [Op; OP_COUNT] = [
-    Op::Constant,
-    Op::Nil,
-    Op::True,
-    Op::False,
-    Op::Pop,
-    Op::GetLocal,
-    Op::SetLocal,
-    Op::GetGlobal,
-    Op::SetGlobal,
-    Op::DefineGlobal,
-    Op::GetUpvalue,
-    Op::SetUpvalue,
-    Op::GetProperty,
-    Op::SetProperty,
-    Op::GetSuper,
-    Op::Equal,
-    Op::Greater,
-    Op::Less,
-    Op::Add,
-    Op::Subtract,
-    Op::Multiply,
-    Op::Divide,
-    Op::Not,
-    Op::Negative,
-    Op::Print,
-    Op::Jump,
-    Op::JumpIfFalse,
-    Op::Loop,
-    Op::Call,
-    Op::Invoke,
-    Op::SuperInvoke,
-    Op::Closure,
-    Op::CloseUpvalue,
-    Op::Return,
-    Op::Class,
-    Op::Inherit,
-    Op::Method,
-];
-
 impl From<u8> for Op {
     fn from(op: u8) -> Self {
-        OP_CODES[op as usize]
+        assert!(op <= Op::Method as u8);
+        unsafe { transmute(op) }
     }
 }
