@@ -1,5 +1,60 @@
 # Rlox
 
+## 2024-10-17
+
+### even more data oriented VM
+
+Each of the properties of the objects would each get a global array of values,
+with a function to map instance handles to ther proper indices. Whether this can
+be done efficiently is still the question, but there should be some advantages
+when huge numbers of objects get processed. Also, think of what the language can
+do that way: all members of a class can gain a field dynamically.
+
+Garbage collection is another story... there is an easy listing of all members
+of an object that the garbage collector can use for tracing in the current
+layout, which is not so obvious in this set up. What about reference counting?
+relies on the same thing I guess: how else to decrement the members of freed
+object?
+
+So maybe that is the thing: there should be a seperate service for tracing, that
+records dependencies between objects. A list of fields in use, or just the
+values. I think the field names in case of mutable objects.
+
+### modules
+
+Much of this only helps when there are many objects of each class. Otherwise, a
+module would in run times be a collections of tables, containing the properties
+of each type. The module can selectivley export columns and other can
+selectively add them.
+
+### dependent sums
+
+It is possible to have incomplete columns, whoch takes care of optional values
+and types with different sizes. It is no longer a waste--in the heap it does not
+have to be at least--if nullable columns are stored without space.
+
+## 2024-10-13
+
+### one big hashmap
+
+Would it be bad to combine class and method names, and stuff them all is a
+single big hashmap? Can that be done with properties?
+
+Why have class handles? Aren't names just as good? I don't see errors happening
+with redeclared classes, but there is a difference in interpretation, of course.
+In the nonimal case, the set of methods for existing objects changes at the
+point of redeclaration, otherwise the new methods only apply in newly
+constructed objects.
+
+So the idea is to combine the class handle and method handle into a single big
+hash, so all methods are sotred into a single table. Would this be slower?
+Garbage collection might be, if there is no way to collect all methods that
+belonged to a class.
+
+Now this idea might apply to intances as well, and who knows, to closures? For
+closures, it would combine the closure handle and the upvalue index. For
+instances, the instance handle and the property name.
+
 ## 2024-09-11
 
 ### two ideas

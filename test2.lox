@@ -20,3 +20,9 @@ if(clock() < 1700000000000) {
 class D < C {}
 
 D().run();
+
+class A {
+  run() {
+    print "try again";
+  }
+}
