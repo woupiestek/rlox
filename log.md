@@ -1,5 +1,48 @@
 # Rlox
 
+## 2024-10-18
+
+### property or method resolution
+
+Normally the object handle is a pointer and the properties are keys to the
+content. For data orientation, this gets turned around: each propterty is a
+collection that maps object handles to values. The handles are essentially just
+numbers.
+
+I imagine each property could be a hash map, but this seems imply a little
+duplication: a hash map has a mapping to indices into an array of values. The
+hash set part is needed to avoid hash collisions.
+
+So that is one use of classes: it is literally a set of all live objects and the
+mapping to the indices into property arrays. Classes also keep track of all
+properties for the purpose of garbage collection, and the methods.
+
+Instead of giving each object an index, the class could also provide indices for
+pairs of objects and properties. In this case the list of properties in an
+object needs to be tracked for garbage collection purposes.
+
+The subdivision into classes may not strictly be necessary: just one big hashmap
+that takes property object pairs to values. Or perhaps the subdivision should
+not even be class based. The space is 75% full at a certain number of objects,
+depending on the number of properties, and we don't have to move everything
+around.
+
+### garbage collection
+
+There must be a collection of grey objects, in this case ideally a set, so run
+down the entire array to create the next set of grey objects, then blacken the
+current list it is necessary to keep track of which objects are traced already,
+hence the grey ones. Finally make a free list out of the rest. Running down the
+lsit like this
+
+Wait, rather than trace objects, trace fields. eventually objects have to be
+freed, but by noting which fields have been traced, double work can more easily
+be prevented. A set of objects and a set of indices: the indices are skipped and
+the objects are followed. Gray is still needed though, not all indices will be
+blackened after all.
+
+Grey indices. This because a list of object indices won't cut it anymore.
+
 ## 2024-10-17
 
 ### even more data oriented VM
