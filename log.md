@@ -1,5 +1,28 @@
 # Rlox
 
+## 2024-10-23
+
+### garbage collection issues
+
+With binary_trees.lox, revealed after switching to the new closures.
+
+- binary_trees: failure
+- equality: loop 5.725816249847412 elapsed 5.490179061889648 equals
+  -0.23563718795776367
+- fib: 2.7126379013061523
+- instantiation: failure
+- invocation: 0.7328648567199707
+- method_call: 0.48850512504577637
+- properties: 1.0475075244903564
+- string_equality:loop 1.8355834484100342 elapsed 1.6839888095855713 equals
+  -0.1515946388244629
+- trees: 6.982772588729858
+- zoo_batch: 10.001244068145752
+- zoo: 0.9220483303070068
+
+Not faster, and bringing new errors. Perhaps the problem stems from the limited
+number of closures that are supported.
+
 ## 2024-10-19
 
 ### nightly thoughts on garbage collection

@@ -11,7 +11,7 @@ mod bitarray;
 mod bound_methods;
 mod call_stack;
 mod classes;
-mod closures;
+// mod closures;
 mod closures2;
 mod compiler;
 mod functions;

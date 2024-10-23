@@ -4,7 +4,7 @@ use crate::{
     bound_methods::BoundMethodHandle,
     call_stack::CallStack,
     classes::ClassHandle,
-    closures::ClosureHandle,
+    closures2::ClosureHandle,
     common::U8_COUNT,
     compiler::compile,
     functions::FunctionHandle,
@@ -314,10 +314,7 @@ impl VM {
                     let function = Handle::try_from(self.call_stack.read_constant(&self.heap))?;
                     // garbage collection risks?
                     self.collect_garbage_if_needed();
-                    let closure = self
-                        .heap
-                        .closures
-                        .new_closure(function, &self.heap.functions);
+                    let closure = self.heap.closures.new_closure(function);
                     self.push(Value::from(closure));
                     let count = self.heap.functions.upvalue_count(function);
                     for i in 0..count {
@@ -510,10 +507,11 @@ impl VM {
             use crate::debug::Disassembler;
             Disassembler::disassemble(&self.heap);
         }
-        let closure = self
-            .heap
-            .closures
-            .new_closure(FunctionHandle::MAIN, &self.heap.functions);
+
+        // after compile, otherwise nested functions won't work properly
+        self.heap.prepare_run();
+
+        let closure = self.heap.closures.new_closure(FunctionHandle::MAIN);
         self.push(Value::from(closure));
         self.call(closure, 0)?;
         if let Err(msg) = self.run() {

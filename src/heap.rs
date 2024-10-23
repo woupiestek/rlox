@@ -2,7 +2,7 @@ use crate::{
     bitarray::BitArray,
     bound_methods::BoundMethods,
     classes::Classes,
-    closures::Closures,
+    closures2::Closures,
     functions::Functions,
     instances::Instances,
     strings::{StringHandle, Strings},
@@ -187,6 +187,14 @@ impl Heap {
             strings: Strings::with_capacity(0),
             upvalues: Upvalues::new(),
             next_gc: 1 << 20,
+        }
+    }
+
+    pub fn prepare_run(&mut self) {
+        // prepare closures
+        for i in self.closures.limit()..self.functions.count() {
+            self.closures
+                .add(self.functions.upvalue_count(Handle::from(i as u32)));
         }
     }
 

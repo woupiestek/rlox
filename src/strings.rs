@@ -2,7 +2,7 @@ use std::{mem, u32};
 
 use crate::{
     bitarray::BitArray,
-    closures::ClosureHandle,
+    closures2::ClosureHandle,
     heap::{Collector, Handle, Pool, STRING},
     values::Value,
 };
