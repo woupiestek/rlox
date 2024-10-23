@@ -1,5 +1,38 @@
 # Rlox
 
+## 2024-10-19
+
+### nightly thoughts on garbage collection
+
+Look at the values: when the owner of a value is live, so is the value. At the
+first pass that a value is marked as reachable, its members may still require
+marks, so those _rows_ are marked grey. When a grey row is encountered, it can
+be marked black, and subtracted from the grey count. When the grey count
+vanishes all rows and objects are marked.
+
+### unknown signature
+
+The arrays can only be 75% full, which is hard to control when the number of
+properties for each object can vary wildly. It seems like doubling the size of
+memory always means half the objects must move to new memory, while the other
+half must be compacted. Maybe there is another way to do search, however. Start
+linearly from an index in the first array, then from the same index in the
+second then from the same index in the third and so on. New pairs first fill the
+tombstones, but can only be inserted in the last array, since only the last can
+actually fill new slots.
+
+### space requirement
+
+Per property, space is required for the value, the key, and the owner handle,
+plus at least one third for linear search to work. The owner handle is needed to
+confirm that the right index is found. It is better if each property has its own
+column then, but only if all columns are always in use.
+
+### the sum of all classes
+
+Let the `object` type be the dependent sum of all classes: not a class itself,
+in other words.
+
 ## 2024-10-18
 
 ### property or method resolution
