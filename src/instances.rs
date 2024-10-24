@@ -28,7 +28,7 @@ impl Instances {
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
         let index = self.classes.store(class.0);
-        while self.properties.len() < self.classes.count() {
+        while index >= self.properties.len() as u32 {
             self.properties.push(Map::new());
         }
         InstanceHandle::from(index)
@@ -67,8 +67,10 @@ impl Pool<INSTANCE> for Instances {
         self.properties[handle.index()].trace(collector);
     }
     fn sweep(&mut self, marks: &BitArray) {
+        assert_eq!(self.classes.count(), self.properties.len());
         self.classes.sweep(marks);
         for i in self.classes.free_indices() {
+            // always here
             self.property_capacity -= self.properties[i as usize].capacity();
             self.properties[i as usize] = Map::new();
         }

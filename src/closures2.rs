@@ -32,15 +32,14 @@ impl Closures {
         }
     }
 
-    // allow functions to be added, but also provide a way to test agreement on place
-    pub fn add(&mut self, upvalue_count: usize) -> u32 {
+    // allow functions to be added, but also provide a way to test agreement in place
+    pub fn add(&mut self, upvalue_count: usize) {
         self.free.push(0);
         let count = self.offsets[self.offsets.len() - 1] + upvalue_count as usize;
         for _ in self.upvalues.len()..count {
             self.upvalues.push(Vec::new());
         }
         self.offsets.push(count);
-        (self.free.len() - 1) as u32
     }
 
     pub fn limit(&self) -> usize {

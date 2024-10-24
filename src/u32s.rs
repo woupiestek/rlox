@@ -36,21 +36,22 @@ impl U32s {
     }
 
     pub fn sweep(&mut self, marks: &BitArray) {
-        let mut free = self.count();
-        for i in 0..self.data.len() {
+        let count = self.count();
+        let mut free = count;
+        for i in 0..count {
             if !marks.has(i) {
                 self.data[i] = free as u32;
                 free = i;
             }
         }
-        assert_eq!(free, self.count());
+        self.data[count] = free as u32;
     }
 
     // ouch...
     pub fn free_indices(&self) -> FreeIterator {
         FreeIterator {
             u32s: self,
-            index: self.count(),
+            index: self.data[self.count()] as usize,
         }
     }
 }
@@ -65,12 +66,11 @@ impl<'m> Iterator for FreeIterator<'m> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let free = self.u32s.data[self.index];
-        if free as usize == self.index {
+        if self.index == self.u32s.count() {
             return None;
         }
         let result = Some(self.index);
-        self.index = free as usize;
+        self.index = self.u32s.data[self.index] as usize;
         result
     }
 }

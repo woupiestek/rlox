@@ -1,5 +1,31 @@
 # Rlox
 
+## 2024-10-24
+
+### garbage collection strategy
+
+For classes and instances. I want to go for the option where everythning is
+stored in a single map, but this is awkward for tracing. Unless the trace is
+helped just in time with a list of values for each object. Is that bad?
+
+### some debugging later
+
+- binary_trees: 4.232087850570679
+- equality: loop 5.618230104446411 elapsed 5.394073486328125 equals
+  -0.22415661811828613
+- fib: 2.6952757835388184
+- instantiation: 0.9770596027374268
+- invocation: 0.7077968120574951
+- method_call: 0.484041690826416
+- properties: 1.021440029144287
+- string_equality: loop 1.8593027591705322 elapsed 1.7451512813568115 equals
+  -0.1141514778137207
+- trees: 7.050680160522461
+- zoo_batch: 10.003246307373047
+- zoo: 0.7364110946655273
+
+No more (apparent) bug and slight better performance.
+
 ## 2024-10-23
 
 ### garbage collection issues
