@@ -1,5 +1,5 @@
 use crate::{
-    closures2::ClosureHandle,
+    closures::ClosureHandle,
     functions::Chunk,
     heap::{Collector, Heap},
     strings::StringHandle,

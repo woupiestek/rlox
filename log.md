@@ -2,6 +2,40 @@
 
 ## 2024-10-24
 
+### closures by upvalue count
+
+Reorganized closures by upvalue count. It didn't make things faster and only
+somewhat simpler. the main gain is in the handles: only one byte needed to
+record the upvalue count.
+
+Currently offsets are stored in an array which is used for a lot of lookups.
+Hypothetically, this could be computed instead, with the formula
+`offset = uc * (uc + 1)/2 + 1`, but this spreads out the bigger upvalues. Of
+course, different tactics for small and large closures makes sense anyway.
+Perhaps the large ones should be combined by padding upto a power of two.
+
+### instances and classes
+
+Shape of properties:
+
+`index: u32 | property_name: u32 | value: Value | last_property_index: u32`
+
+Use a simple counter for objects, and '<class>' as special property name.
+
+`index: u32 | method_name: u32 | method: u32 | last_property_index: u32`
+
+With 'init' and '<name>' as special cases this time.
+
+### turn columns into objects
+
+Number method and property names for fast lookup: make them global properties.
+Use a mapping from instance handles and class handles instead.
+
+To combine two values in a mathematical way
+`if x <= y { x * x + y } else { y * (y + 2) - x }`.
+
+## 2024-10-24
+
 ### garbage collection strategy
 
 For classes and instances. I want to go for the option where everythning is

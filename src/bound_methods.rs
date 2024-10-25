@@ -1,6 +1,6 @@
 use crate::{
     bitarray::BitArray,
-    closures2::ClosureHandle,
+    closures::ClosureHandle,
     heap::{Collector, Handle, Heap, Pool, BOUND_METHOD},
     instances::InstanceHandle,
     u32s::U32s,
