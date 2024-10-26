@@ -15,23 +15,20 @@ impl Default for ClosureHandle {
 
 const SHIFT: u8 = 24;
 const MASK: usize = 0xffffff;
-const COUNTS: usize = 256;
+const COUNTS: usize = 255;
 
 pub struct Closures {
     free: [u32; COUNTS],
-    offsets: [u16; COUNTS],
-    values: Vec<Vec<u32>>,
+    functions: Vec<Vec<u32>>,
+    upvalues: Vec<Vec<UpvalueHandle>>,
 }
 
 impl Closures {
     pub fn new() -> Self {
-        let mut offsets = [0; COUNTS];
-        offsets[0] = 1;
-        offsets[1] = 2;
         Self {
             free: [0; COUNTS],
-            offsets,
-            values: vec![Vec::new(); 3],
+            functions: Vec::new(),
+            upvalues: Vec::new(),
         }
     }
 
@@ -40,51 +37,57 @@ impl Closures {
     }
 
     pub fn get_function(&self, ch: ClosureHandle) -> FunctionHandle {
-        Handle::from(
-            self.values[self.offsets[Closures::upvalue_count(ch)] as usize - 1][ch.index() & MASK],
-        )
+        let uc = Closures::upvalue_count(ch);
+        FunctionHandle::from(if uc == 0 {
+            // risk if functions handles get higher than 0xffffff
+            ch.0
+        } else {
+            self.functions[uc - 1][ch.index() & MASK]
+        })
     }
 
     pub fn get_upvalue(&self, ch: ClosureHandle, i: usize) -> UpvalueHandle {
-        Handle::from(self.values[self.offset(ch) + i][ch.index() & MASK])
-    }
-
-    fn offset(&self, ch: Handle<3>) -> usize {
-        self.offsets[Closures::upvalue_count(ch)] as usize
+        let uc = Closures::upvalue_count(ch);
+        assert_ne!(uc, 0);
+        self.upvalues[uc - 1][uc * (ch.index() & MASK) + i]
     }
 
     pub fn set_upvalue(&mut self, ch: ClosureHandle, i: usize, uh: UpvalueHandle) {
-        self.values[self.offsets[Closures::upvalue_count(ch)] as usize + i][ch.index() & MASK] =
-            uh.0;
+        let uc = Closures::upvalue_count(ch);
+        assert_ne!(uc, 0);
+        self.upvalues[uc - 1][uc * (ch.index() & MASK) + i] = uh;
     }
 
-    fn force_offset(&mut self, uc: usize) -> usize {
-        if self.offsets[uc] == 0 {
-            self.values.push(Vec::new());
-            self.offsets[uc] = self.values.len() as u16;
-            for _ in 0..uc {
-                self.values.push(Vec::new());
-            }
+    // simplify offsets for now
+    fn force_offset(&mut self, uc: usize) {
+        while self.functions.len() < uc {
+            self.functions.push(Vec::new());
         }
-        self.offsets[uc] as usize
+        while self.upvalues.len() < uc {
+            self.upvalues.push(Vec::new());
+        }
     }
 
     pub fn new_closure(&mut self, fh: FunctionHandle, uc: usize) -> ClosureHandle {
-        let free = self.free[uc] as usize;
+        if uc == 0 {
+            return ClosureHandle::from(fh.0);
+        }
+        let free = self.free[uc - 1] as usize;
         if free > MASK {
             panic!("Out of closure space")
         }
-        let offset = self.force_offset(uc);
-        let values = &mut self.values[offset - 1];
-        if free < values.len() {
+        self.force_offset(uc);
+        let functions = &mut self.functions[uc - 1];
+        if free < functions.len() {
             // reuse memory
-            self.free[uc] = values[free];
-            self.values[offset - 1][free] = fh.0;
+            self.free[uc - 1] = functions[free];
+            functions[free] = fh.0;
         } else {
-            self.free[uc] += 1;
-            values.push(fh.0);
-            for i in 0..uc {
-                self.values[offset + i].push(0);
+            self.free[uc - 1] += 1;
+            functions.push(fh.0);
+            for _ in 0..uc {
+                // push placeholders
+                self.upvalues[uc - 1].push(UpvalueHandle::from(0));
             }
         }
         ClosureHandle::from((uc << SHIFT) as u32 + free as u32)
@@ -94,43 +97,42 @@ impl Closures {
 impl Pool<CLOSURE> for Closures {
     fn byte_count(&self) -> usize {
         let mut capacity = 0;
-        for vec in &self.values {
+        for vec in &self.functions {
+            capacity += vec.capacity()
+        }
+        for vec in &self.upvalues {
             capacity += vec.capacity()
         }
         4 * capacity
     }
     fn trace(&self, handle: Handle<CLOSURE>, collector: &mut Collector) {
         let uc = Closures::upvalue_count(handle);
-        let offset = self.offsets[uc] as usize;
+        if uc == 0 {
+            collector.push(FunctionHandle::from(handle.0));
+            return;
+        }
         let index = handle.index() & MASK;
-        // let fh = self.get_function(handle);
-        collector.push(FunctionHandle::from(self.values[offset - 1][index]));
+        collector.push(FunctionHandle::from(self.functions[uc - 1][index]));
         for i in 0..uc {
-            collector.push(UpvalueHandle::from(self.values[offset + i][index]));
+            collector.push(UpvalueHandle::from(self.upvalues[uc - 1][uc * index + i]));
         }
     }
     fn sweep(&mut self, marks: &BitArray) {
-        for uc in 0..COUNTS {
-            let offset = self.offsets[uc] as usize;
-            if offset == 0 {
-                continue;
-            }
-            let values = &mut self.values[offset - 1];
-            self.free[uc] = values.len() as u32;
-            for u in 0..values.len() {
-                if !marks.has((uc << SHIFT) + u) {
-                    values[u] = self.free[uc];
-                    self.free[uc] = u as u32;
+        for i in 0..self.functions.len() {
+            let functions = &mut self.functions[i];
+            self.free[i] = functions.len() as u32;
+            for j in 0..functions.len() {
+                if !marks.has(((i + 1) << SHIFT) + j) {
+                    functions[j] = self.free[i];
+                    self.free[i] = j as u32;
                 }
             }
         }
     }
     fn count(&self) -> usize {
         let mut count = 0;
-        for i in 0..COUNTS {
-            if self.offsets[i] > 0 {
-                count += self.values[self.offsets[i] as usize - 1].len();
-            }
+        for functions in &self.functions {
+            count += functions.len();
         }
         count
     }
@@ -161,7 +163,7 @@ mod tests {
         // try an empty one
         let closure3 = closures.new_closure(Handle::from(6), 0);
         assert_eq!(closures.get_function(closure3).index(), 6);
-        assert_eq!(closures.count(), 3);
+        assert_eq!(closures.count(), 2);
     }
 
     #[test]

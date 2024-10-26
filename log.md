@@ -1,5 +1,30 @@
 # Rlox
 
+## 2024-10-25
+
+### closures again
+
+- brings back special treatment of functions
+- put upvalues and functions in their own structures
+- one array of upvalues for each arity -> just put them side by side
+
+Results:
+
+- binary_trees: 3.8211987018585205
+- equality: loop 5.509801149368286 elapsed 5.774434566497803 equals
+  0.2646334171295166
+- fib: 2.544231653213501
+- instantiation: 0.8959393501281738
+- invocation: 0.6875576972961426
+- method_call: 0.49170541763305664
+- properties: 1.0232486724853516
+- string_equality: loop 1.6937203407287598 elapsed 1.688068151473999 equals
+  -0.005652189254760742
+- trees: 6.992464303970337
+- zoo: 0.6952803134918213
+
+Faster again, at least in most places.
+
 ## 2024-10-24
 
 ### closures by upvalue count
@@ -33,6 +58,8 @@ Use a mapping from instance handles and class handles instead.
 
 To combine two values in a mathematical way
 `if x <= y { x * x + y } else { y * (y + 2) - x }`.
+
+This may actually be better: `(x + y) * (x + y + 1) / 2 + y`
 
 ## 2024-10-24
 
