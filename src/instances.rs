@@ -2,7 +2,7 @@ use std::mem;
 
 use crate::{
     bitarray::BitArray,
-    classes::ClassHandle,
+    classes2::ClassHandle,
     heap::{Collector, Handle, Heap, Pool, INSTANCE},
     strings::{Map, StringHandle},
     u32s::U32s,

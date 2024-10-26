@@ -1,5 +1,17 @@
 # Rlox
 
+## 2024-10-26
+
+### instances and classes
+
+Pool properties and methods per e.g. 250 objects or classes. Within the pool
+each has one byte, with a few bytes used for 'empty' and 'tomb stones'.
+
+Trying with classes has disappointing results. The structure doesn't look super
+different, if anything a bit simpler, but the performance is worse.
+
+I don't yet see what makes this slower.
+
 ## 2024-10-25
 
 ### closures again

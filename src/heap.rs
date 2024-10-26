@@ -1,7 +1,7 @@
 use crate::{
     bitarray::BitArray,
     bound_methods::BoundMethods,
-    classes::Classes,
+    classes2::Classes,
     closures::Closures,
     functions::Functions,
     instances::Instances,

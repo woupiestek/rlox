@@ -1,28 +1,9 @@
-class A {
-  run() {
-    print "A";
+class Doughnut {
+  cook() {
+    print "Fry until golden brown.";
   }
 }
 
-class B {
-  run() {
-    print "B";
-  }
-}
+class BostonCream < Doughnut {}
 
-var C;
-if(clock() < 1700000000000) {
-  C = A;
-} else {
-  C = B;
-}
-
-class D < C {}
-
-D().run();
-
-class A {
-  run() {
-    print "try again";
-  }
-}
+BostonCream().cook();
