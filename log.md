@@ -1,5 +1,32 @@
 # Rlox
 
+## 2024-10-27
+
+### refactors
+
+The old setup used a linked list structure to iterate through methods of a
+class, which takes up more space. It didn't really please the borrow checker,
+and could be the cause of the apparent slow down: a lot of extra memory needed,
+so many more cache misses possible.
+
+Reorganize so that each class has a vec of indices, and put them in another
+place and both problems seem to go away. It is more awkward.
+
+Results:
+
+- binary_trees: 3.6029982566833496
+- equality: loop 4.93087363243103 elapsed 4.622331380844116 equals
+  -0.30854225158691406
+- fib: 2.294707775115967
+- instantiation: 0.9955863952636719
+- invocation: 0.6843798160552979
+- method_call: 0.4773898124694824
+- properties: 0.9599754810333252
+- string_equality: loop 1.5556581020355225 elapsed 1.4244179725646973 equals
+  -0.1312401294708252
+- trees: 6.822447061538696
+- zoo: 0.6565086841583252
+
 ## 2024-10-26
 
 ### instances and classes
