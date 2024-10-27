@@ -206,18 +206,6 @@ impl<V: Copy + Default> Clone for Map<V> {
     }
 }
 
-// impl Map<ClosureHandle> {
-//     pub fn trace(&self, collector: &mut Collector) {
-//         for i in 0..self.capacity() {
-//             // in case a string get resurrected
-//             if self.key_set.get(i).is_valid() {
-//                 collector.keys.push(self.key_set.get(i));
-//                 collector.push(self.get_value_by_index(i));
-//             }
-//         }
-//     }
-// }
-
 impl Map<Value> {
     pub fn trace(&self, collector: &mut Collector) {
         for i in 0..self.capacity() {

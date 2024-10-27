@@ -3,7 +3,7 @@ use std::time;
 use crate::{
     bound_methods::BoundMethodHandle,
     call_stack::CallStack,
-    classes2::ClassHandle,
+    classes::ClassHandle,
     closures::ClosureHandle,
     common::U8_COUNT,
     compiler::compile,
