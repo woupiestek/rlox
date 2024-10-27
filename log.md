@@ -59,6 +59,8 @@ Results:
 - trees: 6.947245359420776
 - zoo: 0.6857585906982422
 
+What is going on with instantiation all of the sudden?
+
 ## 2024-10-26
 
 ### instances and classes

@@ -36,15 +36,12 @@ impl Properties {
         let mask = self.capacity() - 1;
         let mut index = key.0 as usize & mask;
         loop {
-            match self.keys[index as usize] {
-                StringHandle::EMPTY => {
-                    return (false, index);
-                }
-                name => {
-                    if name == key {
-                        return (true, index);
-                    }
-                }
+            let string_handle = self.keys[index as usize];
+            if string_handle == StringHandle::EMPTY {
+                return (false, index);
+            }
+            if string_handle == key {
+                return (true, index);
             }
             index = (index + 1) & mask;
         }
