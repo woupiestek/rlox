@@ -18,6 +18,7 @@ const MASK: usize = 0xffffff;
 const COUNTS: usize = 255;
 
 pub struct Closures {
+    byte_count: usize,
     free: [u32; COUNTS],
     functions: Vec<Vec<u32>>,
     upvalues: Vec<Vec<UpvalueHandle>>,
@@ -26,6 +27,7 @@ pub struct Closures {
 impl Closures {
     pub fn new() -> Self {
         Self {
+            byte_count: 1080,
             free: [0; COUNTS],
             functions: Vec::new(),
             upvalues: Vec::new(),
@@ -62,9 +64,11 @@ impl Closures {
     fn force_offset(&mut self, uc: usize) {
         while self.functions.len() < uc {
             self.functions.push(Vec::new());
+            self.byte_count += 24;
         }
         while self.upvalues.len() < uc {
             self.upvalues.push(Vec::new());
+            self.byte_count += 24;
         }
     }
 
@@ -85,9 +89,11 @@ impl Closures {
         } else {
             self.free[uc - 1] += 1;
             functions.push(fh.0);
+            self.byte_count += 4;
             for _ in 0..uc {
                 // push placeholders
                 self.upvalues[uc - 1].push(UpvalueHandle::from(0));
+                self.byte_count += 4;
             }
         }
         ClosureHandle::from((uc << SHIFT) as u32 + free as u32)
@@ -96,14 +102,7 @@ impl Closures {
 
 impl Pool<CLOSURE> for Closures {
     fn byte_count(&self) -> usize {
-        let mut capacity = 0;
-        for vec in &self.functions {
-            capacity += vec.capacity()
-        }
-        for vec in &self.upvalues {
-            capacity += vec.capacity()
-        }
-        4 * capacity
+        self.byte_count
     }
     fn trace(&self, handle: Handle<CLOSURE>, collector: &mut Collector) {
         let uc = Closures::upvalue_count(handle);

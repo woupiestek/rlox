@@ -31,10 +31,6 @@ impl U32s {
         self.data.len() - 1
     }
 
-    pub fn capacity(&self) -> usize {
-        self.data.capacity()
-    }
-
     pub fn sweep(&mut self, marks: &BitArray) {
         let count = self.count();
         let mut free = count;

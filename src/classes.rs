@@ -6,20 +6,20 @@ use crate::{
     u32s::U32s,
 };
 
-fn index(class: u8, method_name: StringHandle) -> u32 {
-    (class as u32 ^ method_name.0).wrapping_mul(16777619u32)
+fn index(i: u8, key: StringHandle) -> u32 {
+    (i as u32 ^ key.0).wrapping_mul(16777619u32)
 }
 
 struct Batch {
     count: usize,
     classes: Box<[u8]>,
-    method_names: Box<[StringHandle]>,
+    keys: Box<[StringHandle]>,
     closures: Box<[ClosureHandle]>,
 }
 
 impl Batch {
     fn byte_count(&self) -> usize {
-        56 + self.method_names.len() * 9
+        56 + self.keys.len() * 9
     }
 
     fn with_capacity(capacity: usize) -> Self {
@@ -27,23 +27,24 @@ impl Batch {
         Self {
             count: 0,
             classes: vec![0; capacity].into_boxed_slice(),
-            method_names: vec![StringHandle::EMPTY; capacity].into_boxed_slice(),
+            keys: vec![StringHandle::EMPTY; capacity].into_boxed_slice(),
             closures: vec![ClosureHandle::from(0); capacity].into_boxed_slice(),
         }
     }
 
     fn capacity(&self) -> usize {
-        self.method_names.len()
+        self.keys.len()
     }
 
     fn find(&self, class: u8, method_name: StringHandle) -> (bool, u32) {
+        assert!(4 * self.count <= 3 * self.capacity());
         let mask = (self.capacity() - 1) as u32;
 
         let mut index = index(class, method_name) & mask;
 
         let mut tombstone: Option<u32> = None;
         loop {
-            match self.method_names[index as usize] {
+            match self.keys[index as usize] {
                 StringHandle::EMPTY => return (false, tombstone.unwrap_or(index)),
                 StringHandle::TOMBSTONE => tombstone = Some(index),
                 name => {
@@ -78,7 +79,7 @@ impl Batch {
             return;
         }
         self.classes[index as usize] = class;
-        self.method_names[index as usize] = method_name;
+        self.keys[index as usize] = method_name;
         self.count += 1;
         indices.push(index as u32);
     }
@@ -97,6 +98,7 @@ impl Handle<CLASS> {
 }
 
 pub struct Classes {
+    byte_count: usize,
     names: U32s,
     methods: Vec<Batch>,
     indices: Vec<Vec<u32>>,
@@ -105,6 +107,7 @@ pub struct Classes {
 impl Classes {
     pub fn new() -> Self {
         Self {
+            byte_count: 80,
             names: U32s::new(),
             methods: Vec::new(),
             indices: Vec::new(),
@@ -115,9 +118,12 @@ impl Classes {
         let i = self.names.store(name.0);
         let batch = i >> 8;
         while batch >= self.methods.len() as u32 {
-            self.methods.push(Batch::with_capacity(8));
+            let batch = Batch::with_capacity(8);
+            self.byte_count += batch.byte_count();
+            self.methods.push(batch);
         }
         while i >= self.indices.len() as u32 {
+            self.byte_count += 24;
             self.indices.push(Vec::new());
         }
         ClassHandle::from(i)
@@ -136,7 +142,8 @@ impl Classes {
     }
 
     fn grow(&mut self, batch: usize) {
-        let mut new_batch = Batch::with_capacity(self.methods[batch].capacity() * 2);
+        let old_batch = &self.methods[batch];
+        let mut new_batch = Batch::with_capacity(old_batch.capacity() * 2);
         for class in 0..256 {
             let class_handle = (batch << 8) + class;
             if class_handle >= self.indices.len() {
@@ -146,13 +153,15 @@ impl Classes {
             for &index in &self.indices[class_handle] {
                 new_batch.put(
                     class as u8,
-                    self.methods[batch].method_names[index as usize],
-                    self.methods[batch].closures[index as usize],
+                    old_batch.keys[index as usize],
+                    old_batch.closures[index as usize],
                     &mut new_indices,
                 );
             }
+            self.byte_count += 4 * (new_indices.capacity() + self.indices[class_handle].capacity());
             self.indices[class_handle] = new_indices
         }
+        self.byte_count += new_batch.capacity() - old_batch.capacity();
         self.methods[batch] = new_batch;
     }
 
@@ -169,7 +178,7 @@ impl Classes {
             let j = self.indices[super_class.index()][i] as usize;
             self.set_method(
                 sub_class,
-                self.methods[super_class.batch()].method_names[j],
+                self.methods[super_class.batch()].keys[j],
                 self.methods[super_class.batch()].closures[j],
             );
         }
@@ -178,21 +187,14 @@ impl Classes {
 
 impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
-        let mut bc = 72 + self.names.capacity() * 4;
-        for batch in &self.methods {
-            bc += batch.byte_count();
-        }
-        for indices in &self.indices {
-            bc += indices.capacity() * 4
-        }
-        bc
+        self.byte_count
     }
     fn trace(&self, handle: Handle<CLASS>, collector: &mut Collector) {
         collector.keys.push(StringHandle(self.names.get(handle.0)));
         for &index in &self.indices[handle.index()] {
             collector
                 .keys
-                .push(self.methods[handle.batch()].method_names[index as usize]);
+                .push(self.methods[handle.batch()].keys[index as usize]);
             collector.push(self.methods[handle.batch()].closures[index as usize]);
         }
     }
@@ -200,8 +202,9 @@ impl Pool<CLASS> for Classes {
         self.names.sweep(marks);
         for i in self.names.free_indices() {
             for &j in &self.indices[i] {
-                self.methods[i >> 8].method_names[j as usize] = StringHandle::TOMBSTONE
+                self.methods[i >> 8].keys[j as usize] = StringHandle::TOMBSTONE
             }
+            self.indices[i].clear();
         }
     }
     fn count(&self) -> usize {

@@ -27,6 +27,38 @@ Results:
 - trees: 6.822447061538696
 - zoo: 0.6565086841583252
 
+### instances
+
+Trying the same optimisaton there...
+
+Results: terrible! what is going on? Some test take extreme long time, as if
+stuck in a loop. the ones that succeed are slower. I must have made a mistake
+somewhere right? What the hell!?
+
+- not the growing
+- not garbage collection
+- not the batching either tough
+- not even the keeping track of indices...
+
+It was the byte count... looping through everything to check if it is time for
+garbage collection was terribly expensive. Too bad I already changed so much
+code.
+
+Results:
+
+- binary_trees: 3.7906415462493896
+- equality: loop 5.2078211307525635 elapsed 4.882596254348755 equals
+  -0.3252248764038086
+- fib: 2.382350444793701
+- instantiation: 2.9885857105255127 <- now what?
+- invocation: 0.7353930473327637
+- method_call: 0.46764111518859863
+- properties: 0.9993464946746826
+- string_equality: loop 1.7210593223571777 elapsed 1.5670757293701172 equals
+  -0.15398359298706055
+- trees: 6.947245359420776
+- zoo: 0.6857585906982422
+
 ## 2024-10-26
 
 ### instances and classes

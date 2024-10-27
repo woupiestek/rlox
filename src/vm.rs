@@ -289,8 +289,8 @@ impl VM {
                     if self.peek(0).is_number() {
                         binary_op!(self, x, y, x + y);
                     } else {
-                        let a = StringHandle::try_from(self.peek(0))?;
-                        let b = StringHandle::try_from(self.peek(1))?;
+                        let a = StringHandle::try_from(self.peek(1))?;
+                        let b = StringHandle::try_from(self.peek(0))?;
                         let c = self.heap.strings.concat(a, b).ok_or("Missing strings")?;
                         self.stack_top -= 2;
                         self.push(Value::from(c));
