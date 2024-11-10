@@ -215,7 +215,7 @@ impl Functions {
 impl Pool<FUNCTION> for Functions {
     fn byte_count(&self) -> usize {
         // replace with more realistic number
-        self.names.capacity() * 102
+        self.names.capacity() * 96
     }
 
     fn count(&self) -> usize {

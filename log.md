@@ -1,5 +1,12 @@
 # Rlox
 
+## 2024-11-10
+
+### lazy sweeping
+
+Make sweeping lazier, with the aim to pay the cost gradually, rather than all at
+once during the GB cycle.
+
 ## 2024-10-27
 
 ### refactors

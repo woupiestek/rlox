@@ -47,7 +47,7 @@ impl BoundMethods {
 
 impl Pool<BOUND_METHOD> for BoundMethods {
     fn byte_count(&self) -> usize {
-        self.receivers.len() * 8
+        48 + self.receivers.capacity() * 4 + self.methods.byte_count()
     }
     fn trace(&self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
         collector.push(self.get_receiver(handle));

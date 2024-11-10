@@ -86,10 +86,16 @@ impl Instances {
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
         let index = self.classes.store(class.0);
-        while index >= self.properties.len() as u32 {
-            let properties = Properties::with_capacity(8);
-            self.byte_count += 4 + properties.byte_count();
-            self.properties.push(properties);
+        if index < self.properties.len() as u32 {
+            self.byte_count -= self.properties[index as usize].byte_count();
+            self.properties[index as usize] = Properties::with_capacity(8);
+            self.byte_count += self.properties[index as usize].byte_count();
+        } else {
+            while index >= self.properties.len() as u32 {
+                let properties = Properties::with_capacity(8);
+                self.byte_count += properties.byte_count();
+                self.properties.push(properties);
+            }
         }
         InstanceHandle::from(index)
     }
@@ -134,7 +140,7 @@ impl Instances {
 
 impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
-        self.byte_count
+        self.byte_count + self.classes.byte_count()
     }
     fn trace(&self, handle: Handle<INSTANCE>, collector: &mut Collector) {
         collector
@@ -151,11 +157,6 @@ impl Pool<INSTANCE> for Instances {
     }
     fn sweep(&mut self, marks: &BitArray) {
         self.classes.sweep(marks);
-        for i in self.classes.free_indices() {
-            self.byte_count -= self.properties[i].byte_count();
-            self.properties[i] = Properties::with_capacity(8);
-            self.byte_count += self.properties[i].byte_count();
-        }
     }
     fn count(&self) -> usize {
         self.classes.count()

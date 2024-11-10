@@ -5,7 +5,7 @@ pub struct U32s {
 }
 
 // a free list is implemented as an internal linked list
-// the last position is always used as a pointer to the seocnd to last free position
+// the last position is always used as a pointer to the second to last free position
 impl U32s {
     pub fn new() -> Self {
         Self { data: vec![0] }
@@ -43,30 +43,8 @@ impl U32s {
         self.data[count] = free as u32;
     }
 
-    // ouch...
-    pub fn free_indices(&self) -> FreeIterator {
-        FreeIterator {
-            u32s: self,
-            index: self.data[self.count()] as usize,
-        }
-    }
-}
-
-pub struct FreeIterator<'m> {
-    u32s: &'m U32s,
-    index: usize,
-}
-
-// note type members...
-impl<'m> Iterator for FreeIterator<'m> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.u32s.count() {
-            return None;
-        }
-        let result = Some(self.index);
-        self.index = self.u32s.data[self.index] as usize;
-        result
+    // omit the 24 bytes of the struct
+    pub fn byte_count(&self) -> usize {
+        self.data.capacity() * 4
     }
 }

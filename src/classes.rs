@@ -115,18 +115,25 @@ impl Classes {
     }
 
     pub fn new_class(&mut self, name: StringHandle) -> ClassHandle {
-        let i = self.names.store(name.0);
+        let i = self.names.store(name.0) as usize;
         let batch = i >> 8;
-        while batch >= self.methods.len() as u32 {
+        if i < self.indices.len() {
+            // just-in-time method clean up
+            for &j in &self.indices[i] {
+                self.methods[i >> 8].keys[j as usize] = StringHandle::TOMBSTONE
+            }
+            self.indices[i].clear();
+            return ClassHandle::from(i as u32);
+        }
+        while batch >= self.methods.len() {
             let batch = Batch::with_capacity(8);
             self.byte_count += batch.byte_count();
             self.methods.push(batch);
         }
-        while i >= self.indices.len() as u32 {
-            self.byte_count += 24;
+        while i >= self.indices.len() {
             self.indices.push(Vec::new());
         }
-        ClassHandle::from(i)
+        ClassHandle::from(i as u32)
     }
 
     pub fn get_name<'s>(&self, ch: ClassHandle, strings: &'s Strings) -> &'s str {
@@ -161,7 +168,7 @@ impl Classes {
             self.byte_count += 4 * (new_indices.capacity() + self.indices[class_handle].capacity());
             self.indices[class_handle] = new_indices
         }
-        self.byte_count += new_batch.capacity() - old_batch.capacity();
+        self.byte_count += new_batch.byte_count() - old_batch.byte_count();
         self.methods[batch] = new_batch;
     }
 
@@ -187,7 +194,7 @@ impl Classes {
 
 impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
-        self.byte_count
+        self.byte_count + self.indices.capacity() * 24 + self.names.byte_count()
     }
     fn trace(&self, handle: Handle<CLASS>, collector: &mut Collector) {
         collector.keys.push(StringHandle(self.names.get(handle.0)));
@@ -200,12 +207,6 @@ impl Pool<CLASS> for Classes {
     }
     fn sweep(&mut self, marks: &BitArray) {
         self.names.sweep(marks);
-        for i in self.names.free_indices() {
-            for &j in &self.indices[i] {
-                self.methods[i >> 8].keys[j as usize] = StringHandle::TOMBSTONE
-            }
-            self.indices[i].clear();
-        }
     }
     fn count(&self) -> usize {
         self.names.count()
