@@ -14,6 +14,7 @@ mod classes;
 mod closures;
 mod compiler;
 mod functions;
+mod handles;
 mod heap;
 mod instances;
 mod natives;

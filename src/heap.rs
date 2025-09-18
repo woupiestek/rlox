@@ -49,6 +49,12 @@ impl Collector {
         }
     }
 
+    pub fn reset(&mut self) {
+        for bit_set in &mut self.marks {
+            bit_set.clear();
+        }
+    }
+
     fn mark_and_sweep(&mut self, heap: &mut Heap) {
         #[cfg(feature = "log_gc")]
         let before = heap.byte_count();
@@ -86,15 +92,16 @@ impl Collector {
             );
         }
         loop {
-            // short cirquiting can make this behave unpredictably, but that does not explain the problems
-            if heap.bound_methods.mark(self)
-                && heap.classes.mark(self)
-                && heap.closures.mark(self)
-                && heap.functions.mark(self)
-                && heap.instances.mark(self)
-                && heap.strings.mark(self) // somehow do the conversion key -> handle here
-                && heap.upvalues.mark(self)
-            {
+            // short cirquiting can make this behave unpredictably
+            let mut done = true;
+            done = heap.bound_methods.mark(self) && done;
+            done = heap.classes.mark(self) && done;
+            done = heap.closures.mark(self) && done;
+            done = heap.functions.mark(self) && done;
+            done = heap.instances.mark(self) && done;
+            done = heap.strings.mark(self) && done; // somehow do the conversion key -> handle here
+            done = heap.upvalues.mark(self) && done;
+            if done {
                 break;
             }
         }
@@ -116,9 +123,6 @@ impl Collector {
         heap.functions.sweep(&self.marks[FUNCTION]);
         heap.instances.sweep(&self.marks[INSTANCE]);
         heap.upvalues.sweep(&self.marks[UPVALUE]);
-        for bit_set in &mut self.marks {
-            bit_set.clear();
-        }
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -134,6 +138,7 @@ where
     fn count(&self) -> usize;
     fn trace(&self, handle: Handle<KIND>, collector: &mut Collector);
     fn sweep(&mut self, marks: &BitArray);
+
     // indicate that the collector has no more elements of a kind
     fn mark(&self, collector: &mut Collector) -> bool {
         if collector.handles[KIND].is_empty() {

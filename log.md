@@ -1,5 +1,13 @@
 # Rlox
 
+## 2024-11-16
+
+### keep the bitarrays
+
+Idea: keep an object counter and a bitarray... On GC, everything is set to zero.
+Mark marks the occupied indices. No sweep, just skip occupied slots on object
+creation.
+
 ## 2024-11-10
 
 ### lazy sweeping

@@ -109,7 +109,7 @@ impl Pool<UPVALUE> for Upvalues {
  *
  * Rlox needs a get operation to find open upvalues that already point to the same stack location
  * The stack locations are therefore stored twice: both as priorities for this heap, and inside the open upvalues
- * o/c this doesn't help get much for early positions of the heap, but Minificents linked list doesn't do so great
+ * o/c this doesn't help get much for early positions of the heap, but Munificents linked list doesn't do so great
  * there either. And who knows, maybe this will just turn out to be much faster, thanks to cache considerations.
  *
  * Well, if this is not faster, at least it is more clever!

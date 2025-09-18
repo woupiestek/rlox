@@ -81,6 +81,7 @@ impl VM {
             {
                 println!("collect garbage");
             }
+            self.collector.reset();
             self.collect_roots();
             self.heap.retain(&mut self.collector);
             #[cfg(feature = "trace")]
@@ -187,6 +188,7 @@ impl VM {
                 }
             }
             Some(BOUND_METHOD) => {
+                // more flexibility by passing the stck around
                 let bound_method = BoundMethodHandle::try_from(callee)?;
                 let receiver = self.heap.bound_methods.get_receiver(bound_method);
                 self.values[self.stack_top - arity as usize - 1] = Value::from(receiver);
