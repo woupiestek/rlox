@@ -81,7 +81,7 @@ impl VM {
             {
                 println!("collect garbage");
             }
-            self.collector.reset();
+            self.heap.reset();
             self.collect_roots();
             self.heap.retain(&mut self.collector);
             #[cfg(feature = "trace")]

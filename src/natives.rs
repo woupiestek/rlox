@@ -13,6 +13,7 @@ impl Natives {
         Self(Vec::new())
     }
 
+    // not garbage collected, right?
     pub fn store(&mut self, f: fn(args: &[Value]) -> Result<Value, String>) -> NativeHandle {
         let index = self.0.len();
         self.0.push(f);

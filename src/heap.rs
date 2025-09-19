@@ -1,5 +1,4 @@
 use crate::{
-    bitarray::BitArray,
     bound_methods::BoundMethods,
     classes::Classes,
     closures::Closures,
@@ -12,7 +11,6 @@ use crate::{
 pub struct Collector {
     pub handles: [Vec<u32>; 6],
     pub keys: Vec<StringHandle>,
-    pub marks: [BitArray; 7],
 }
 
 pub const BOUND_METHOD: usize = 0;
@@ -29,30 +27,12 @@ impl Collector {
     pub fn new() -> Self {
         Self {
             handles: Default::default(),
-            // resizeable, resettable arrays, length updates on collection
-            marks: [
-                BitArray::new(),
-                BitArray::new(),
-                BitArray::new(),
-                BitArray::new(),
-                BitArray::new(),
-                BitArray::new(),
-                BitArray::new(),
-            ],
             keys: Vec::new(),
         }
     }
 
     pub fn push<const KIND: usize>(&mut self, handle: Handle<KIND>) {
-        if !self.marks[KIND].has(handle.index()) {
-            self.handles[KIND].push(handle.0);
-        }
-    }
-
-    pub fn reset(&mut self) {
-        for bit_set in &mut self.marks {
-            bit_set.clear();
-        }
+        self.handles[KIND].push(handle.0);
     }
 
     fn mark_and_sweep(&mut self, heap: &mut Heap) {
@@ -79,7 +59,7 @@ impl Collector {
         }
     }
 
-    fn mark(&mut self, heap: &Heap) {
+    fn mark(&mut self, heap: &mut Heap) {
         #[cfg(feature = "log_gc")]
         {
             let mut count = 0;
@@ -116,13 +96,13 @@ impl Collector {
         {
             println!("Start sweeping.");
         }
-        heap.strings.sweep(&self.marks[STRING]);
-        heap.bound_methods.sweep(&self.marks[BOUND_METHOD]);
-        heap.classes.sweep(&self.marks[CLASS]);
-        heap.closures.sweep(&self.marks[CLOSURE]);
-        heap.functions.sweep(&self.marks[FUNCTION]);
-        heap.instances.sweep(&self.marks[INSTANCE]);
-        heap.upvalues.sweep(&self.marks[UPVALUE]);
+        heap.strings.sweep();
+        heap.bound_methods.sweep();
+        heap.classes.sweep();
+        heap.closures.sweep();
+        heap.functions.sweep();
+        heap.instances.sweep();
+        heap.upvalues.sweep();
         #[cfg(feature = "log_gc")]
         {
             println!("Done sweeping");
@@ -135,20 +115,19 @@ where
     Self: Sized,
 {
     fn byte_count(&self) -> usize;
-    fn count(&self) -> usize;
-    fn trace(&self, handle: Handle<KIND>, collector: &mut Collector);
-    fn sweep(&mut self, marks: &BitArray);
+    // is this even still needed!?
+    // fn count(&self) -> usize;
+    fn reset(&mut self);
+    fn sweep(&mut self);
+    fn trace(&mut self, handle: Handle<KIND>, collector: &mut Collector);
 
     // indicate that the collector has no more elements of a kind
-    fn mark(&self, collector: &mut Collector) -> bool {
+    fn mark(&mut self, collector: &mut Collector) -> bool {
         if collector.handles[KIND].is_empty() {
             return true;
         }
         while let Some(i) = collector.handles[KIND].pop() {
-            if !collector.marks[KIND].has(i as usize) {
-                collector.marks[KIND].add(i as usize);
-                self.trace(Handle::from(i), collector);
-            }
+            self.trace(Handle::from(i), collector);
         }
         false
     }
@@ -195,6 +174,16 @@ impl Heap {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.bound_methods.reset();
+        self.classes.reset();
+        self.closures.reset();
+        self.functions.reset();
+        self.instances.reset();
+        self.strings.reset();
+        self.upvalues.reset();
+    }
+
     pub fn retain(&mut self, collector: &mut Collector) {
         collector.mark_and_sweep(self);
         self.next_gc *= 2;
@@ -211,7 +200,6 @@ impl Heap {
             + self.classes.byte_count()
             + self.instances.byte_count()
             + self.bound_methods.byte_count()
-            + self.strings.byte_count()
             + self.functions.byte_count()
     }
 }

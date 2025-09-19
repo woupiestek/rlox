@@ -1,5 +1,5 @@
 use crate::{
-    bitarray::BitArray,
+    handles::Handles,
     heap::{Collector, Handle, Heap, Pool, FUNCTION},
     op::Op,
     strings::StringHandle,
@@ -136,6 +136,7 @@ pub struct Functions {
     arities: Vec<u8>,
     upvalue_counts: Vec<u8>,
     chunks: Vec<Chunk>,
+    handles: Handles,
 }
 
 impl Functions {
@@ -146,21 +147,25 @@ impl Functions {
             arities: Vec::new(),
             upvalue_counts: Vec::new(),
             chunks: Vec::new(),
+            handles: Handles::new(),
         }
     }
 
     // repo pattern
     pub fn new_function(&mut self, name: Option<StringHandle>) -> FunctionHandle {
-        self.arities.push(0);
-        self.chunks.push(Chunk {
-            code: Vec::new(),
-            lines: Vec::new(),
-            run_lengths: Vec::new(),
-            constants: Vec::new(),
-        });
-        self.names.push(name.unwrap_or(StringHandle::EMPTY));
-        self.upvalue_counts.push(0);
-        FunctionHandle::from((self.chunks.len() - 1) as u32)
+        let i = self.handles.next();
+        while i as usize >= self.arities.len() {
+            self.arities.push(0);
+            self.chunks.push(Chunk {
+                code: Vec::new(),
+                lines: Vec::new(),
+                run_lengths: Vec::new(),
+                constants: Vec::new(),
+            });
+            self.names.push(name.unwrap_or(StringHandle::EMPTY));
+            self.upvalue_counts.push(0);
+        }
+        FunctionHandle::from(i)
     }
 
     pub fn chunk_ref(&self, fh: FunctionHandle) -> &Chunk {
@@ -210,30 +215,10 @@ impl Functions {
             )
         }
     }
-}
 
-impl Pool<FUNCTION> for Functions {
-    fn byte_count(&self) -> usize {
-        // replace with more realistic number
-        self.names.capacity() * 96
-    }
-
-    fn count(&self) -> usize {
-        self.names.len()
-    }
-
-    fn trace(&self, handle: Handle<FUNCTION>, collector: &mut Collector) {
-        if self.names[handle.index()] != StringHandle::EMPTY {
-            collector.keys.push(self.names[handle.index()])
-        }
-        for constant in &self.chunks[handle.index()].constants {
-            constant.trace(collector)
-        }
-    }
-
-    fn sweep(&mut self, marks: &BitArray) {
-        for i in 0..self.count() {
-            if !marks.has(i) {
+    pub fn sweep(&mut self) {
+        for i in 0..self.names.len() {
+            if !self.handles.is_marked(i as u32) {
                 self.names[i] = StringHandle::EMPTY;
                 self.arities[i] = 0;
                 self.chunks[i].code.clear();
@@ -243,4 +228,29 @@ impl Pool<FUNCTION> for Functions {
             }
         }
     }
+}
+
+impl Pool<FUNCTION> for Functions {
+    fn byte_count(&self) -> usize {
+        // replace with more realistic number
+        self.names.capacity() * 96
+    }
+
+    fn trace(&mut self, handle: Handle<FUNCTION>, collector: &mut Collector) {
+        if !self.handles.mark(handle.0) {
+            return;
+        }
+        if self.names[handle.index()] != StringHandle::EMPTY {
+            collector.keys.push(self.names[handle.index()])
+        }
+        for constant in &self.chunks[handle.index()].constants {
+            constant.trace(collector)
+        }
+    }
+
+    fn reset(&mut self) {
+        self.handles.clear();
+    }
+
+    fn sweep(&mut self) {}
 }

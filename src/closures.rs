@@ -22,6 +22,7 @@ pub struct Closures {
     free: [u32; COUNTS],
     functions: Vec<Vec<u32>>,
     upvalues: Vec<Vec<UpvalueHandle>>,
+    handles: BitArray, // todo
 }
 
 impl Closures {
@@ -31,6 +32,7 @@ impl Closures {
             free: [0; COUNTS],
             functions: Vec::new(),
             upvalues: Vec::new(),
+            handles: BitArray::new(),
         }
     }
 
@@ -98,13 +100,32 @@ impl Closures {
         }
         ClosureHandle::from((uc << SHIFT) as u32 + free as u32)
     }
+
+    // shit! another example of indirection!
+    // this is probabaly broken now...
+    pub fn sweep(&mut self) {
+        for i in 0..self.functions.len() {
+            let functions = &mut self.functions[i];
+            self.free[i] = functions.len() as u32;
+            for j in 0..functions.len() {
+                if !self.handles.has(((i + 1) << SHIFT) + j) {
+                    functions[j] = self.free[i];
+                    self.free[i] = j as u32;
+                }
+            }
+        }
+    }
 }
 
 impl Pool<CLOSURE> for Closures {
     fn byte_count(&self) -> usize {
         self.byte_count
     }
-    fn trace(&self, handle: Handle<CLOSURE>, collector: &mut Collector) {
+    fn trace(&mut self, handle: Handle<CLOSURE>, collector: &mut Collector) {
+        if !self.handles.add(handle.index()) {
+            return;
+        }
+
         let uc = Closures::upvalue_count(handle);
         if uc == 0 {
             collector.push(FunctionHandle::from(handle.0));
@@ -116,25 +137,12 @@ impl Pool<CLOSURE> for Closures {
             collector.push(UpvalueHandle::from(self.upvalues[uc - 1][uc * index + i]));
         }
     }
-    fn sweep(&mut self, marks: &BitArray) {
-        for i in 0..self.functions.len() {
-            let functions = &mut self.functions[i];
-            self.free[i] = functions.len() as u32;
-            for j in 0..functions.len() {
-                if !marks.has(((i + 1) << SHIFT) + j) {
-                    functions[j] = self.free[i];
-                    self.free[i] = j as u32;
-                }
-            }
-        }
+
+    fn reset(&mut self) {
+        self.handles.clear();
     }
-    fn count(&self) -> usize {
-        let mut count = 0;
-        for functions in &self.functions {
-            count += functions.len();
-        }
-        count
-    }
+
+    fn sweep(&mut self) {}
 }
 
 #[cfg(test)]
@@ -162,7 +170,11 @@ mod tests {
         // try an empty one
         let closure3 = closures.new_closure(Handle::from(6), 0);
         assert_eq!(closures.get_function(closure3).index(), 6);
-        assert_eq!(closures.count(), 2);
+        let sum = closures
+            .functions
+            .into_iter()
+            .fold(0, |acc, fs| acc + fs.len());
+        assert_eq!(sum, 2);
     }
 
     #[test]
@@ -181,7 +193,8 @@ mod tests {
     pub fn sweeping() {
         let mut closures = Closures::new();
         let closure = closures.new_closure(Handle::from(2), 2);
-        closures.sweep(&BitArray::new());
+        closures.reset();
+        closures.sweep();
         let closure2 = closures.new_closure(Handle::from(2), 2);
 
         assert_eq!(closure, closure2);

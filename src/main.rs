@@ -21,7 +21,6 @@ mod natives;
 mod op;
 mod scanner;
 mod strings;
-mod u32s;
 mod upvalues;
 mod values;
 mod vm;

@@ -217,12 +217,14 @@ impl Map<Value> {
     }
 }
 
+#[cfg(feature = "trace")]
 pub struct KeyIterator<'m> {
     key_set: &'m KeySet,
     index: usize,
 }
 
 // note type members...
+#[cfg(feature = "trace")]
 impl<'m> Iterator for KeyIterator<'m> {
     type Item = StringHandle;
 
@@ -243,6 +245,8 @@ pub struct Strings {
     generations: Box<[u8]>,
     strs: Box<[Option<Box<str>>]>,
     str_byte_count: usize,
+    // use to advantage now that it is here.
+    marked: BitArray,
 }
 
 impl Strings {
@@ -252,6 +256,7 @@ impl Strings {
             strs: vec![None; capacity].into_boxed_slice(),
             generations: vec![0; capacity].into_boxed_slice(),
             str_byte_count: 0,
+            marked: BitArray::new(),
         }
     }
 
@@ -304,6 +309,9 @@ impl Strings {
         assert_eq!(self.capacity(), capacity);
     }
 
+    // todo: pass in the 'collector' to create new handles here too,
+    // though it is a special case
+    // maybe it combines well!
     pub fn put(&mut self, str: &str) -> StringHandle {
         self.grow_if_necessary();
         let hash = Self::hash(str);
@@ -376,34 +384,34 @@ impl Pool<STRING> for Strings {
         self.capacity() * Self::ENTRY_SIZE + self.str_byte_count
     }
 
-    fn count(&self) -> usize {
-        self.key_set.count
-    }
-
-    fn trace(&self, _handle: Handle<STRING>, _collector: &mut Collector) {}
-
-    fn sweep(&mut self, marks: &BitArray) {
-        for i in 0..self.capacity() {
-            if !marks.has(i) {
-                self.key_set.delete(self.key_set.get(i));
-                if let Some(str) = self.strs[i].take() {
-                    self.str_byte_count -= str.len();
-                }
-            }
-        }
-    }
-
-    fn mark(&self, collector: &mut Collector) -> bool {
+    fn mark(&mut self, collector: &mut Collector) -> bool {
         if collector.keys.is_empty() {
             return true;
         }
         while let Some(key) = collector.keys.pop() {
             let (found, i) = self.key_set.find(key);
             if found {
-                collector.marks[STRING].add(i);
+                self.marked.add(i);
             }
         }
         false
+    }
+
+    fn trace(&mut self, _handle: Handle<STRING>, _collector: &mut Collector) {}
+
+    fn reset(&mut self) {
+        self.marked.clear();
+    }
+
+    fn sweep(&mut self) {
+        for i in 0..self.capacity() {
+            if !self.marked.has(i) {
+                self.key_set.delete(self.key_set.get(i));
+                if let Some(str) = self.strs[i].take() {
+                    self.str_byte_count -= str.len();
+                }
+            }
+        }
     }
 }
 

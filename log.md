@@ -1,5 +1,34 @@
 # Rlox
 
+## 2024-11-17
+
+### string trouble
+
+The string do move around, and therefore require indirection.
+
+- the string pool tries to assign a single handle to each string, and never change it.
+- there are mutable mappings from handle to index, index to handle and index to str
+  so the pool does not need a 4 billion entries long array
+
+The latter two mappings are pretty standard now,
+The first one is the indirection, that allows
+moving data around as needed.
+
+### closure trouble
+
+The same issue here: there is an indirection, now because closure can be 'zero size'
+just a pointer to the heap.
+
+### more
+
+Significant sweeping inside functions and upvalues. It may be better to move the
+handle generators inside the objects.
+
+### compaction
+
+The closures thing... Moving stuff around is okay when reszing, because data
+will be copied anyway.
+
 ## 2024-11-16
 
 ### keep the bitarrays
@@ -1684,7 +1713,7 @@ seem ok.
 
 Take up an additional byte to distinguish 'locals' and 'non locals'
 
-### 
+###
 
 We could make it more clox like by wrapping uszie in a struct and defining
 Deref... How to do the implicit dependency on the stack?

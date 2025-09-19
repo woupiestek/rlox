@@ -1,32 +1,35 @@
 use crate::{
-    bitarray::BitArray,
     closures::ClosureHandle,
+    handles::Handles,
     heap::{Collector, Handle, Heap, Pool, BOUND_METHOD},
     instances::InstanceHandle,
-    u32s::U32s,
 };
 
 pub type BoundMethodHandle = Handle<BOUND_METHOD>;
 
 pub struct BoundMethods {
-    methods: U32s,
+    handles: Handles,
+    methods: Vec<ClosureHandle>,
     receivers: Vec<InstanceHandle>,
 }
 
 impl BoundMethods {
     pub fn new() -> Self {
         Self {
-            methods: U32s::new(),
+            handles: Handles::new(),
+            methods: Vec::new(),
             receivers: Vec::new(),
         }
     }
 
     pub fn bind(&mut self, instance: InstanceHandle, method: ClosureHandle) -> BoundMethodHandle {
-        let i = self.methods.store(method.0);
-        while self.receivers.len() < self.methods.count() {
+        let i = self.handles.next();
+        while self.receivers.len() <= i as usize {
             // pushing fake handles just in case
-            self.receivers.push(Handle(0))
+            self.methods.push(Handle(0));
+            self.receivers.push(Handle(0));
         }
+        self.methods[i as usize] = method;
         self.receivers[i as usize] = instance;
         BoundMethodHandle::from(i)
     }
@@ -36,7 +39,7 @@ impl BoundMethods {
     }
 
     pub fn get_method(&self, handle: BoundMethodHandle) -> ClosureHandle {
-        ClosureHandle::from(self.methods.get(handle.0))
+        self.methods[handle.index()]
     }
 
     pub fn to_string(&self, handle: BoundMethodHandle, heap: &Heap) -> String {
@@ -47,16 +50,18 @@ impl BoundMethods {
 
 impl Pool<BOUND_METHOD> for BoundMethods {
     fn byte_count(&self) -> usize {
-        48 + self.receivers.capacity() * 4 + self.methods.byte_count()
+        48 + 4 * (self.receivers.capacity() + self.methods.capacity())
     }
-    fn trace(&self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
-        collector.push(self.get_receiver(handle));
-        collector.push(self.get_method(handle));
+    fn trace(&mut self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
+        if self.handles.mark(handle.0) {
+            collector.push(self.get_receiver(handle));
+            collector.push(self.get_method(handle));
+        }
     }
-    fn sweep(&mut self, marks: &BitArray) {
-        self.methods.sweep(marks);
+
+    fn reset(&mut self) {
+        self.handles.clear();
     }
-    fn count(&self) -> usize {
-        self.receivers.len()
-    }
+
+    fn sweep(&mut self) {}
 }

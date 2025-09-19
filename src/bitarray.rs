@@ -7,28 +7,35 @@ impl BitArray {
     pub fn new() -> Self {
         Self { data: Vec::new() }
     }
-    pub fn with_capacity(length: usize) -> Self {
-        Self {
-            data: Vec::with_capacity((length + 7) / 8),
-        }
-    }
     pub fn has(&self, index: usize) -> bool {
         if index / 8 >= self.data.len() {
             return false;
         }
         self.data[index / 8] & (1 << (index & 7)) != 0
     }
-    pub fn add(&mut self, index: usize) {
-        while index / 8 >= self.data.len() {
+    fn save(&mut self, i: usize, d: u8) -> bool {
+        if d == self.data[i] {
+            false
+        } else {
+            self.data[i] = d;
+            true
+        }
+    }
+
+    pub fn add(&mut self, index: usize) -> bool {
+        let i = index / 8;
+        while i >= self.data.len() {
             self.data.push(0);
         }
-        self.data[index / 8] |= 1 << (index & 7)
+        self.save(i, self.data[i] | 1 << (index & 7))
     }
-    pub fn remove(&mut self, index: usize) {
-        if index / 8 >= self.data.len() {
-            return;
+
+    pub fn remove(&mut self, index: usize) -> bool {
+        let i = index / 8;
+        if i >= self.data.len() {
+            return false;
         }
-        self.data[index / 8] &= !(1 << (index & 7))
+        self.save(i, self.data[i] & !(1 << (index & 7)))
     }
 
     pub fn clear(&mut self) {

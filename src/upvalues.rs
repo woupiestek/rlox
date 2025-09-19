@@ -11,6 +11,7 @@ pub type UpvalueHandle = Handle<UPVALUE>;
 pub struct Upvalues {
     open: UpvalueHeap,
     values: Vec<Value>,
+    marked: BitArray,
 }
 
 impl Upvalues {
@@ -18,6 +19,7 @@ impl Upvalues {
         Self {
             open: UpvalueHeap::new(),
             values: vec![Value::from(UpvalueHandle::from(0))],
+            marked: BitArray::new(),
         }
     }
 
@@ -83,22 +85,25 @@ impl Pool<UPVALUE> for Upvalues {
     fn byte_count(&self) -> usize {
         self.values.capacity() * Self::ENTRY_SIZE
     }
-    fn trace(&self, handle: Handle<UPVALUE>, collector: &mut Collector) {
-        self.values[handle.index()].trace(collector)
+    fn trace(&mut self, handle: Handle<UPVALUE>, collector: &mut Collector) {
+        if self.marked.add(handle.index()) {
+            self.values[handle.index()].trace(collector)
+        }
     }
-    fn sweep(&mut self, marks: &BitArray) {
+
+    fn reset(&mut self) {
+        self.marked.clear();
+    }
+
+    fn sweep(&mut self) {
         let mut free = self.count();
         for i in 0..self.values.len() {
-            if !marks.has(i as usize) {
+            if self.marked.has(i) {
                 self.values[i] = Value::from(UpvalueHandle::from(free as u32));
                 free = i;
             }
         }
         assert_eq!(free, self.count());
-    }
-
-    fn count(&self) -> usize {
-        self.values.len()
     }
 }
 

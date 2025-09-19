@@ -1,9 +1,8 @@
 use crate::{
-    bitarray::BitArray,
     classes::ClassHandle,
+    handles::Handles,
     heap::{Collector, Handle, Heap, Pool, INSTANCE},
     strings::StringHandle,
-    u32s::U32s,
     values::Value,
 };
 
@@ -71,37 +70,42 @@ pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
     byte_count: usize,
-    classes: U32s,
+    classes: Vec<ClassHandle>,
     properties: Vec<Properties>,
+    handles: Handles,
 }
 
 impl Instances {
     pub fn new() -> Self {
         Self {
             byte_count: 56,
-            classes: U32s::new(),
+            classes: Vec::new(),
             properties: Vec::new(),
+            handles: Handles::new(),
         }
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
-        let index = self.classes.store(class.0);
-        if index < self.properties.len() as u32 {
-            self.byte_count -= self.properties[index as usize].byte_count();
-            self.properties[index as usize] = Properties::with_capacity(8);
-            self.byte_count += self.properties[index as usize].byte_count();
+        let index = self.handles.next() as usize; //self.classes.store(class.0);
+        if index < self.properties.len() {
+            self.byte_count -= self.properties[index].byte_count();
+            self.properties[index] = Properties::with_capacity(8);
+            self.classes[index] = class;
+            self.byte_count += self.properties[index].byte_count();
         } else {
-            while index >= self.properties.len() as u32 {
+            while index >= self.properties.len() {
                 let properties = Properties::with_capacity(8);
                 self.byte_count += properties.byte_count();
                 self.properties.push(properties);
+                self.classes.push(class);
             }
         }
-        InstanceHandle::from(index)
+
+        InstanceHandle::from(index as u32)
     }
 
     pub fn get_class<'s>(&self, ih: InstanceHandle) -> ClassHandle {
-        ClassHandle::from(self.classes.get(ih.0))
+        self.classes[ih.index()]
     }
 
     pub fn to_string(&self, ih: InstanceHandle, heap: &Heap) -> String {
@@ -140,12 +144,14 @@ impl Instances {
 
 impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
-        self.byte_count + self.classes.byte_count()
+        self.byte_count + self.classes.len() * 4
     }
-    fn trace(&self, handle: Handle<INSTANCE>, collector: &mut Collector) {
-        collector
-            .keys
-            .push(StringHandle(self.classes.get(handle.0)));
+    fn trace(&mut self, handle: Handle<INSTANCE>, collector: &mut Collector) {
+        if !self.handles.mark(handle.0) {
+            return;
+        }
+        // what was going on here?
+        collector.push(self.classes[handle.index()]);
         for index in 0..self.properties[handle.index()].capacity() {
             let key = self.properties[handle.index()].keys[index as usize];
             if key == StringHandle::EMPTY {
@@ -155,10 +161,10 @@ impl Pool<INSTANCE> for Instances {
             self.properties[handle.index()].values[index as usize].trace(collector);
         }
     }
-    fn sweep(&mut self, marks: &BitArray) {
-        self.classes.sweep(marks);
+
+    fn reset(&mut self) {
+        self.handles.clear();
     }
-    fn count(&self) -> usize {
-        self.classes.count()
-    }
+
+    fn sweep(&mut self) {}
 }

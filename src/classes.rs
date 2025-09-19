@@ -1,9 +1,8 @@
 use crate::{
-    bitarray::BitArray,
     closures::ClosureHandle,
+    handles::Handles,
     heap::{Collector, Handle, Pool, CLASS},
     strings::{StringHandle, Strings},
-    u32s::U32s,
 };
 
 fn index(i: u8, key: StringHandle) -> u32 {
@@ -99,28 +98,36 @@ impl Handle<CLASS> {
 
 pub struct Classes {
     byte_count: usize,
-    names: U32s,
+    names: Vec<StringHandle>,
     methods: Vec<Batch>,
     indices: Vec<Vec<u32>>,
+    handles: Handles,
 }
 
 impl Classes {
     pub fn new() -> Self {
         Self {
             byte_count: 80,
-            names: U32s::new(),
+            names: Vec::new(),
             methods: Vec::new(),
             indices: Vec::new(),
+            handles: Handles::new(),
         }
     }
 
     pub fn new_class(&mut self, name: StringHandle) -> ClassHandle {
-        let i = self.names.store(name.0) as usize;
+        let i = self.handles.next() as usize; //self.names.store(name.0) as usize;
+
+        while self.names.len() <= i {
+            self.names.push(StringHandle::EMPTY);
+        }
+        self.names[i] = name;
+
         let batch = i >> 8;
         if i < self.indices.len() {
             // just-in-time method clean up
             for &j in &self.indices[i] {
-                self.methods[i >> 8].keys[j as usize] = StringHandle::TOMBSTONE
+                self.methods[batch].keys[j as usize] = StringHandle::TOMBSTONE
             }
             self.indices[i].clear();
             return ClassHandle::from(i as u32);
@@ -130,14 +137,14 @@ impl Classes {
             self.byte_count += batch.byte_count();
             self.methods.push(batch);
         }
-        while i >= self.indices.len() {
+        while i as usize >= self.indices.len() {
             self.indices.push(Vec::new());
         }
         ClassHandle::from(i as u32)
     }
 
     pub fn get_name<'s>(&self, ch: ClassHandle, strings: &'s Strings) -> &'s str {
-        strings.get(StringHandle(self.names.get(ch.0))).unwrap()
+        strings.get(self.names[ch.index()]).unwrap()
     }
 
     pub fn to_string(&self, ch: ClassHandle, strings: &Strings) -> String {
@@ -194,10 +201,13 @@ impl Classes {
 
 impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
-        self.byte_count + self.indices.capacity() * 24 + self.names.byte_count()
+        self.byte_count + self.indices.capacity() * 24 + self.names.capacity() * 4
     }
-    fn trace(&self, handle: Handle<CLASS>, collector: &mut Collector) {
-        collector.keys.push(StringHandle(self.names.get(handle.0)));
+    fn trace(&mut self, handle: Handle<CLASS>, collector: &mut Collector) {
+        if !self.handles.mark(handle.0) {
+            return;
+        }
+        collector.keys.push(self.names[handle.index()]);
         for &index in &self.indices[handle.index()] {
             collector
                 .keys
@@ -205,10 +215,12 @@ impl Pool<CLASS> for Classes {
             collector.push(self.methods[handle.batch()].closures[index as usize]);
         }
     }
-    fn sweep(&mut self, marks: &BitArray) {
-        self.names.sweep(marks);
+
+    fn reset(&mut self) {
+        self.handles.clear();
     }
-    fn count(&self) -> usize {
-        self.names.count()
-    }
+    fn sweep(&mut self) {}
+    // fn count(&self) -> usize {
+    //     self.names.len()
+    // }
 }
