@@ -22,7 +22,6 @@ pub const FUNCTION: usize = 5;
 pub const STRING: usize = 6;
 pub const NATIVE: usize = 7;
 
-// todo: currently, this is reconstructed every GC cycle. Keeping it may help performance
 impl Collector {
     pub fn new() -> Self {
         Self {

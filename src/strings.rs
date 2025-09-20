@@ -309,9 +309,6 @@ impl Strings {
         assert_eq!(self.capacity(), capacity);
     }
 
-    // todo: pass in the 'collector' to create new handles here too,
-    // though it is a special case
-    // maybe it combines well!
     pub fn put(&mut self, str: &str) -> StringHandle {
         self.grow_if_necessary();
         let hash = Self::hash(str);

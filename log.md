@@ -1,6 +1,80 @@
 # Rlox
 
-## 2024-11-17
+## 2025-09-20
+
+### todo
+
+- refactor the call stack/vm to not need the heap as often
+- also, avoid the missing closure case somehow
+- refactor closures to integrate the bit array
+- refactor strings to integrate the bit array
+
+### how it works now
+
+Basically, `Handles` is a bitset that marks the handles cuirrently in use,
+so that when a new handle is needed, it uses a free one instead.
+
+A garbage collection cycle first clears these bits set,
+then traverses the heap to mark the objects to be preserved.
+There is no freeing of memory at this stage.
+
+### call stack optimisation
+
+Idea: keep the top on rusts stack, push the rest on a vec for safe keeping.
+This seems to work, actually.
+
+### closures and call stacks
+
+three aims:
+
+1. faster access to upvalues in the vm
+2. more straightforward array of upvalue implementation
+3. integration of the bitarray into clsure memeory management
+
+Moving the upvalues around is not a good option,
+and copying into the call frame takes up much space.
+There could just be one array of current upvalues in the vm
+fetched from repo once when the top frame loads.
+the same could be done for constants of course:
+
+- 256 \* (32 + 64)
+  or just peacemeal, like a cache.
+
+The plan:
+
+- have 256 slots for upvalues
+- have 256 slots of constants
+- every time a call frame is loaded,
+  the constants and upvalues are brought there.
+
+### other ideas
+
+In C, there would just be a pointer to the upvalues, constants and instructions.
+I have moved away from that here because of life times and unsafe rust,
+but maybe I can retry. Basic idea: the vm temporarily borrows from the heap
+for fast access.
+
+Not the right temporary: the heap remains borrowed as long as the structures it owns are.
+Meaning nothing can be changes in the heap, unless the references are dropped,
+which means they must be fetched again at that point.
+
+So the same workaround, with constants, instructions, and arrays of upvalues living behind
+handles might work. If they get to move around, then the values must be reloaded
+after garbage collection cycles.
+
+That is an idea, though. The functions and closures repos need to keep track of locations,
+but the handles used by the VM could have generation markers, to indicate a refetch is
+needed because the values behind have moved.
+
+### conclusion
+
+- Just caching the data in the VM seems costly
+- References are probably not going to work, because of the borrow checker
+- I don't want the unsafe route again, unless it is the only possible improvement left
+- There is the idea of expiring handles: the indices give direct access as long as they are
+  fresh. Once expired, new handles can be fetched in a slower way.
+
+## 2025-09-19
 
 ### string trouble
 

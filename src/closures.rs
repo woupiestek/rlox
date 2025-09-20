@@ -17,6 +17,12 @@ const SHIFT: u8 = 24;
 const MASK: usize = 0xffffff;
 const COUNTS: usize = 255;
 
+// new plans...
+// moving upvalues during garbage collection is not an option if the call frame needs those values
+// then one big array of upvalues
+// and another with offsets would not work
+// option: keep the upvalues of the current frame.
+
 pub struct Closures {
     byte_count: usize,
     free: [u32; COUNTS],
@@ -48,6 +54,13 @@ impl Closures {
         } else {
             self.functions[uc - 1][ch.index() & MASK]
         })
+    }
+
+    pub fn get_upvalues(&self, ch: ClosureHandle) -> &[UpvalueHandle] {
+        let uc = Closures::upvalue_count(ch);
+        assert_ne!(uc, 0);
+        let j = ch.index() & MASK;
+        &self.upvalues[uc - 1][(uc * j)..(uc * (j + 1))]
     }
 
     pub fn get_upvalue(&self, ch: ClosureHandle, i: usize) -> UpvalueHandle {

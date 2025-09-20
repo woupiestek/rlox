@@ -1,8 +1,8 @@
-use std::time;
+use std::{mem, time};
 
 use crate::{
     bound_methods::BoundMethodHandle,
-    call_stack::CallStack,
+    call_frame::CallFrame,
     classes::ClassHandle,
     closures::ClosureHandle,
     common::U8_COUNT,
@@ -17,8 +17,7 @@ use crate::{
     values::Value,
 };
 
-const MAX_FRAMES: usize = 64; // > 0, < 2^16 - 1
-const STACK_SIZE: usize = (MAX_FRAMES as usize) * U8_COUNT;
+const STACK_SIZE: usize = 64 * U8_COUNT;
 
 fn clock_native(_args: &[Value]) -> Result<Value, String> {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
@@ -38,7 +37,8 @@ macro_rules! binary_op {
 pub struct VM {
     values: [Value; STACK_SIZE],
     stack_top: usize,
-    call_stack: CallStack<MAX_FRAMES>,
+    call_frame: CallFrame,
+    call_stack: Vec<CallFrame>,
     globals: Map<Value>,
     init_string: StringHandle,
     heap: Heap,
@@ -53,7 +53,9 @@ impl VM {
         let mut s = Self {
             values: [Value::NIL; STACK_SIZE],
             stack_top: 0,
-            call_stack: CallStack::new(),
+            // dangerous placeholder
+            call_frame: CallFrame::new(0, Handle(0)),
+            call_stack: Vec::new(),
             globals: Map::new(),
             init_string,
             heap,
@@ -104,7 +106,10 @@ impl VM {
         {
             println!("collect frames");
         }
-        self.call_stack.trace(&mut self.collector);
+        self.call_frame.trace(&mut self.collector);
+        for frame in &self.call_stack {
+            frame.trace(&mut self.collector);
+        }
         #[cfg(feature = "log_gc")]
         {
             println!("collect upvalues");
@@ -157,14 +162,29 @@ impl VM {
         self.values[self.stack_top - 1 - distance]
     }
 
+    fn init(&mut self) -> Result<(), String> {
+        let expected = self.heap.functions.arity(FunctionHandle::MAIN);
+        if 0 != expected {
+            return err!("Expected no arguments but got {}.", expected);
+        }
+        let closure = self.heap.closures.new_closure(FunctionHandle::MAIN, 0);
+        self.push(Value::from(closure));
+        self.call_frame = CallFrame::new(self.stack_top - 1, closure);
+        self.call_stack.clear();
+        Ok(())
+    }
+
     fn call(&mut self, closure: ClosureHandle, arity: u8) -> Result<(), String> {
         let handle = self.heap.closures.get_function(closure);
         let expected = self.heap.functions.arity(handle);
         if arity != expected {
             return err!("Expected {} arguments but got {}.", expected, arity);
         }
-        self.call_stack
-            .push(self.stack_top - arity as usize - 1, closure)
+        self.call_stack.push(mem::replace(
+            &mut self.call_frame,
+            CallFrame::new(self.stack_top - arity as usize - 1, closure),
+        ));
+        Ok(())
     }
 
     fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
@@ -263,7 +283,7 @@ impl VM {
 
     fn run(&mut self) -> Result<(), String> {
         loop {
-            let instruction = Op::from(self.call_stack.read_byte(&self.heap));
+            let instruction = Op::from(self.call_frame.read_byte(&self.heap));
             #[cfg(feature = "trace")]
             {
                 print!("stack: ");
@@ -299,11 +319,11 @@ impl VM {
                     }
                 }
                 Op::Call => {
-                    let arity = self.call_stack.read_byte(&self.heap);
+                    let arity = self.call_frame.read_byte(&self.heap);
                     self.call_value(self.peek(arity as usize), arity)?;
                 }
                 Op::Class => {
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     self.collect_garbage_if_needed();
                     let new_class = self.heap.classes.new_class(name);
                     self.push(Value::from(new_class));
@@ -313,7 +333,7 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = Handle::try_from(self.call_stack.read_constant(&self.heap))?;
+                    let function = Handle::try_from(self.call_frame.read_constant(&self.heap))?;
                     // garbage collection risks?
                     self.collect_garbage_if_needed();
                     let closure = self
@@ -323,23 +343,23 @@ impl VM {
                     self.push(Value::from(closure));
                     let count = self.heap.functions.upvalue_count(function);
                     for i in 0..count {
-                        let is_local = self.call_stack.read_byte(&self.heap);
-                        let index = self.call_stack.read_byte(&self.heap) as usize;
+                        let is_local = self.call_frame.read_byte(&self.heap);
+                        let index = self.call_frame.read_byte(&self.heap) as usize;
                         let uh = if is_local > 0 {
-                            let location = self.call_stack.slot() + index;
+                            let location = self.call_frame.slot + index;
                             self.capture_upvalue(location)
                         } else {
-                            self.call_stack.upvalue(index, &self.heap)?
+                            self.call_frame.upvalue(index, &self.heap)
                         };
                         self.heap.closures.set_upvalue(closure, i, uh);
                     }
                 }
                 Op::Constant => {
-                    let value = self.call_stack.read_constant(&self.heap);
+                    let value = self.call_frame.read_constant(&self.heap);
                     self.push(value)
                 }
                 Op::DefineGlobal => {
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     self.globals.set(name, self.peek(0));
                     self.pop();
                 }
@@ -351,7 +371,7 @@ impl VM {
                 }
                 Op::False => self.push(Value::FALSE),
                 Op::GetGlobal => {
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     if let Some(value) = self.globals.get(name) {
                         self.push(value);
                     } else {
@@ -363,12 +383,12 @@ impl VM {
                 }
                 Op::GetLocal => {
                     let index =
-                        self.call_stack.slot() + self.call_stack.read_byte(&self.heap) as usize;
+                        self.call_frame.slot + self.call_frame.read_byte(&self.heap) as usize;
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
                     let handle = Handle::try_from(self.peek(0))?;
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
@@ -377,7 +397,7 @@ impl VM {
                     }
                 }
                 Op::GetSuper => {
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     let super_class = Handle::try_from(self.pop())?;
                     self.bind_method(super_class, name)?;
                 }
@@ -385,7 +405,7 @@ impl VM {
                     let value = self
                         .heap
                         .upvalues
-                        .get(self.call_stack.read_upvalue(&self.heap)?);
+                        .get(self.call_frame.read_upvalue(&self.heap));
                     if let Some(location) = value.as_stack_ref() {
                         self.push(self.values[location as usize]);
                     } else {
@@ -403,22 +423,22 @@ impl VM {
                     self.pop();
                 }
                 Op::Invoke => {
-                    let name = self.call_stack.read_string(&self.heap)?;
-                    let arity = self.call_stack.read_byte(&self.heap);
+                    let name = self.call_frame.read_string(&self.heap)?;
+                    let arity = self.call_frame.read_byte(&self.heap);
                     self.invoke(name, arity)?;
                 }
-                Op::Jump => self.call_stack.jump_forward(&self.heap),
+                Op::Jump => self.call_frame.jump_forward(&self.heap),
                 Op::JumpIfFalse => {
                     if self.peek(0).is_falsey() {
-                        self.call_stack.jump_forward(&self.heap);
+                        self.call_frame.jump_forward(&self.heap);
                     } else {
-                        self.call_stack.skip();
+                        self.call_frame.skip();
                     }
                 }
                 Op::Less => binary_op!(self, a, b, a < b),
-                Op::Loop => self.call_stack.jump_back(&self.heap),
+                Op::Loop => self.call_frame.jump_back(&self.heap),
                 Op::Method => {
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     self.define_method(name)?
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
@@ -437,18 +457,18 @@ impl VM {
                 Op::Print => println!("{}", self.pop().to_string(&self.heap)),
                 Op::Return => {
                     let result = self.pop();
-                    let location = self.call_stack.slot();
+                    let location = self.call_frame.slot;
                     self.close_upvalues(location);
-                    self.call_stack.pop();
-                    if self.call_stack.is_empty() {
-                        self.pop();
+                    if let Some(frame) = self.call_stack.pop() {
+                        self.call_frame = frame;
+                        self.stack_top = location;
+                        self.push(result);
+                    } else {
                         return Ok(());
                     }
-                    self.stack_top = location;
-                    self.push(result);
                 }
                 Op::SetGlobal => {
-                    let name = self.call_stack.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     if !self.globals.set(name, self.peek(0)) {
                         self.globals.delete(name);
                         return err!(
@@ -458,21 +478,21 @@ impl VM {
                     }
                 }
                 Op::SetLocal => {
-                    let index = self.call_stack.read_byte(&self.heap) as usize;
-                    self.values[self.call_stack.slot() + index] = self.peek(0);
+                    let index = self.call_frame.read_byte(&self.heap) as usize;
+                    self.values[self.call_frame.slot + index] = self.peek(0);
                 }
                 Op::SetProperty => {
                     let b = self.pop();
                     let a = Handle::try_from(self.pop())?;
                     self.heap.instances.set_property(
                         a,
-                        self.call_stack.read_string(&self.heap)?,
+                        self.call_frame.read_string(&self.heap)?,
                         b,
                     );
                     self.push(b);
                 }
                 Op::SetUpvalue => {
-                    let upvalue = self.call_stack.read_upvalue(&self.heap)?;
+                    let upvalue = self.call_frame.read_upvalue(&self.heap);
                     let value = self.heap.upvalues.get(upvalue);
                     if let Some(location) = value.as_stack_ref() {
                         self.values[location as usize] = self.peek(0)
@@ -482,8 +502,8 @@ impl VM {
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
-                    let name = self.call_stack.read_string(&self.heap)?;
-                    let arity = self.call_stack.read_byte(&self.heap);
+                    let name = self.call_frame.read_string(&self.heap)?;
+                    let arity = self.call_frame.read_byte(&self.heap);
                     let super_class = Handle::try_from(self.pop())?;
                     self.invoke_from_class(super_class, name, arity)?;
                 }
@@ -503,6 +523,8 @@ impl VM {
     fn reset_stack(&mut self) {
         self.stack_top = 0;
         self.heap.upvalues.reset();
+        // todo: check that this is really needed
+        // self.call_stack.clear();
     }
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
@@ -512,12 +534,13 @@ impl VM {
             use crate::debug::Disassembler;
             Disassembler::disassemble(&self.heap);
         }
-        let closure = self.heap.closures.new_closure(FunctionHandle::MAIN, 0);
-        self.push(Value::from(closure));
-        self.call(closure, 0)?;
+        self.init()?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
-            self.call_stack.print_stack_trace(&self.heap);
+            self.call_frame.print(&self.heap);
+            for i in (0..self.call_stack.len()).rev() {
+                self.call_stack[i].print(&self.heap);
+            }
             self.reset_stack();
             err!("Runtime error!")
         } else {

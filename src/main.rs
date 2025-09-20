@@ -9,7 +9,7 @@ mod debug;
 mod common;
 mod bitarray;
 mod bound_methods;
-mod call_stack;
+mod call_frame;
 mod classes;
 mod closures;
 mod compiler;
