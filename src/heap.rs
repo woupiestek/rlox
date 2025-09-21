@@ -1,16 +1,10 @@
 use crate::{
-    bound_methods::BoundMethods,
-    classes::Classes,
-    closures::Closures,
-    functions::Functions,
-    instances::Instances,
-    strings::{StringHandle, Strings},
-    upvalues::Upvalues,
+    bound_methods::BoundMethods, classes::Classes, closures::Closures, functions::Functions,
+    instances::Instances, strings::Strings, upvalues::Upvalues,
 };
 
 pub struct Collector {
-    pub handles: [Vec<u32>; 6],
-    pub keys: Vec<StringHandle>,
+    pub handles: [Vec<u32>; 7],
 }
 
 pub const BOUND_METHOD: usize = 0;
@@ -26,12 +20,15 @@ impl Collector {
     pub fn new() -> Self {
         Self {
             handles: Default::default(),
-            keys: Vec::new(),
         }
     }
 
     pub fn push<const KIND: usize>(&mut self, handle: Handle<KIND>) {
-        self.handles[KIND].push(handle.0);
+        self.push_raw(KIND, handle.0);
+    }
+
+    pub fn push_raw(&mut self, kind: usize, handle: u32) {
+        self.handles[kind].push(handle);
     }
 
     fn mark_and_sweep(&mut self, heap: &mut Heap) {
@@ -167,7 +164,7 @@ impl Heap {
             closures: Closures::new(),
             functions: Functions::new(),
             instances: Instances::new(),
-            strings: Strings::with_capacity(0),
+            strings: Strings::new(),
             upvalues: Upvalues::new(),
             next_gc: 1 << 20,
         }

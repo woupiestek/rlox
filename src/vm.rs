@@ -9,10 +9,10 @@ use crate::{
     compiler::compile,
     functions::FunctionHandle,
     heap::{Collector, Handle, Heap, Pool, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
-    instances::InstanceHandle,
+    instances::{InstanceHandle, Properties},
     natives::{NativeHandle, Natives},
     op::Op,
-    strings::{Map, StringHandle},
+    strings::StringHandle,
     upvalues::UpvalueHandle,
     values::Value,
 };
@@ -37,7 +37,7 @@ pub struct VM {
     stack_top: usize,
     call_frame: CallFrame,
     call_stack: Vec<CallFrame>,
-    globals: Map<Value>,
+    globals: Properties,
     init_string: StringHandle,
     heap: Heap,
     natives: Natives,
@@ -54,7 +54,7 @@ impl VM {
             // dangerous placeholder
             call_frame: CallFrame::new(0, Handle(0)),
             call_stack: Vec::new(),
-            globals: Map::new(),
+            globals: Properties::with_capacity(8),
             init_string,
             heap,
             natives: Natives::new(),
@@ -117,7 +117,7 @@ impl VM {
         {
             println!("collect init string");
         }
-        self.collector.keys.push(self.init_string);
+        self.collector.push(self.init_string);
         #[cfg(feature = "log_gc")]
         {
             println!("collect main function");
@@ -135,8 +135,8 @@ impl VM {
         let key = self.heap.strings.put(name);
         // are the protections still needed?
         self.push(Value::from(key));
-        self.globals
-            .set(key, Value::from(self.natives.store(native_fn)));
+        let value = Value::from(self.natives.store(native_fn));
+        self.set_global(key, value);
         self.pop();
     }
 
@@ -273,6 +273,15 @@ impl VM {
         Ok(())
     }
 
+    fn set_global(&mut self, name: StringHandle, value: Value) -> bool {
+        if self.globals.is_full() {
+            // inform the heap somehow?
+            // why aren't the globals just an instance anyway?
+            self.globals = self.globals.grow();
+        }
+        self.globals.put(name, value)
+    }
+
     fn run(&mut self) -> Result<(), String> {
         loop {
             let instruction = Op::from(self.call_frame.read_byte(&self.heap));
@@ -354,7 +363,7 @@ impl VM {
                 }
                 Op::DefineGlobal => {
                     let name = self.call_frame.read_string(&self.heap)?;
-                    self.globals.set(name, self.peek(0));
+                    self.set_global(name, self.peek(0));
                     self.pop();
                 }
                 Op::Divide => binary_op!(self, a, b, a / b),
@@ -371,7 +380,7 @@ impl VM {
                     } else {
                         return err!(
                             "Undefined variable '{}'.",
-                            self.heap.strings.get(name).unwrap()
+                            self.heap.strings.get(name).unwrap(),
                         );
                     }
                 }
@@ -456,7 +465,8 @@ impl VM {
                 }
                 Op::SetGlobal => {
                     let name = self.call_frame.read_string(&self.heap)?;
-                    if !self.globals.set(name, self.peek(0)) {
+                    // the booleans are killing me
+                    if self.set_global(name, self.peek(0)) {
                         self.globals.delete(name);
                         return err!(
                             "Undefined variable '{}'.",

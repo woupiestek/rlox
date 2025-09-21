@@ -1,26 +1,20 @@
-class Tree {
-  init(depth) {
-    this.depth = depth;
-    if (depth > 0) {
-      this.a = Tree(depth - 1);
-      this.b = Tree(depth - 1);
-      this.c = Tree(depth - 1);
-      this.d = Tree(depth - 1);
-      this.e = Tree(depth - 1);
-    }
-  }
+var a = 0;
+print a;
+var b = 0;
+print b;
+var c = 0;
+print c;
+var d = 0;
+print d;
+var e = 0;
+print e;
+var f = 0;
+print f;
+var g = 0;
+print g;
+var h = 0;
+print h;
+var i = 0;
+print i;
 
-  walk() {
-    if (this.depth == 0) return 0;
-    return this.depth 
-        + this.a.walk()
-        + this.b.walk()
-        + this.c.walk()
-        + this.d.walk()
-        + this.e.walk();
-  }
-}
 
-var start = clock();
-var tree = Tree(8);
-print clock() - start;

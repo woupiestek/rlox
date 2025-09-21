@@ -79,4 +79,12 @@ impl Handles {
         self.marked[self.index] = 1;
         (self.index << 6) as u32
     }
+
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn byte_count(&self) -> usize {
+        32 + 8 * self.marked.len()
+    }
 }

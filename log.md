@@ -7,7 +7,7 @@
 - ~~also, avoid the missing closure case somehow~~
 - refactor closures to integrate the bit array
 - refactor strings to integrate the bit array
-- refactor upvalues to integrate the bit array
+- ~~refactor upvalues to integrate the bit array~~
 - refactor the call stack/vm to not need the heap as often
 
 ### bit array integration
@@ -96,6 +96,60 @@ The implementation with the ilogs cannot do that.
 
 It is fitting that locations get set to the highest value,
 because that naturally forces a heap rebalancing.
+
+### strings
+
+The orginal clox kept hash codes for all strings for lookup in hash tables.
+I achieved a speed up by using the hash codes as string handles.
+No more lookup of the full hash code needed, just mange the handle itself.
+This mainly requires a uniform distrisbution of hash codes,
+that remains uniform modulo powers of two, it does not 
+have to relate to the string and indeed, the handles are adjusted 
+to avoid collisions.
+
+Could is work as well with normal handles?
+I.e. I imagine something like taking the last few digits,
+and reversing the bits to scatter first,
+or maybe just a multiplication with a magic number.
+
+Reversing the bits seem like an effective scatter trick anyway...
+
+What do we actually have?
+
+- A hash map with `&str` keys, to ensure unique handles for strings.
+- A general hash map structure to attachs values to string handles.
+
+Hmm. I was just thing the general hash maps should use weak references for the strings,
+That may not be a good idea, though, if string can come out of nowhere.
+
+### needed structure
+
+Given an `&str` see if there is a handle for it and return it. Given a handle, get the `&str` back.
+Technically, it could be a list of pairs, or even just a vector.
+Okay, the reason not to use the vector is the fear that handles will be reused,
+but that cannot actually happen, since the keys are traced during garbage collection.
+Hence, handles could be reused without risk.
+
+Note: string handles are offset by at least 2, for tombstones and nulls.
+This is used in properties, which are the back bones for objects.
+
+This is worth considering in lox: a user could reintroduce a string that existed before and use that 
+in a map. Hence no weak reference used. This will be the case here.
+
+Now the other way around is still an issue: how ot find the handle of a string that 
+already? A second map with hash codes would work here. It would use handles as its values.
+Possibly a quadratically growing array of handles, basically the inverse, of the former,
+though it may cheat by using the vector to check.
+
+- `handles1: Handles, strings: Vec<Box<str>>, handles2: Box<[u32]>`... some supporting structure,
+but the essence is there.
+
+### classes
+
+Last time I worked on this, I just kept redoing the hash maps. I had the idea that memory management would be more efficient
+if classes shared hash maps of methods. Only in small batches though: god forbid we put all on them in only big one.
+
+It could try another hash function, for example `((i+j)(i+j-1)/2 + i)*KNUTH_PHI/2^k`.
 
 ## 2025-09-20
 

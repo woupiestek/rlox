@@ -241,7 +241,7 @@ impl Pool<FUNCTION> for Functions {
             return;
         }
         if self.names[handle.index()] != StringHandle::EMPTY {
-            collector.keys.push(self.names[handle.index()])
+            collector.push(self.names[handle.index()])
         }
         for constant in &self.chunks[handle.index()].constants {
             constant.trace(collector)

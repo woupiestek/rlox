@@ -1,10 +1,7 @@
 // run time data structures
 
-use crate::{
-    heap::{
-        Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE, UPVALUE,
-    },
-    strings::StringHandle,
+use crate::heap::{
+    Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE, STRING,
 };
 
 // nan box?
@@ -31,25 +28,6 @@ impl TryFrom<Value> for f64 {
             Ok(f64::from_bits(value.0))
         } else {
             err!("value is not a number")
-        }
-    }
-}
-
-const STRING_TAG: u64 = 0xffff_0000_0000_0000;
-impl From<StringHandle> for Value {
-    fn from(value: StringHandle) -> Self {
-        Self(STRING_TAG ^ (value.0 as u64))
-    }
-}
-
-impl TryFrom<Value> for StringHandle {
-    type Error = String;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        if value.0 & STRING_TAG == STRING_TAG {
-            Ok(Self((STRING_TAG ^ value.0) as u32))
-        } else {
-            err!("value is not a string")
         }
     }
 }
@@ -107,20 +85,10 @@ impl Value {
     }
 
     pub fn trace(&self, collector: &mut Collector) {
-        let index = (self.0 & 0xffff_ffff) as u32;
-        match self.0 & STRING_TAG {
-            STRING_TAG => collector.keys.push(StringHandle(index)),
-            0xfffc_0000_0000_0000 => match (self.0 >> 32 & 0xffff) as usize {
-                BOUND_METHOD => collector.push(Handle::<BOUND_METHOD>::from(index)),
-                INSTANCE => collector.push(Handle::<INSTANCE>::from(index)),
-                CLASS => collector.push(Handle::<CLASS>::from(index)),
-                CLOSURE => collector.push(Handle::<CLOSURE>::from(index)),
-                UPVALUE => collector.push(Handle::<UPVALUE>::from(index)),
-                // these should never be used.
-                FUNCTION => collector.push(Handle::<FUNCTION>::from(index)),
-                _ => (),
-            },
-            _ => (),
+        if let Some(kind) = self.kind() {
+            if kind < 7 {
+                collector.push_raw(kind, self.0 as u32);
+            }
         }
     }
 
@@ -136,14 +104,6 @@ impl Value {
             return format!("{}", f64::from_bits(self.0));
         }
 
-        if self.0 & STRING_TAG == STRING_TAG {
-            return heap
-                .strings
-                .get(StringHandle((STRING_TAG ^ self.0) as u32))
-                .unwrap()
-                .to_owned();
-        }
-
         if 0x8000_0000_0000_0000 & self.0 == 0x8000_0000_0000_0000 {
             let index = (self.0 & 0xffff_ffff) as u32;
             match ((self.0 >> 32) & 0x000f) as usize {
@@ -157,6 +117,11 @@ impl Value {
                 INSTANCE => return heap.instances.to_string(Handle::from(index), heap),
                 FUNCTION => {
                     return heap.functions.to_string(Handle::from(index), heap);
+                }
+                STRING => {
+                    if let Some(str) = heap.strings.get(Handle::from(index)) {
+                        return str.to_string();
+                    }
                 }
                 NATIVE => return format!("<native function>"),
                 _ => (),

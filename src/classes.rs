@@ -9,6 +9,7 @@ fn index(i: u8, key: StringHandle) -> u32 {
     (i as u32 ^ key.0).wrapping_mul(16777619u32)
 }
 
+// another hash map...
 struct Batch {
     count: usize,
     classes: Box<[u8]>,
@@ -41,11 +42,20 @@ impl Batch {
 
         let mut index = index(class, method_name) & mask;
 
-        let mut tombstone: Option<u32> = None;
+        let mut tombstone: u32 = u32::MAX;
         loop {
             match self.keys[index as usize] {
-                StringHandle::EMPTY => return (false, tombstone.unwrap_or(index)),
-                StringHandle::TOMBSTONE => tombstone = Some(index),
+                StringHandle::EMPTY => {
+                    return (
+                        false,
+                        if tombstone < u32::MAX {
+                            tombstone
+                        } else {
+                            index
+                        },
+                    )
+                }
+                StringHandle::TOMBSTONE => tombstone = index,
                 name => {
                     if name == method_name && self.classes[index as usize] == class {
                         return (true, index);
@@ -207,11 +217,9 @@ impl Pool<CLASS> for Classes {
         if !self.handles.mark(handle.0) {
             return;
         }
-        collector.keys.push(self.names[handle.index()]);
+        collector.push(self.names[handle.index()]);
         for &index in &self.indices[handle.index()] {
-            collector
-                .keys
-                .push(self.methods[handle.batch()].keys[index as usize]);
+            collector.push(self.methods[handle.batch()].keys[index as usize]);
             collector.push(self.methods[handle.batch()].closures[index as usize]);
         }
     }
@@ -220,7 +228,4 @@ impl Pool<CLASS> for Classes {
         self.handles.clear();
     }
     fn sweep(&mut self) {}
-    // fn count(&self) -> usize {
-    //     self.names.len()
-    // }
 }

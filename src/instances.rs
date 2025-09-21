@@ -6,22 +6,31 @@ use crate::{
     values::Value,
 };
 
-struct Properties {
+pub struct Properties {
     count: usize,
     keys: Box<[StringHandle]>,
+    leading_zeros: u32,
+    mask: usize,
     values: Box<[Value]>,
 }
 
+const KNUTH_PHI: u32 = 2654435761;
+
+// not implemented to grow automatically
+// so the garbage collector can count how many bytes were used
 impl Properties {
     fn byte_count(&self) -> usize {
         40 + self.keys.len() * 12
     }
 
-    fn with_capacity(capacity: usize) -> Self {
-        assert!(capacity.is_power_of_two(), "what were you thinking?");
+    pub fn with_capacity(capacity: usize) -> Self {
+        assert!(capacity.is_power_of_two(), "power of two required");
+        let mask = capacity - 1;
         Self {
             count: 0,
             keys: vec![StringHandle::EMPTY; capacity].into_boxed_slice(),
+            mask: capacity - 1,
+            leading_zeros: (mask as u32).leading_zeros(),
             values: vec![Value::NIL; capacity].into_boxed_slice(),
         }
     }
@@ -30,39 +39,97 @@ impl Properties {
         self.keys.len()
     }
 
+    fn hash(&self, key: StringHandle) -> usize {
+        (key.0.wrapping_mul(KNUTH_PHI) >> self.leading_zeros) as usize
+    }
+
     fn find(&self, key: StringHandle) -> (bool, usize) {
-        assert!(4 * self.count <= 3 * self.capacity());
-        let mask = self.capacity() - 1;
-        let mut index = key.0 as usize & mask;
+        let mut index = self.hash(key);
+        let mut tombstone = usize::MAX;
         loop {
-            let string_handle = self.keys[index as usize];
-            if string_handle == StringHandle::EMPTY {
-                return (false, index);
+            match self.keys[index] {
+                StringHandle::EMPTY => {
+                    return (
+                        false,
+                        if tombstone < usize::MAX {
+                            tombstone
+                        } else {
+                            index
+                        },
+                    );
+                }
+                StringHandle::TOMBSTONE => {
+                    tombstone = index;
+                }
+                other => {
+                    if other == key {
+                        return (true, index);
+                    }
+                }
             }
-            if string_handle == key {
-                return (true, index);
-            }
-            index = (index + 1) & mask;
+            index = (index + 1) & self.mask;
         }
     }
 
-    fn get(&self, key: StringHandle) -> Option<Value> {
+    pub fn get(&self, key: StringHandle) -> Option<Value> {
         let (found, index) = self.find(key);
         if found {
-            Some(self.values[index as usize])
+            Some(self.values[index])
         } else {
             None
         }
     }
 
-    fn put(&mut self, key: StringHandle, value: Value) {
-        let (found, index) = self.find(key);
-        self.values[index as usize] = value;
-        if found {
-            return;
+    pub fn is_full(&self) -> bool {
+        4 * self.count > 3 * self.capacity()
+    }
+
+    // true mean a new key was added
+    // false means it was not
+    // there is no indication of what happened to the value.
+    pub fn put(&mut self, key: StringHandle, value: Value) -> bool {
+        if self.is_full() {
+            return false;
         }
-        self.keys[index as usize] = key;
+        let (found, index) = self.find(key);
+        self.values[index] = value;
+        if found {
+            return false;
+        }
+        self.keys[index] = key;
         self.count += 1;
+        true
+    }
+
+    pub fn trace(&self, collector: &mut Collector) {
+        for index in 0..self.capacity() {
+            let key = self.keys[index];
+            if !key.is_valid() {
+                continue;
+            }
+            collector.push(key);
+            self.values[index].trace(collector);
+        }
+    }
+
+    pub fn grow(&mut self) -> Properties {
+        let mut new_properties = Properties::with_capacity(self.capacity() * 2);
+        for index in 0..self.capacity() {
+            let key = self.keys[index];
+            if key == StringHandle::EMPTY {
+                continue;
+            }
+            new_properties.put(key, self.values[index]);
+        }
+        new_properties
+    }
+
+    pub fn delete(&mut self, name: StringHandle) {
+        let (found, index) = self.find(name);
+        if found {
+            self.keys[index] = StringHandle::TOMBSTONE;
+            self.values[index] = Value::NIL;
+        }
     }
 }
 
@@ -86,7 +153,7 @@ impl Instances {
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
-        let index = self.handles.next() as usize; //self.classes.store(class.0);
+        let index = self.handles.next() as usize;
         if index < self.properties.len() {
             self.byte_count -= self.properties[index].byte_count();
             self.properties[index] = Properties::with_capacity(8);
@@ -119,26 +186,13 @@ impl Instances {
         self.properties[ih.index()].get(key)
     }
 
-    fn grow(&mut self, ih: InstanceHandle) {
-        let old_properties = &self.properties[ih.index()];
-        let mut new_properties = Properties::with_capacity(old_properties.capacity() * 2);
-        for index in 0..self.properties[ih.index()].capacity() {
-            let key = self.properties[ih.index()].keys[index as usize];
-            if key == StringHandle::EMPTY {
-                continue;
-            }
-            new_properties.put(key, self.properties[ih.index()].values[index as usize]);
-        }
-        self.byte_count += new_properties.byte_count() - old_properties.byte_count();
-        self.properties[ih.index()] = new_properties;
-    }
-
     pub fn set_property(&mut self, ih: InstanceHandle, key: StringHandle, value: Value) {
-        if 4 * (self.properties[ih.index()].count + 1) > 3 * self.properties[ih.index()].capacity()
-        {
-            self.grow(ih);
+        if self.properties[ih.index()].is_full() {
+            self.byte_count -= self.properties[ih.index()].byte_count();
+            self.properties[ih.index()] = self.properties[ih.index()].grow();
+            self.byte_count += self.properties[ih.index()].byte_count();
         }
-        self.properties[ih.index()].put(key, value)
+        self.properties[ih.index()].put(key, value);
     }
 }
 
@@ -150,16 +204,8 @@ impl Pool<INSTANCE> for Instances {
         if !self.handles.mark(handle.0) {
             return;
         }
-        // what was going on here?
         collector.push(self.classes[handle.index()]);
-        for index in 0..self.properties[handle.index()].capacity() {
-            let key = self.properties[handle.index()].keys[index as usize];
-            if key == StringHandle::EMPTY {
-                continue;
-            }
-            collector.keys.push(key);
-            self.properties[handle.index()].values[index as usize].trace(collector);
-        }
+        self.properties[handle.index()].trace(collector);
     }
 
     fn reset(&mut self) {
@@ -167,4 +213,20 @@ impl Pool<INSTANCE> for Instances {
     }
 
     fn sweep(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    pub fn put_and_get() {
+        let mut properties = Properties::with_capacity(8);
+        let key = Handle(60);
+        let key2 = Handle(80);
+        assert!(properties.put(key, Value::TRUE));
+        assert_eq!(Some(Value::TRUE), properties.get(key));
+        assert_eq!(None, properties.get(key2));
+    }
 }
