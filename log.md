@@ -1,5 +1,102 @@
 # Rlox
 
+## 2025-09-21
+
+### todo
+
+- ~~also, avoid the missing closure case somehow~~
+- refactor closures to integrate the bit array
+- refactor strings to integrate the bit array
+- refactor upvalues to integrate the bit array
+- refactor the call stack/vm to not need the heap as often
+
+### bit array integration
+
+Previous model was a free list, that is currently regenerated
+on every GC cycle. However, the GB uses a bit array to
+mark which indices are used, and keeps it arround for future cycles,
+so why not search it for free incides.
+
+### monotone indices
+
+To manage arrays of differing sizes:
+
+1. use one big backing array
+2. when full, copy everything into a new array double the size (or is there a better factor?)
+3. to the outside, add the length of the array to the indices. that way, indices always change
+   and it becomes clear which ones have expired. o/c assuming a slow path to recovering the array is available.
+
+### using rusts stack
+
+Instead of storing call frames, the 'run' function in the vm could just call itself with
+closure arguments. Simpler--so would it therefore be slower? I guess the loop can have a series of
+optimisations that would be lost if the functions called cannot be inlined.
+
+### variable length encoding
+
+For the upvalue array, e.g., so that is it smaller in memory. When the upvalues are loaded,
+They are unpacked for easier usage.
+
+### boxing functions
+
+Idea: inlining is the default meaning of calling a function.
+This does not work in all situations, so functions must be boxed and called indirectly.
+Examples are recursion and dynamic functions. Calling fucntions from modules might be another.
+Perhaps Rust operates on this basis, yet not so explicitly.
+It could be an issue for VMs that the bytecode files can get huge, or the VM has to generate
+all the bytecode after loading the modules.
+
+### rethinking upvalues
+
+It is just a sparse binary relation between handles for boxed values and stack locations.
+When getting and setting upvalues, it is nice to have a fast map from handles to values,
+whether upvalues are closed or open. When a referenced value leaves the stack,
+it gets boxed. This naturally affects upvalues the reference the top of the stack.
+
+Munificent had upvalue objects have pointers to values and form a linked list.
+`typedef struct ObjUpvalue
+{
+  Obj obj;
+  Value *location;
+  Value closed;
+  struct ObjUpvalue *next;
+} ObjUpvalue;`
+
+- I wanted to avoid the linked list structure.
+- data oriented idea suggest struct of arrays,
+
+Idea: encode stuff into 'location':
+
+- 0 means closed
+- otherwise it may be a pair: a stack pointer and a next pointer.
+
+To still avoid the linked list structure:
+
+- list all the handles to open upvalues,
+- ad hoc sorting when upvalues need to be closed?
+  I think the latter actually mean linearly go through the list to check all upvalues
+  before deleting.
+
+It could be an inbox/outbox situation:
+new open upvalues are simply stack up until the call to close comes in
+and only get sorted then.
+
+Other ideas:
+Min heap is now based on comparisons.
+What is the division was based on `ilog2`?
+Each 'node' has a minimum value
+Where the next is found is a matter of `ilog2` comparison:
+
+- the equal ones go left, but the head gets bitten off
+- the lesser ones go right and keep their head.
+
+Note: the current logic puts an element at the end of a vec
+and then sinks it deeper into the heap based on weight.
+The implementation with the ilogs cannot do that.
+
+It is fitting that locations get set to the highest value,
+because that naturally forces a heap rebalancing.
+
 ## 2025-09-20
 
 ### todo

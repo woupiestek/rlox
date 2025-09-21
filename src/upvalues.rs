@@ -1,7 +1,8 @@
 use std::mem;
 
 use crate::{
-    bitarray::BitArray,
+    common::STACK_SIZE,
+    handles::Handles,
     heap::{Collector, Handle, Pool, UPVALUE},
     values::Value,
 };
@@ -10,73 +11,80 @@ pub type UpvalueHandle = Handle<UPVALUE>;
 
 pub struct Upvalues {
     open: UpvalueHeap,
+    locations: Vec<u16>,
     values: Vec<Value>,
-    marked: BitArray,
+    handles: Handles,
 }
 
 impl Upvalues {
     pub fn new() -> Self {
         Self {
             open: UpvalueHeap::new(),
-            values: vec![Value::from(UpvalueHandle::from(0))],
-            marked: BitArray::new(),
+            locations: Vec::new(),
+            values: Vec::new(),
+            handles: Handles::new(),
         }
     }
 
-    pub fn get(&self, handle: UpvalueHandle) -> Value {
-        self.values[handle.index()]
+    pub fn get(&self, handle: UpvalueHandle, stack: &[Value]) -> Value {
+        let location = self.locations[handle.index()] as usize;
+        if location < STACK_SIZE {
+            stack[location]
+        } else {
+            self.values[handle.index()]
+        }
     }
 
-    pub fn set(&mut self, handle: UpvalueHandle, value: Value) {
-        self.values[handle.index()] = value
+    pub fn set(&mut self, handle: UpvalueHandle, value: Value, stack: &mut [Value]) {
+        let location = self.locations[handle.index()] as usize;
+        if location < STACK_SIZE {
+            stack[location] = value
+        } else {
+            self.values[handle.index()] = value
+        }
     }
 
     pub fn open_upvalue(&mut self, location: u16) -> UpvalueHandle {
         if let Some(h) = self.open.get(location) {
-            return h;
+            return Handle(h);
         }
-        let value = Value::from_stack_ref(location);
-        let handle = self.store(value);
-        self.open.add(location, handle);
-        handle
+        let handle = self.store(location);
+        self.open.add(handle, location);
+        Handle(handle)
     }
 
-    fn count(&self) -> usize {
-        self.values.len() - 1
-    }
-
-    fn store(&mut self, value: Value) -> Handle<4> {
-        let count = self.count();
-        let free = UpvalueHandle::try_from(self.values[count]).unwrap();
-        if count == free.index() {
-            self.values
-                .push(Value::from(UpvalueHandle::from(free.0 + 1)));
-        } else {
-            self.values[count] = self.values[free.index()];
+    fn store(&mut self, location: u16) -> u32 {
+        let free = self.handles.next() as usize;
+        while free >= self.values.len() {
+            self.values.push(Value::NIL);
+            // STACK_SIZE == 0x4000 is in range
+            self.locations.push(STACK_SIZE as u16);
         }
-        self.values[free.index()] = value;
-        free
+        self.locations[free] = location;
+        free as u32
     }
 
-    pub fn close_upvalues(&mut self, location: u16, stack: &[Value]) {
+    pub fn close_upvalues(&mut self, location: usize, stack: &[Value]) {
         while let Some(p) = self.open.peek() {
-            if p.0 < location {
+            let lp = self.locations[p as usize] as usize;
+            if lp < location {
                 return;
             }
-            self.set(p.1, stack[p.0 as usize]);
-            self.open.delete_min();
+            self.open.delete_max();
+            self.values[p as usize] = stack[lp];
+            self.locations[p as usize] = STACK_SIZE as u16;
         }
     }
 
     const ENTRY_SIZE: usize = mem::size_of::<Value>();
 
     pub fn trace_roots(&self, collector: &mut Collector) {
-        for &i in &self.open.data {
-            collector.push(Handle::from(i.1))
+        for &i in &self.open.handles {
+            collector.push(Handle::<UPVALUE>::from(i))
         }
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset_stack(&mut self) {
         self.open.clear()
     }
 }
@@ -86,31 +94,22 @@ impl Pool<UPVALUE> for Upvalues {
         self.values.capacity() * Self::ENTRY_SIZE
     }
     fn trace(&mut self, handle: Handle<UPVALUE>, collector: &mut Collector) {
-        if self.marked.add(handle.index()) {
+        if self.handles.mark(handle.0) {
             self.values[handle.index()].trace(collector)
         }
     }
 
     fn reset(&mut self) {
-        self.marked.clear();
+        self.handles.clear();
     }
 
-    fn sweep(&mut self) {
-        let mut free = self.count();
-        for i in 0..self.values.len() {
-            if self.marked.has(i) {
-                self.values[i] = Value::from(UpvalueHandle::from(free as u32));
-                free = i;
-            }
-        }
-        assert_eq!(free, self.count());
-    }
+    fn sweep(&mut self) {}
 }
 
 /**
  * Binary heap
  * For each index i, the left child is 2 * i + 1, the right child is 2 * i + 2
- * Each sub tree keeps the highest locaton at the root
+ * Each sub tree keeps the highest location at the root
  *
  * Rlox needs a get operation to find open upvalues that already point to the same stack location
  * The stack locations are therefore stored twice: both as priorities for this heap, and inside the open upvalues
@@ -119,30 +118,54 @@ impl Pool<UPVALUE> for Upvalues {
  *
  * Well, if this is not faster, at least it is more clever!
  */
-pub struct UpvalueHeap {
-    data: Vec<(u16, UpvalueHandle)>,
+struct UpvalueHeap {
+    handles: Vec<u32>,
+    // added back in hopes of speeding up the structure, but results are unclear
+    locations: Vec<u16>,
 }
 
 impl UpvalueHeap {
     fn new() -> Self {
-        Self { data: Vec::new() }
+        Self {
+            handles: Vec::new(),
+            locations: Vec::new(),
+        }
     }
 
     fn clear(&mut self) {
-        self.data.clear()
+        self.handles.clear();
+        self.locations.clear();
     }
 
-    fn get(&self, location: u16) -> Option<UpvalueHandle> {
-        if self.data.len() == 0 {
+    fn heapify(&mut self, index: usize) -> bool {
+        if index == 0 || index >= self.handles.len() {
+            return false;
+        }
+        let parent = (index - 1) >> 1;
+        if self.locations[index] <= self.locations[parent] {
+            return false;
+        }
+        let handle = self.handles[index];
+        self.handles[index] = self.handles[parent];
+        self.handles[parent] = handle;
+        let location = self.locations[index];
+        self.locations[index] = self.locations[parent];
+        self.locations[parent] = location;
+        return true;
+    }
+
+    fn get(&self, location: u16) -> Option<u32> {
+        if self.handles.len() == 0 {
             return None;
         }
         let mut index = 0;
         loop {
-            if index < self.data.len() {
-                if self.data[index].0 == location {
-                    return Some(self.data[index].1);
+            if index < self.handles.len() {
+                let li = self.locations[index];
+                if li == location {
+                    return Some(self.handles[index]);
                 }
-                if self.data[index].0 > location {
+                if li > location {
                     // climb
                     index = index * 2 + 1;
                     continue;
@@ -150,9 +173,7 @@ impl UpvalueHeap {
             }
             // compute the following index for a normal order traversal of the heap.
             index += 2;
-            while index & 1 == 0 {
-                index >>= 1;
-            }
+            index >>= index.trailing_zeros();
             index -= 1;
 
             // this means we have searched the whole heap
@@ -162,103 +183,54 @@ impl UpvalueHeap {
         }
     }
 
-    fn add(&mut self, location: u16, handle: UpvalueHandle) {
-        // top case
-        let mut index = self.data.len();
-        if index == 0 {
-            self.data.push((location, handle));
-            return;
+    fn add(&mut self, handle: u32, location: u16) {
+        self.handles.push(handle);
+        self.locations.push(location);
+        let mut index = self.handles.len() - 1;
+        while self.heapify(index) {
+            index = (index - 1) >> 1;
         }
-        let mut next = (index - 1) >> 1;
-        if self.data[next].0 < location {
-            self.data.push((location, handle));
-            return;
-        }
-        // drop
-        self.data.push(self.data[next]);
-        loop {
-            index = next;
-            if index == 0 {
-                self.data[index] = (location, handle);
-                return;
-            }
-            next = (index - 1) >> 1;
-            if self.data[next].0 < location {
-                self.data[index] = (location, handle);
-                return;
-            } else {
-                self.data[index] = self.data[next];
-            }
-        }
+        return;
     }
 
-    fn delete_min(&mut self) {
-        match self.data.len() {
+    fn delete_max(&mut self) {
+        match self.handles.len() {
             0 => {
                 return;
             }
             1 => {
-                self.data.clear();
+                self.handles.clear();
                 return;
             }
             2 => {
-                self.data[0] = self.data[1];
-                self.data.truncate(1);
+                self.handles[0] = self.handles[1];
+                self.handles.truncate(1);
                 return;
             }
-            _ => {}
-        }
-
-        let p = match self.data.pop() {
-            None => {
-                return;
-            }
-            Some(p) => p,
+            _ => self.handles[0] = self.handles.pop().unwrap(),
         };
 
         let mut index = 0;
         loop {
             let left = 2 * index + 1;
-            let right = 2 * index + 2;
-            if left >= self.data.len() {
-                self.data[index] = p;
-                return;
-            }
-            if self.data[left].0 <= p.0 {
-                if right >= self.data.len() || self.data[right].0 <= p.0 {
-                    self.data[index] = p;
-                    return;
-                }
-                self.data[index] = self.data[right];
-                index = right;
-                continue;
-            }
-            // we
-            if right >= self.data.len() {
-                self.data[index] = self.data[left];
-                self.data[left] = p;
-                return;
-            }
-            if self.data[right].0 <= p.0 {
-                self.data[index] = self.data[left];
+            if self.heapify(left) {
                 index = left;
                 continue;
             }
-            if self.data[left].0 <= self.data[right].0 {
-                self.data[index] = self.data[right];
+            let right = 2 * index + 2;
+            if self.heapify(right) {
                 index = right;
                 continue;
             }
-            self.data[index] = self.data[left];
-            index = left;
+            return;
         }
     }
 
-    fn peek(&self) -> Option<(u16, UpvalueHandle)> {
-        if self.data.len() == 0 {
+    fn peek(&self) -> Option<u32> {
+        if self.handles.len() == 0 {
             None
         } else {
-            Some(self.data[0])
+            Some(self.handles[0])
         }
     }
 }

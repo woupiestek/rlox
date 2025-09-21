@@ -1,4 +1,4 @@
-pub const U8_COUNT: usize = 0x100;
+pub const STACK_SIZE: usize = 0x4000;
 
 #[macro_export]
 macro_rules! err {

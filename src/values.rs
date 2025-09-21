@@ -90,25 +90,13 @@ impl Value {
         self.0 & QNAN != QNAN
     }
 
-    // nil, true, false, stack_ref
+    // nil, true, false
     pub const NIL: Self = Self(QNAN | 1);
     pub const TRUE: Self = Self(QNAN | 2);
     pub const FALSE: Self = Self(QNAN | 3);
 
     pub fn is_falsey(&self) -> bool {
         matches!(self, &Value::NIL | &Value::FALSE)
-    }
-
-    pub fn from_stack_ref(index: u16) -> Self {
-        Self(0x7ffc_0000_0001_0000 | (index as u64))
-    }
-
-    pub fn as_stack_ref(&self) -> Option<usize> {
-        if 0x7ffc_0000_0001_0000 & self.0 == 0x7ffc_0000_0001_0000 {
-            Some((self.0 & 0xffff) as usize)
-        } else {
-            None
-        }
     }
 
     pub fn kind(&self) -> Option<usize> {

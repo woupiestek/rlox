@@ -5,7 +5,7 @@ use crate::{
     call_frame::CallFrame,
     classes::ClassHandle,
     closures::ClosureHandle,
-    common::U8_COUNT,
+    common::STACK_SIZE,
     compiler::compile,
     functions::FunctionHandle,
     heap::{Collector, Handle, Heap, Pool, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
@@ -16,8 +16,6 @@ use crate::{
     upvalues::UpvalueHandle,
     values::Value,
 };
-
-const STACK_SIZE: usize = 64 * U8_COUNT;
 
 fn clock_native(_args: &[Value]) -> Result<Value, String> {
     match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
@@ -69,12 +67,6 @@ impl VM {
     pub fn capture_upvalue(&mut self, location: usize) -> UpvalueHandle {
         self.collect_garbage_if_needed();
         self.heap.upvalues.open_upvalue(location as u16)
-    }
-
-    fn close_upvalues(&mut self, location: usize) {
-        self.heap
-            .upvalues
-            .close_upvalues(location as u16, &self.values);
     }
 
     fn collect_garbage_if_needed(&mut self) {
@@ -329,7 +321,9 @@ impl VM {
                     self.push(Value::from(new_class));
                 }
                 Op::CloseUpvalue => {
-                    self.close_upvalues(self.stack_top - 1);
+                    self.heap
+                        .upvalues
+                        .close_upvalues(self.stack_top - 1, &self.values);
                     self.pop();
                 }
                 Op::Closure => {
@@ -402,15 +396,8 @@ impl VM {
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
-                    let value = self
-                        .heap
-                        .upvalues
-                        .get(self.call_frame.read_upvalue(&self.heap));
-                    if let Some(location) = value.as_stack_ref() {
-                        self.push(self.values[location as usize]);
-                    } else {
-                        self.push(value);
-                    }
+                    let handle = self.call_frame.read_upvalue(&self.heap);
+                    self.push(self.heap.upvalues.get(handle, &self.values));
                 }
                 Op::Greater => {
                     binary_op!(self, a, b, a > b)
@@ -458,7 +445,7 @@ impl VM {
                 Op::Return => {
                     let result = self.pop();
                     let location = self.call_frame.slot;
-                    self.close_upvalues(location);
+                    self.heap.upvalues.close_upvalues(location, &self.values);
                     if let Some(frame) = self.call_stack.pop() {
                         self.call_frame = frame;
                         self.stack_top = location;
@@ -493,12 +480,9 @@ impl VM {
                 }
                 Op::SetUpvalue => {
                     let upvalue = self.call_frame.read_upvalue(&self.heap);
-                    let value = self.heap.upvalues.get(upvalue);
-                    if let Some(location) = value.as_stack_ref() {
-                        self.values[location as usize] = self.peek(0)
-                    } else {
-                        self.heap.upvalues.set(upvalue, self.peek(0))
-                    }
+                    self.heap
+                        .upvalues
+                        .set(upvalue, self.peek(0), &mut self.values);
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
@@ -522,9 +506,7 @@ impl VM {
 
     fn reset_stack(&mut self) {
         self.stack_top = 0;
-        self.heap.upvalues.reset();
-        // todo: check that this is really needed
-        // self.call_stack.clear();
+        self.heap.upvalues.reset_stack();
     }
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
