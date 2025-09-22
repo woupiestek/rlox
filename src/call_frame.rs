@@ -47,13 +47,13 @@ impl CallFrame {
         StringHandle::try_from(value)
     }
 
-    pub fn upvalue(&self, index: usize, heap: &Heap) -> UpvalueHandle {
-        heap.closures.get_upvalue(self.closure, index)
+    pub fn get_upvalues<'b>(&self, heap: &'b Heap) -> &'b [UpvalueHandle] {
+        heap.closures.get_upvalues(self.closure)
     }
 
-    pub fn read_upvalue(&mut self, heap: &Heap) -> UpvalueHandle {
+    pub fn read_upvalue<'b>(&mut self, heap: &Heap) -> UpvalueHandle {
         let index = self.read_byte(heap) as usize;
-        self.upvalue(index, heap)
+        self.get_upvalues(heap)[index]
     }
 
     pub fn jump_forward(&mut self, heap: &Heap) {

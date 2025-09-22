@@ -4,6 +4,49 @@
 
 ### todo
 
+- ~~refactor closures to integrate the bit array~~
+- ~~refactor strings to integrate the bit array~~
+- refactor the call stack/vm to not need the heap as often
+- compaction on doubling for closures, 
+- also for strings and (maybe) classes.
+
+### similarity of closures and strings
+
+It is an idea right. An array of upvalues can be compressed using variable length encoding,
+since the handles are kept small. The upvalues of the current call frame are decompressed,
+for faster access.
+
+Currently, the upvalue array is compacted during garbage collection.
+This could perhaps be done better by not copying everything to a new array,
+at the cost of some fragmentation.
+
+Maybe a better alternative here is to disconnect it from sweeping:
+at some point the upvalue buffer is full, and while copying data,
+use the marked handles.
+
+Such a strategy might work on strings: have a large mutable string, keep everthing in there.
+
+### controlling fragmentation with alignment
+
+I have no idea what works. Aligning by next power of two would clearly worsen alignment in
+some cases, so it count on amny smaller elements filling the gaps.
+
+### lazy sweep
+
+That is what I observe: sweep doesn't do much anymore.
+memory is marked as free, and only when memory runs out
+and a new allocation is needed, anything gets freed.
+
+### messing with methods
+
+Better to look at how method calling works, rather than playing with the data strucures again.
+I guess I woorid too much about fragmentation the last time, causing all kinds of coping
+strategies, which few clear benefits.
+
+## 2025-09-21
+
+### todo
+
 - ~~also, avoid the missing closure case somehow~~
 - refactor closures to integrate the bit array
 - refactor strings to integrate the bit array
@@ -103,8 +146,8 @@ The orginal clox kept hash codes for all strings for lookup in hash tables.
 I achieved a speed up by using the hash codes as string handles.
 No more lookup of the full hash code needed, just mange the handle itself.
 This mainly requires a uniform distrisbution of hash codes,
-that remains uniform modulo powers of two, it does not 
-have to relate to the string and indeed, the handles are adjusted 
+that remains uniform modulo powers of two, it does not
+have to relate to the string and indeed, the handles are adjusted
 to avoid collisions.
 
 Could is work as well with normal handles?
@@ -133,16 +176,16 @@ Hence, handles could be reused without risk.
 Note: string handles are offset by at least 2, for tombstones and nulls.
 This is used in properties, which are the back bones for objects.
 
-This is worth considering in lox: a user could reintroduce a string that existed before and use that 
+This is worth considering in lox: a user could reintroduce a string that existed before and use that
 in a map. Hence no weak reference used. This will be the case here.
 
-Now the other way around is still an issue: how ot find the handle of a string that 
+Now the other way around is still an issue: how ot find the handle of a string that
 already? A second map with hash codes would work here. It would use handles as its values.
 Possibly a quadratically growing array of handles, basically the inverse, of the former,
 though it may cheat by using the vector to check.
 
 - `handles1: Handles, strings: Vec<Box<str>>, handles2: Box<[u32]>`... some supporting structure,
-but the essence is there.
+  but the essence is there.
 
 ### classes
 

@@ -91,6 +91,7 @@ impl Upvalues {
 
 impl Pool<UPVALUE> for Upvalues {
     fn byte_count(&self) -> usize {
+        // that is optimistic...
         self.values.capacity() * Self::ENTRY_SIZE
     }
     fn trace(&mut self, handle: Handle<UPVALUE>, collector: &mut Collector) {

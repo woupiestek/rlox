@@ -1,7 +1,9 @@
+use std::mem;
+
 use crate::{
-    bitarray::BitArray,
     functions::FunctionHandle,
-    heap::{Collector, Handle, Pool, CLOSURE},
+    handles::Handles,
+    heap::{Collector, Handle, Pool, CLOSURE, FUNCTION},
     upvalues::UpvalueHandle,
 };
 
@@ -13,149 +15,124 @@ impl Default for ClosureHandle {
     }
 }
 
-const SHIFT: u8 = 24;
-const MASK: usize = 0xffffff;
-const COUNTS: usize = 255;
-
-// new plans...
-// moving upvalues during garbage collection is not an option if the call frame needs those values
-// then one big array of upvalues
-// and another with offsets would not work
-// option: keep the upvalues of the current frame.
-
 pub struct Closures {
-    byte_count: usize,
-    free: [u32; COUNTS],
-    functions: Vec<Vec<u32>>,
-    upvalues: Vec<Vec<UpvalueHandle>>,
-    handles: BitArray, // todo
+    functions: Vec<FunctionHandle>,
+    handles: Handles,
+    offsets: Vec<u32>,
+    upvalue_counts: Vec<u8>,
+    upvalues: Box<[UpvalueHandle]>,
+    next: usize,
 }
 
 impl Closures {
     pub fn new() -> Self {
         Self {
-            byte_count: 1080,
-            free: [0; COUNTS],
             functions: Vec::new(),
-            upvalues: Vec::new(),
-            handles: BitArray::new(),
+            handles: Handles::new(),
+            offsets: Vec::new(),
+            upvalue_counts: Vec::new(),
+            upvalues: vec![Handle(0); 8].into_boxed_slice(),
+            next: 0,
         }
     }
 
-    fn upvalue_count(ch: ClosureHandle) -> usize {
-        ch.index() >> SHIFT
-    }
+    const TOP_BIT: u32 = 0x8000_0000;
 
     pub fn get_function(&self, ch: ClosureHandle) -> FunctionHandle {
-        let uc = Closures::upvalue_count(ch);
-        FunctionHandle::from(if uc == 0 {
-            // risk if functions handles get higher than 0xffffff
-            ch.0
-        } else {
-            self.functions[uc - 1][ch.index() & MASK]
-        })
+        if ch.0 & Self::TOP_BIT == 0 {
+            return Handle(ch.0);
+        }
+        let index = (ch.0 ^ Self::TOP_BIT) as usize;
+        self.functions[index]
+    }
+
+    // remember that offsets can be out of order
+    fn get_offset(&self, ch: ClosureHandle) -> usize {
+        assert_ne!(ch.0 & Self::TOP_BIT, 0);
+        let h = (ch.0 ^ Self::TOP_BIT) as usize;
+        self.offsets[h] as usize
     }
 
     pub fn get_upvalues(&self, ch: ClosureHandle) -> &[UpvalueHandle] {
-        let uc = Closures::upvalue_count(ch);
-        assert_ne!(uc, 0);
-        let j = ch.index() & MASK;
-        &self.upvalues[uc - 1][(uc * j)..(uc * (j + 1))]
+        &self.upvalues[self.get_offset(ch)..]
     }
 
-    pub fn get_upvalue(&self, ch: ClosureHandle, i: usize) -> UpvalueHandle {
-        let uc = Closures::upvalue_count(ch);
-        assert_ne!(uc, 0);
-        self.upvalues[uc - 1][uc * (ch.index() & MASK) + i]
+    pub fn mut_upvalues(&mut self, ch: ClosureHandle) -> &mut [UpvalueHandle] {
+        let j = self.get_offset(ch);
+        &mut self.upvalues[j..]
     }
 
-    pub fn set_upvalue(&mut self, ch: ClosureHandle, i: usize, uh: UpvalueHandle) {
-        let uc = Closures::upvalue_count(ch);
-        assert_ne!(uc, 0);
-        self.upvalues[uc - 1][uc * (ch.index() & MASK) + i] = uh;
-    }
-
-    // simplify offsets for now
-    fn force_offset(&mut self, uc: usize) {
-        while self.functions.len() < uc {
-            self.functions.push(Vec::new());
-            self.byte_count += 24;
+    fn grow(&mut self) {
+        let capacity = self.upvalues.len() * 2;
+        let old = mem::replace(
+            &mut self.upvalues,
+            vec![Handle(0); capacity].into_boxed_slice(),
+        );
+        let mut next = 0;
+        for i in 0..self.functions.len() {
+            if !self.handles.is_marked(i as u32) {
+                continue;
+            }
+            let offset = self.offsets[i] as usize;
+            self.offsets[i] = next as u32;
+            for j in 0..self.upvalue_counts[i] as usize {
+                self.upvalues[next] = old[offset + j];
+                next += 1;
+            }
         }
-        while self.upvalues.len() < uc {
-            self.upvalues.push(Vec::new());
-            self.byte_count += 24;
-        }
+        self.next = next;
     }
 
     pub fn new_closure(&mut self, fh: FunctionHandle, uc: usize) -> ClosureHandle {
         if uc == 0 {
             return ClosureHandle::from(fh.0);
         }
-        let free = self.free[uc - 1] as usize;
-        if free > MASK {
-            panic!("Out of closure space")
-        }
-        self.force_offset(uc);
-        let functions = &mut self.functions[uc - 1];
-        if free < functions.len() {
-            // reuse memory
-            self.free[uc - 1] = functions[free];
-            functions[free] = fh.0;
-        } else {
-            self.free[uc - 1] += 1;
-            functions.push(fh.0);
-            self.byte_count += 4;
-            for _ in 0..uc {
-                // push placeholders
-                self.upvalues[uc - 1].push(UpvalueHandle::from(0));
-                self.byte_count += 4;
-            }
-        }
-        ClosureHandle::from((uc << SHIFT) as u32 + free as u32)
-    }
 
-    // shit! another example of indirection!
-    // this is probabaly broken now...
-    pub fn sweep(&mut self) {
-        for i in 0..self.functions.len() {
-            let functions = &mut self.functions[i];
-            self.free[i] = functions.len() as u32;
-            for j in 0..functions.len() {
-                if !self.handles.has(((i + 1) << SHIFT) + j) {
-                    functions[j] = self.free[i];
-                    self.free[i] = j as u32;
-                }
-            }
+        let index = self.handles.next() as usize;
+        while self.functions.len() <= index {
+            self.functions.push(Handle(u32::MAX));
+            self.offsets.push(0);
+            self.upvalue_counts.push(0);
         }
+        self.functions[index] = fh;
+        self.offsets[index] = self.next as u32;
+        self.upvalue_counts[index] = uc as u8;
+        self.next += uc;
+        if self.next >= self.upvalues.len() {
+            self.grow();
+        }
+        ClosureHandle::from(index as u32 ^ Self::TOP_BIT)
     }
 }
 
+const BYTE_COUNT: usize = mem::size_of::<Closures>();
+
 impl Pool<CLOSURE> for Closures {
+    fn sweep(&mut self) {}
     fn byte_count(&self) -> usize {
-        self.byte_count
+        BYTE_COUNT
+            + self.handles.byte_count()
+            + self.functions.capacity() * 9
+            + self.upvalues.len() * 4
     }
     fn trace(&mut self, handle: Handle<CLOSURE>, collector: &mut Collector) {
-        if !self.handles.add(handle.index()) {
+        if handle.0 & Self::TOP_BIT == 0 {
+            collector.push_raw(FUNCTION, handle.0);
             return;
         }
 
-        let uc = Closures::upvalue_count(handle);
-        if uc == 0 {
-            collector.push(FunctionHandle::from(handle.0));
-            return;
-        }
-        let index = handle.index() & MASK;
-        collector.push(FunctionHandle::from(self.functions[uc - 1][index]));
-        for i in 0..uc {
-            collector.push(UpvalueHandle::from(self.upvalues[uc - 1][uc * index + i]));
+        let index = (handle.0 ^ Self::TOP_BIT) as usize;
+        collector.push(self.functions[index]);
+        let from = self.offsets[index] as usize;
+        let to = from + self.upvalue_counts[index] as usize;
+        for j in from..to {
+            collector.push(self.upvalues[j]);
         }
     }
 
     fn reset(&mut self) {
         self.handles.clear();
     }
-
-    fn sweep(&mut self) {}
 }
 
 #[cfg(test)]
@@ -171,22 +148,19 @@ mod tests {
         // try one
         let closure = closures.new_closure(Handle::from(2), 2);
         assert_eq!(closures.get_function(closure).index(), 2);
-        closures.set_upvalue(closure, 1, Handle::from(135));
-        assert_eq!(closures.get_upvalue(closure, 1).index(), 135);
+        closures.mut_upvalues(closure)[1] = Handle::from(135);
+        assert_eq!(closures.get_upvalues(closure)[1].index(), 135);
 
         // try another
         let closure2 = closures.new_closure(Handle::from(4), 3);
         assert_eq!(closures.get_function(closure2).index(), 4);
-        closures.set_upvalue(closure2, 2, Handle::from(135));
-        assert_eq!(closures.get_upvalue(closure2, 2).index(), 135);
+        closures.mut_upvalues(closure2)[2] = Handle::from(135);
+        assert_eq!(closures.get_upvalues(closure2)[2].index(), 135);
 
         // try an empty one
         let closure3 = closures.new_closure(Handle::from(6), 0);
         assert_eq!(closures.get_function(closure3).index(), 6);
-        let sum = closures
-            .functions
-            .into_iter()
-            .fold(0, |acc, fs| acc + fs.len());
+        let sum = closures.functions.len();
         assert_eq!(sum, 2);
     }
 
@@ -194,7 +168,7 @@ mod tests {
     pub fn tracing() {
         let mut closures = Closures::new();
         let closure = closures.new_closure(Handle::from(2), 2);
-        closures.set_upvalue(closure, 1, Handle::from(135));
+        closures.mut_upvalues(closure)[1] = Handle::from(135);
 
         let mut collector = Collector::new();
         closures.trace(closure, &mut collector);

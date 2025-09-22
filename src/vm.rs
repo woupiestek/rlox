@@ -352,9 +352,9 @@ impl VM {
                             let location = self.call_frame.slot + index;
                             self.capture_upvalue(location)
                         } else {
-                            self.call_frame.upvalue(index, &self.heap)
+                            self.call_frame.get_upvalues(&self.heap)[i]
                         };
-                        self.heap.closures.set_upvalue(closure, i, uh);
+                        self.heap.closures.mut_upvalues(closure)[i] = uh;
                     }
                 }
                 Op::Constant => {
