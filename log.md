@@ -1,13 +1,85 @@
 # Rlox
 
-## 2025-09-21
+## 2025-09-23
+
+### todo
+
+- refactor the call stack/vm to not need the heap as often
+- also for strings and (maybe) classes.
+
+
+## 2025-09-23
+
+### todo
+
+- refactor the call stack/vm to not need the heap as often
+- also for strings and (maybe) classes.
+- ~~write about lazy sweeping, in combination with generations~~
+- ~~write about the instruction buffer~~
+- ~~fix open upvalue heap~~
+
+### heap power
+
+The bench marks don't show a clear winner, so maybe binary heaps are pretty good?
+In any case, the project show a 32-heap, which takes more time to search
+segments of the underlying array for the best fit, but doesn't have to do that
+as often as a deeper structure would. This can make it faster. I just need a test that
+creates masses of open upvalues.
+
+I keep thinking that removing several minimal values at once, like we do, might have a better solution.
+E.g.
+
+- start from the last index.
+- find an element going out of scope: put the last index in its place,
+  do the heapify up step (or remove it)
+
+Why might this be this worse?
+Because of the linear scan of the entire list.
+If we are going to do that anyway,
+Why bother with the heap property?
+
+Can we find the maximally excessive element some other way?
+Perhaps by doing it depth first:
+Close all the child trees first,
+Then delete_max there.
+
+I don't see the great advantage. It all comes down to numbers of comparsion required.
+
+### instruction buffer
+
+Put all instructions in one buffer. Functions just have an offset into it.
+This does demand something of the compiler,
+like first use one buffer to write into, then move the content to another,
+to correctly interpret nested functions.
+The idea: getting all instruction this way is faster than the mani levelled structure
+used now.
+
+### generational garbage collections with lazy sweeps
+
+The basic plan: use bump allocation with size limits.
+When the allocator is full, move marked objects to the next allocator.
+These marks comes form mark cycles that can be triggered by needing a
+new buffer. However, given a multitude of buffers, each can ignore the
+marks until their time to grow comes.
+
+The generational version does not replace the first buffer,
+but empties it into the second one.
+The second one in turn may empty itself into a third.
+
+Each could be twice or more times the size of the last,
+So bigger colllection cycles happen less often.
+
+Actual lazy sweeps may not even be in order here: generally always mark
+when the first buffer is full, so the sweep is bound to happen.
+
+## 2025-09-22
 
 ### todo
 
 - ~~refactor closures to integrate the bit array~~
 - ~~refactor strings to integrate the bit array~~
 - refactor the call stack/vm to not need the heap as often
-- compaction on doubling for closures, 
+- compaction on doubling for closures,
 - also for strings and (maybe) classes.
 
 ### similarity of closures and strings

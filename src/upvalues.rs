@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, ops::RangeInclusive};
 
 use crate::{
     common::STACK_SIZE,
@@ -9,20 +9,29 @@ use crate::{
 
 pub type UpvalueHandle = Handle<UPVALUE>;
 
+pub const HEAP_POWER: usize = 5;
+
+/**
+ * Mostly standard, but...
+ *
+ * Integrates a 32-ary max-heap for finding the upvalues with the highest location on the stack.
+ * Shallowness is supposed to make this fast be trading the number of complex iterators
+ * For simple linear searches.
+ */
 pub struct Upvalues {
-    open: UpvalueHeap,
-    locations: Vec<u16>,
-    values: Vec<Value>,
     handles: Handles,
+    locations: Vec<u16>,
+    open_heap: Vec<UpvalueHandle>,
+    values: Vec<Value>,
 }
 
 impl Upvalues {
     pub fn new() -> Self {
         Self {
-            open: UpvalueHeap::new(),
-            locations: Vec::new(),
-            values: Vec::new(),
             handles: Handles::new(),
+            locations: Vec::new(),
+            open_heap: Vec::new(),
+            values: Vec::new(),
         }
     }
 
@@ -44,16 +53,95 @@ impl Upvalues {
         }
     }
 
-    pub fn open_upvalue(&mut self, location: u16) -> UpvalueHandle {
-        if let Some(h) = self.open.get(location) {
-            return Handle(h);
-        }
-        let handle = self.store(location);
-        self.open.add(handle, location);
-        Handle(handle)
+    fn children(index: usize) -> RangeInclusive<usize> {
+        index << HEAP_POWER + 1..=(index + 1) << HEAP_POWER
     }
 
-    fn store(&mut self, location: u16) -> u32 {
+    fn find(&self, location: u16, index: usize) -> Option<UpvalueHandle> {
+        if index >= self.open_heap.len() {
+            return None;
+        }
+        let handle = self.open_heap[index];
+        let max = self.locations[handle.index()];
+        if max < location {
+            return None;
+        }
+        if max == location {
+            return Some(handle);
+        }
+        // the recursive case
+        for j in Self::children(index) {
+            if let Some(k) = self.find(location, j) {
+                return Some(k);
+            }
+        }
+        return None;
+    }
+
+    fn delete_max(&mut self) {
+        let handle = if let Some(h) = self.open_heap.pop() {
+            h
+        } else {
+            return;
+        };
+        let len = self.open_heap.len();
+        if len == 0 {
+            return;
+        }
+        let mut index = 0;
+        let location = self.locations[handle.index()];
+        loop {
+            let mut child = index;
+            let mut ch = handle;
+            let mut max = location;
+            for j in Self::children(index) {
+                if j >= len {
+                    break;
+                }
+                let handle = self.open_heap[j];
+                let location = self.locations[handle.index()];
+                if location > max {
+                    child = j;
+                    ch = handle;
+                    max = location;
+                }
+            }
+            if child == index {
+                self.open_heap[index] = handle;
+                return;
+            }
+            self.open_heap[index] = ch;
+            index = child;
+        }
+    }
+
+    fn add(&mut self, handle: UpvalueHandle) {
+        let mut index = self.open_heap.len();
+        self.open_heap.push(handle); // affects len()!
+        let handle = self.open_heap[index];
+        let location = self.locations[handle.index()];
+        while index > 0 {
+            let parent = (index - 1) >> HEAP_POWER;
+            let ph = self.open_heap[parent];
+            if self.locations[ph.index()] > location {
+                break;
+            }
+            self.open_heap[index] = ph;
+            index = parent;
+        }
+        self.open_heap[index] = handle;
+    }
+
+    pub fn open_upvalue(&mut self, location: u16) -> UpvalueHandle {
+        if let Some(h) = self.find(location, 0) {
+            return h;
+        }
+        let handle = self.store(location);
+        self.add(handle);
+        handle
+    }
+
+    fn store(&mut self, location: u16) -> UpvalueHandle {
         let free = self.handles.next() as usize;
         while free >= self.values.len() {
             self.values.push(Value::NIL);
@@ -61,31 +149,34 @@ impl Upvalues {
             self.locations.push(STACK_SIZE as u16);
         }
         self.locations[free] = location;
-        free as u32
+        Handle(free as u32)
     }
 
-    pub fn close_upvalues(&mut self, location: usize, stack: &[Value]) {
-        while let Some(p) = self.open.peek() {
-            let lp = self.locations[p as usize] as usize;
-            if lp < location {
+    // take another shot at recursion?
+    pub fn close_upvalues(&mut self, location: u16, stack: &[Value]) {
+        while !self.open_heap.is_empty() {
+            let handle = self.open_heap[0];
+            let max = self.locations[handle.index()];
+            if max < location {
                 return;
             }
-            self.open.delete_max();
-            self.values[p as usize] = stack[lp];
-            self.locations[p as usize] = STACK_SIZE as u16;
+            // close upvalue
+            self.values[handle.index()] = stack[max as usize];
+            self.locations[handle.index()] = STACK_SIZE as u16;
+            self.delete_max();
         }
     }
 
     const ENTRY_SIZE: usize = mem::size_of::<Value>();
 
     pub fn trace_roots(&self, collector: &mut Collector) {
-        for &i in &self.open.handles {
-            collector.push(Handle::<UPVALUE>::from(i))
+        for &i in &self.open_heap {
+            collector.push(i)
         }
     }
 
     pub fn reset_stack(&mut self) {
-        self.open.clear()
+        self.open_heap.clear()
     }
 }
 
@@ -105,133 +196,4 @@ impl Pool<UPVALUE> for Upvalues {
     }
 
     fn sweep(&mut self) {}
-}
-
-/**
- * Binary heap
- * For each index i, the left child is 2 * i + 1, the right child is 2 * i + 2
- * Each sub tree keeps the highest location at the root
- *
- * Rlox needs a get operation to find open upvalues that already point to the same stack location
- * The stack locations are therefore stored twice: both as priorities for this heap, and inside the open upvalues
- * o/c this doesn't help get much for early positions of the heap, but Munificents linked list doesn't do so great
- * there either. And who knows, maybe this will just turn out to be much faster, thanks to cache considerations.
- *
- * Well, if this is not faster, at least it is more clever!
- */
-struct UpvalueHeap {
-    handles: Vec<u32>,
-    // added back in hopes of speeding up the structure, but results are unclear
-    locations: Vec<u16>,
-}
-
-impl UpvalueHeap {
-    fn new() -> Self {
-        Self {
-            handles: Vec::new(),
-            locations: Vec::new(),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.handles.clear();
-        self.locations.clear();
-    }
-
-    fn heapify(&mut self, index: usize) -> bool {
-        if index == 0 || index >= self.handles.len() {
-            return false;
-        }
-        let parent = (index - 1) >> 1;
-        if self.locations[index] <= self.locations[parent] {
-            return false;
-        }
-        let handle = self.handles[index];
-        self.handles[index] = self.handles[parent];
-        self.handles[parent] = handle;
-        let location = self.locations[index];
-        self.locations[index] = self.locations[parent];
-        self.locations[parent] = location;
-        return true;
-    }
-
-    fn get(&self, location: u16) -> Option<u32> {
-        if self.handles.len() == 0 {
-            return None;
-        }
-        let mut index = 0;
-        loop {
-            if index < self.handles.len() {
-                let li = self.locations[index];
-                if li == location {
-                    return Some(self.handles[index]);
-                }
-                if li > location {
-                    // climb
-                    index = index * 2 + 1;
-                    continue;
-                }
-            }
-            // compute the following index for a normal order traversal of the heap.
-            index += 2;
-            index >>= index.trailing_zeros();
-            index -= 1;
-
-            // this means we have searched the whole heap
-            if index == 0 {
-                return None;
-            }
-        }
-    }
-
-    fn add(&mut self, handle: u32, location: u16) {
-        self.handles.push(handle);
-        self.locations.push(location);
-        let mut index = self.handles.len() - 1;
-        while self.heapify(index) {
-            index = (index - 1) >> 1;
-        }
-        return;
-    }
-
-    fn delete_max(&mut self) {
-        match self.handles.len() {
-            0 => {
-                return;
-            }
-            1 => {
-                self.handles.clear();
-                return;
-            }
-            2 => {
-                self.handles[0] = self.handles[1];
-                self.handles.truncate(1);
-                return;
-            }
-            _ => self.handles[0] = self.handles.pop().unwrap(),
-        };
-
-        let mut index = 0;
-        loop {
-            let left = 2 * index + 1;
-            if self.heapify(left) {
-                index = left;
-                continue;
-            }
-            let right = 2 * index + 2;
-            if self.heapify(right) {
-                index = right;
-                continue;
-            }
-            return;
-        }
-    }
-
-    fn peek(&self) -> Option<u32> {
-        if self.handles.len() == 0 {
-            None
-        } else {
-            Some(self.handles[0])
-        }
-    }
 }

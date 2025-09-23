@@ -332,7 +332,7 @@ impl VM {
                 Op::CloseUpvalue => {
                     self.heap
                         .upvalues
-                        .close_upvalues(self.stack_top - 1, &self.values);
+                        .close_upvalues((self.stack_top - 1) as u16, &self.values);
                     self.pop();
                 }
                 Op::Closure => {
@@ -454,7 +454,9 @@ impl VM {
                 Op::Return => {
                     let result = self.pop();
                     let location = self.call_frame.slot;
-                    self.heap.upvalues.close_upvalues(location, &self.values);
+                    self.heap
+                        .upvalues
+                        .close_upvalues(location as u16, &self.values);
                     if let Some(frame) = self.call_stack.pop() {
                         self.call_frame = frame;
                         self.stack_top = location;
