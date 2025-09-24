@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{mem, time::Instant};
 
 use crate::{
     bitarray::BitArray,
@@ -148,7 +148,8 @@ impl CompileData {
 }
 
 struct Compiler<'src, 'hp> {
-    data: Vec<CompileData>,
+    head: CompileData,
+    tail: Vec<CompileData>,
     source: Source<'src>,
     heap: &'hp mut Heap,
     this_name: StringHandle,
@@ -160,11 +161,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let this_name = heap.strings.put("this");
         let super_name = heap.strings.put("super");
         Self {
-            data: vec![CompileData::new(
-                function_type,
-                heap.functions.new_function(None),
-                this_name,
-            )],
+            head: CompileData::new(function_type, heap.functions.new_function(None), this_name),
+            tail: Vec::new(),
             source,
             heap,
             this_name,
@@ -172,12 +170,14 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
+    // todo
     fn data_ref(&self) -> &CompileData {
-        self.data.last().unwrap()
+        &self.head
     }
 
+    // todo
     fn data_mut(&mut self) -> &mut CompileData {
-        self.data.last_mut().unwrap()
+        &mut self.head
     }
 
     fn chunk_ref(&self) -> &Chunk {
@@ -382,16 +382,25 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.emit_constant_op(Op::Constant, Value::from(value))
     }
 
+    // this says something about resolve upvalue...
+    fn data(&mut self, i: usize) -> &mut CompileData {
+        if i == self.tail.len() {
+            &mut self.head
+        } else {
+            &mut self.tail[i]
+        }
+    }
+
     fn resolve_upvalue(&mut self, i: usize, name: StringHandle) -> Result<Option<u8>, String> {
         if i == 0 {
             return Ok(None);
         }
-        if let Some(index) = self.data[i - 1].resolve_local(name)? {
-            self.data[i - 1].locals_captured.add(index as usize);
-            return Ok(Some(self.data[i].add_upvalue(index, true)?));
+        if let Some(index) = self.data(i - 1).resolve_local(name)? {
+            self.data(i - 1).locals_captured.add(index as usize);
+            return Ok(Some(self.data(i).add_upvalue(index, true)?));
         }
         if let Some(upvalue) = self.resolve_upvalue(i - 1, name)? {
-            return Ok(Some(self.data[i].add_upvalue(upvalue, false)?));
+            return Ok(Some(self.data(i).add_upvalue(upvalue, false)?));
         }
         return Ok(None);
     }
@@ -413,7 +422,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             );
             return Ok(());
         }
-        if let Some(arg) = self.resolve_upvalue(self.data.len() - 1, name)? {
+        if let Some(arg) = self.resolve_upvalue(self.tail.len(), name)? {
             self.emit_byte_op(
                 if is_assignment {
                     Op::SetUpvalue
@@ -603,13 +612,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let name = self.heap.strings.put(name);
         let function = self.heap.functions.new_function(Some(name));
 
-        self.data
-            .push(CompileData::new(function_type, function, self.this_name));
+        self.tail.push(mem::replace(
+            &mut self.head,
+            CompileData::new(function_type, function, self.this_name),
+        ));
 
         // the 'recursive' call
         self.function_body()?;
 
-        let enclosed = self.data.pop().unwrap();
+        let enclosed = mem::replace(&mut self.head, self.tail.pop().unwrap());
 
         self.heap
             .functions

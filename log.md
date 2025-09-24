@@ -5,6 +5,7 @@
 ### todo
 
 - update the scanner!
+- prepare compiler
 - refactor the call stack/vm to not need the heap as often
 - compaction on doubling for strings and (maybe) classes.
 
@@ -15,8 +16,19 @@ It makes less and less sense to treat identifiers and strings the same way.
 ### the big change
 
 One thing the compiler manages to do, is to seperate the data belonging to different functions.
-It is like putting everuthing in one big chunk,
+It is like putting everything in two big chunks:
+One for functions that are still getting compiled, and one for functions that are ready.
 The functions just keep track of offsets and lengths into those chunks.
+
+It is a bit more complicated because chunks also keep track of constants and
+line numbers. Now there are three collections associated with each function,
+with complicated relations: 
+- code contains offsets into constants and
+- there must be a way to tie line numbers to the instruct whose execution fails.
+
+The last one is important for debugging, but it doesn't need to be super performant.
+
+As usual, the garbage collector may not need to bother about memory used for complication.
 
 ## 2025-09-23
 
