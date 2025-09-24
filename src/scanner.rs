@@ -54,17 +54,18 @@ pub enum TokenType {
     BadTokenStart,
 
     // Virtual tokens
-    Begin,
     End,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Token(pub TokenType, pub usize);
+pub struct Tokens {
+    pub types: Vec<TokenType>,
+    pub froms: Vec<usize>,
+}
 
 pub struct Scanner<'src> {
     source: &'src str,
     current: usize,
-    token_start: usize,
+    result: Tokens,
 }
 
 impl<'src> Scanner<'src> {
@@ -72,28 +73,33 @@ impl<'src> Scanner<'src> {
         Self {
             source,
             current: 0,
-            token_start: 0,
+            result: Tokens {
+                types: Vec::new(),
+                froms: Vec::new(),
+            },
         }
     }
 
-    pub fn line_and_column(&self, offset: usize) -> (u16, u16) {
-        assert!((offset as usize) <= self.source.len());
+    pub fn line_and_column(source: &str, offset: usize) -> (u16, u16) {
         let mut line = 1;
         let mut column = 1;
-        let mut index = 0;
-        loop {
-            if index >= offset {
-                return (line, column);
-            }
-            let byte = self.get_byte(index);
-            if byte == b'\n' {
+        for char in source[0..offset].chars() {
+            if char == '\n' {
                 line += 1;
                 column = 1;
-            } else if byte != b'\r' {
+            } else {
                 column += 1;
             }
-            index = self.next_utf8(index);
         }
+        return (line, column);
+    }
+
+    pub fn new_lines(source: &str) -> Vec<usize> {
+        source
+            .char_indices()
+            .filter(|it| it.1 == '\n')
+            .map(|it| it.0)
+            .collect()
     }
 
     fn next_utf8(&self, index: usize) -> usize {
@@ -106,57 +112,57 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    pub fn get_str(&self, offset: usize) -> Result<&str, String> {
-        if self.get_byte(offset) != b'\"' {
-            let (l, c) = self.line_and_column(offset);
+    pub fn get_str(source: &str, offset: usize) -> Result<&str, String> {
+        if source.as_bytes()[offset] != b'\"' {
+            let (l, c) = Self::line_and_column(source, offset);
             return err!("No string at ({l},{c})");
         }
         let mut end = offset + 1;
         loop {
-            if end >= self.source.len() {
-                let (l, c) = self.line_and_column(offset);
+            if end >= source.len() {
+                let (l, c) = Self::line_and_column(source, offset);
                 return err!("Unterminated string at ({l},{c})");
             }
-            let byte = self.get_byte(end);
+            let byte = source.as_bytes()[end];
             if byte == b'\"' {
-                return Ok(&self.source[offset + 1..end]);
-            }
-            end = self.next_utf8(end);
-        }
-    }
-
-    pub fn get_identifier_name(&self, offset: usize) -> Result<&str, String> {
-        let id_start = self.get_byte(offset);
-        if id_start != b'_' && !id_start.is_ascii_alphabetic() {
-            let (l, c) = self.line_and_column(offset);
-            return err!("No identifier at ({l},{c})");
-        }
-        let mut end = offset + 1;
-        loop {
-            if end >= self.source.len() {
-                return Ok(&self.source[offset..]);
-            }
-            let id_part = self.get_byte(end);
-            if id_part != b'_' && !id_part.is_ascii_alphanumeric() {
-                return Ok(&self.source[offset..end]);
+                return Ok(&source[offset + 1..end]);
             }
             end += 1;
         }
     }
 
-    pub fn get_number(&self, offset: usize) -> Result<f64, String> {
+    pub fn get_identifier_name(source: &str, offset: usize) -> Result<&str, String> {
+        let id_start = source.as_bytes()[offset];
+        if id_start != b'_' && !id_start.is_ascii_alphabetic() {
+            let (l, c) = Self::line_and_column(source, offset);
+            return err!("No identifier at ({l},{c})");
+        }
+        let mut end = offset + 1;
+        loop {
+            if end >= source.len() {
+                return Ok(&source[offset..]);
+            }
+            let id_part = source.as_bytes()[end];
+            if id_part != b'_' && !id_part.is_ascii_alphanumeric() {
+                return Ok(&source[offset..end]);
+            }
+            end += 1;
+        }
+    }
+
+    pub fn get_number(source: &str, offset: usize) -> Result<f64, String> {
         let mut index = offset;
-        while self.get_byte(index).is_ascii_digit() {
+        while source.as_bytes()[index].is_ascii_digit() {
             index += 1;
         }
-        if self.get_byte(index) == b'.' {
+        if source.as_bytes()[index] == b'.' {
             index += 1;
-            while self.get_byte(index).is_ascii_digit() {
+            while source.as_bytes()[index].is_ascii_digit() {
                 index += 1;
             }
         }
-        self.source[offset..index].parse::<f64>().map_err(|_| {
-            let (l, c) = self.line_and_column(offset);
+        source[offset..index].parse::<f64>().map_err(|_| {
+            let (l, c) = Self::line_and_column(source, offset);
             format!("No number at ({l},{c})")
         })
     }
@@ -237,15 +243,15 @@ impl<'src> Scanner<'src> {
         TokenType::Identifier
     }
 
-    fn identifier_type(&self) -> TokenType {
-        let start = self.get_byte(self.token_start);
+    fn identifier_type(&self, from: usize) -> TokenType {
+        let start = self.get_byte(from);
         match start {
             b'a' => self.check_keyword("nd", TokenType::And),
             b'c' => self.check_keyword("lass", TokenType::Class),
             b'e' => self.check_keyword("lse", TokenType::Else),
             b'f' => {
-                if self.current > self.token_start + 1 {
-                    match self.get_byte(self.token_start + 1) {
+                if self.current > from + 1 {
+                    match self.get_byte(from + 1) {
                         b'a' => self.check_keyword("lse", TokenType::False),
                         b'o' => self.check_keyword("r", TokenType::For),
                         b'u' => self.check_keyword("n", TokenType::Fun),
@@ -262,8 +268,8 @@ impl<'src> Scanner<'src> {
             b'r' => self.check_keyword("eturn", TokenType::Return),
             b's' => self.check_keyword("uper", TokenType::Super),
             b't' => {
-                if self.current > self.token_start + 1 {
-                    match self.get_byte(self.token_start + 1) {
+                if self.current > from + 1 {
+                    match self.get_byte(from + 1) {
                         b'h' => self.check_keyword("is", TokenType::This),
                         b'r' => self.check_keyword("ue", TokenType::True),
                         _ => TokenType::Identifier,
@@ -278,18 +284,20 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    fn token(&self, typ: TokenType) -> Token {
-        Token(typ, self.token_start)
+    fn token(&mut self, typ: TokenType) {
+        self.result.types.push(typ)
     }
 
-    fn identifier(&mut self) -> Token {
+    fn identifier(&mut self) {
         while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
             self.advance();
         }
-        self.token(self.identifier_type())
+        self.result
+            .types
+            .push(self.identifier_type(*self.result.froms.last().unwrap()))
     }
 
-    fn number(&mut self) -> Token {
+    fn number(&mut self) {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
@@ -302,7 +310,7 @@ impl<'src> Scanner<'src> {
         self.token(TokenType::Number)
     }
 
-    fn string(&mut self) -> Token {
+    fn string(&mut self) {
         loop {
             if self.is_at_end() {
                 return self.token(TokenType::EndlessString);
@@ -313,61 +321,72 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    pub fn next(&mut self) -> Token {
-        self.skip_whitespace();
-        self.token_start = self.current;
-        if self.is_at_end() {
-            return self.token(TokenType::End);
-        }
-        let ch = self.advance();
-        if ch.is_ascii_digit() {
-            return self.number();
-        }
-        if ch.is_ascii_alphabetic() || ch == b'_' {
-            return self.identifier();
-        }
-        match ch {
-            b'(' => self.token(TokenType::LeftParen),
-            b')' => self.token(TokenType::RightParen),
-            b'{' => self.token(TokenType::LeftBrace),
-            b'}' => self.token(TokenType::RightBrace),
-            b';' => self.token(TokenType::Semicolon),
-            b',' => self.token(TokenType::Comma),
-            b'.' => self.token(TokenType::Dot),
-            b'-' => self.token(TokenType::Minus),
-            b'+' => self.token(TokenType::Plus),
-            b'/' => self.token(TokenType::Slash),
-            b'*' => self.token(TokenType::Star),
-            b'!' => {
-                if self.match_eq() {
-                    self.token(TokenType::BangEqual)
-                } else {
-                    self.token(TokenType::Bang)
-                }
+    pub fn scan<'s>(source: &'s str) -> Tokens {
+        let mut scanner = Scanner::<'s>::new(source);
+        scanner.run();
+        return scanner.result;
+    }
+
+    fn run(&mut self) {
+        loop {
+            self.skip_whitespace();
+            self.result.froms.push(self.current);
+            if self.is_at_end() {
+                self.token(TokenType::End);
+                return;
             }
-            b'=' => {
-                if self.match_eq() {
-                    self.token(TokenType::EqualEqual)
-                } else {
-                    self.token(TokenType::Equal)
-                }
+            let ch = self.advance();
+            if ch.is_ascii_digit() {
+                self.number();
+                continue;
             }
-            b'<' => {
-                if self.match_eq() {
-                    self.token(TokenType::LessEqual)
-                } else {
-                    self.token(TokenType::Less)
-                }
+            if ch.is_ascii_alphabetic() || ch == b'_' {
+                self.identifier();
+                continue;
             }
-            b'>' => {
-                if self.match_eq() {
-                    self.token(TokenType::GreaterEqual)
-                } else {
-                    self.token(TokenType::Greater)
+            match ch {
+                b'(' => self.token(TokenType::LeftParen),
+                b')' => self.token(TokenType::RightParen),
+                b'{' => self.token(TokenType::LeftBrace),
+                b'}' => self.token(TokenType::RightBrace),
+                b';' => self.token(TokenType::Semicolon),
+                b',' => self.token(TokenType::Comma),
+                b'.' => self.token(TokenType::Dot),
+                b'-' => self.token(TokenType::Minus),
+                b'+' => self.token(TokenType::Plus),
+                b'/' => self.token(TokenType::Slash),
+                b'*' => self.token(TokenType::Star),
+                b'!' => {
+                    if self.match_eq() {
+                        self.token(TokenType::BangEqual)
+                    } else {
+                        self.token(TokenType::Bang)
+                    }
                 }
+                b'=' => {
+                    if self.match_eq() {
+                        self.token(TokenType::EqualEqual)
+                    } else {
+                        self.token(TokenType::Equal)
+                    }
+                }
+                b'<' => {
+                    if self.match_eq() {
+                        self.token(TokenType::LessEqual)
+                    } else {
+                        self.token(TokenType::Less)
+                    }
+                }
+                b'>' => {
+                    if self.match_eq() {
+                        self.token(TokenType::GreaterEqual)
+                    } else {
+                        self.token(TokenType::Greater)
+                    }
+                }
+                b'"' => self.string(),
+                _ => self.token(TokenType::BadTokenStart),
             }
-            b'"' => self.string(),
-            _ => self.token(TokenType::BadTokenStart),
         }
     }
 }
@@ -376,47 +395,70 @@ impl<'src> Scanner<'src> {
 mod tests {
     use super::*;
 
+    fn lcs(scanner: Tokens, source: &str) -> Vec<(u16, u16)> {
+        scanner
+            .froms
+            .iter()
+            .map(|it| Scanner::line_and_column(source, *it))
+            .collect::<Vec<_>>()
+    }
+
     #[test]
     fn print_string() {
-        let mut scanner = Scanner::new("print \"one 😲\";");
-        assert_eq!(scanner.next(), Token(TokenType::Print, 0));
-        assert_eq!(scanner.line_and_column(0), (1, 1));
-        assert_eq!(scanner.next(), Token(TokenType::String, 6));
-        assert_eq!(scanner.get_str(6).unwrap(), "one 😲");
-        assert_eq!(scanner.line_and_column(6), (1, 7));
-        // some differences expected because of the smiley
-        assert_eq!(scanner.next(), Token(TokenType::Semicolon, 16));
-        assert_eq!(scanner.line_and_column(16), (1, 14));
-        assert_eq!(scanner.next(), Token(TokenType::End, 17));
-        assert_eq!(scanner.line_and_column(17), (1, 15));
+        let source = "print \"one 😲\";";
+        let scanner = Scanner::scan(source);
+        assert_eq!(
+            scanner.types,
+            vec![
+                TokenType::Print,
+                TokenType::String,
+                TokenType::Semicolon,
+                TokenType::End
+            ]
+        );
+
+        assert_eq!(lcs(scanner, source), vec![(1, 1), (1, 7), (1, 14), (1, 15)]);
     }
 
     #[test]
     fn var_a_is_true() {
-        let mut scanner = Scanner::new("var a = true;");
-        assert_eq!(scanner.next(), Token(TokenType::Var, 0));
-        assert_eq!(scanner.get_identifier_name(0).unwrap(), "var");
-        assert_eq!(scanner.next(), Token(TokenType::Identifier, 4));
-        assert_eq!(scanner.get_identifier_name(4).unwrap(), "a");
-        assert_eq!(scanner.next(), Token(TokenType::Equal, 6));
-        assert_eq!(scanner.next(), Token(TokenType::True, 8));
-        assert_eq!(scanner.get_identifier_name(8).unwrap(), "true");
+        let source = "var a = true;";
+        let scanner = Scanner::scan(source);
+        assert_eq!(
+            scanner.types,
+            vec![
+                TokenType::Var,
+                TokenType::Identifier,
+                TokenType::Equal,
+                TokenType::True,
+                TokenType::Semicolon,
+                TokenType::End
+            ]
+        );
+        assert_eq!(Scanner::get_identifier_name(source, 0).unwrap(), "var");
+        assert_eq!(Scanner::get_identifier_name(source, 4).unwrap(), "a");
+        assert_eq!(Scanner::get_identifier_name(source, 8).unwrap(), "true");
     }
 
     #[test]
     fn block_one_plus_two() {
-        let mut scanner = Scanner::new(
-            "{ 
+        let source = "{ 
             // let's make this more interesting 😉
-            1 + 2; }",
+            1 + 2; }";
+        let tokens = Scanner::scan(source);
+        assert_eq!(
+            tokens.types,
+            vec![
+                TokenType::LeftBrace,
+                TokenType::Number,
+                TokenType::Plus,
+                TokenType::Number,
+                TokenType::Semicolon,
+                TokenType::RightBrace,
+                TokenType::End
+            ]
         );
-        assert_eq!(scanner.next(), Token(TokenType::LeftBrace, 0));
-        assert_eq!(scanner.next(), Token(TokenType::Number, 68));
-        assert_eq!(scanner.get_number(68).unwrap(), 1.);
-        assert_eq!(scanner.next(), Token(TokenType::Plus, 70));
-        assert_eq!(scanner.next(), Token(TokenType::Number, 72));
-        assert_eq!(scanner.get_number(72).unwrap(), 2.);
-        assert_eq!(scanner.next(), Token(TokenType::Semicolon, 73));
-        assert_eq!(scanner.next(), Token(TokenType::RightBrace, 75));
+        assert_eq!(Scanner::get_number(source, 68).unwrap(), 1.);
+        assert_eq!(Scanner::get_number(source, 72).unwrap(), 2.);
     }
 }

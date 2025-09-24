@@ -5,7 +5,7 @@ use crate::{
     functions::{Chunk, FunctionHandle},
     heap::Heap,
     op::Op,
-    scanner::{Scanner, Token, TokenType},
+    scanner::{Scanner, TokenType, Tokens},
     strings::StringHandle,
     values::Value,
 };
@@ -200,22 +200,22 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn emit_byte_op(&mut self, op: Op, byte: u8) {
-        let line = self.line_and_column().0;
+        let line = self.source.previous_line();
         self.chunk_mut().write_byte_op(op, byte, line);
     }
 
     fn emit_short_op(&mut self, op: Op, short: u16) {
-        let line = self.line_and_column().0;
+        let line = self.source.previous_line();
         self.chunk_mut().write_short_op(op, short, line);
     }
 
     fn emit_invoke_op(&mut self, op: Op, constant: Value, arity: u8) -> Result<(), String> {
-        let line = self.line_and_column().0;
+        let line = self.source.previous_line();
         self.chunk_mut().write_invoke_op(op, constant, arity, line)
     }
 
     fn emit_op(&mut self, op: Op) {
-        let line = self.line_and_column().0;
+        let line = self.source.previous_line();
         self.chunk_mut().write(&[op as u8], line);
     }
 
@@ -235,7 +235,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn emit_constant_op(&mut self, op: Op, value: Value) -> Result<(), String> {
-        let line = self.line_and_column().0;
+        let line = self.source.previous_line();
         self.chunk_mut().write_constant_op(op, value, line)
     }
 
@@ -288,7 +288,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn binary(&mut self) -> Result<(), String> {
-        match self.source.previous.0 {
+        match self.source.previous_type() {
             TokenType::BangEqual => {
                 self.parse_precedence(Prec::Equality)?;
                 self.emit_op(Op::Equal);
@@ -357,7 +357,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn number(&mut self) -> Result<(), String> {
-        match self.source.scanner.get_number(self.source.previous.1) {
+        match Scanner::get_number(self.source.source, self.source.previous_offset()) {
             Ok(number) => self.emit_constant_op(Op::Constant, Value::from(number)),
             Err(err) => Err(err.to_string()),
         }
@@ -377,7 +377,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn string(&mut self) -> Result<(), String> {
-        let name = self.source.scanner.get_str(self.source.previous.1)?;
+        let name = Scanner::get_str(self.source.source, self.source.previous_offset())?;
         let value = self.heap.strings.put(name);
         self.emit_constant_op(Op::Constant, Value::from(value))
     }
@@ -464,7 +464,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn parse_infix(&mut self, can_assign: bool) -> Result<(), String> {
-        match self.source.previous.0 {
+        match self.source.previous_type() {
             TokenType::LeftParen => self.call(),
             TokenType::Dot => self.dot(can_assign),
             TokenType::Minus
@@ -484,15 +484,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn store_identifier(&mut self) -> Result<StringHandle, String> {
-        let str = self
-            .source
-            .scanner
-            .get_identifier_name(self.source.previous.1)?;
+        let str = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
         Ok(self.heap.strings.put(str))
     }
 
     fn parse_prefix(&mut self, can_assign: bool) -> Result<(), String> {
-        match self.source.previous.0 {
+        match self.source.previous_type() {
             TokenType::LeftParen => self.grouping(),
             TokenType::Minus => {
                 self.parse_precedence(Prec::Unary)?;
@@ -524,7 +521,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             }
             TokenType::Super => self.super_(),
             TokenType::This => self.this(can_assign),
-            _ => err!("Expect expression, found {:?}.", self.source.previous.0),
+            _ => err!(
+                "Expect expression, found {:?}.",
+                self.source.previous_type()
+            ),
         }
     }
 
@@ -533,7 +533,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let can_assign = precedence <= Prec::Assignment;
         self.parse_prefix(can_assign)?;
 
-        while precedence <= self.source.current.0.precedence() {
+        while precedence <= self.source.current_type().precedence() {
             self.source.advance();
             self.parse_infix(can_assign)?;
         }
@@ -598,15 +598,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         })
     }
 
-    fn line_and_column(&self) -> (u16, u16) {
-        self.source.scanner.line_and_column(self.source.previous.1)
-    }
-
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
-        let name = self
-            .source
-            .scanner
-            .get_identifier_name((&self.source).previous.1)?;
+        let name = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
         let name = self.heap.strings.put(name);
         let function = self.heap.functions.new_function(Some(name));
 
@@ -622,7 +615,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .functions
             .set_upvalue_count(function, enclosed.upvalues.len() as u8);
         self.emit_constant_op(Op::Closure, Value::from(function))?;
-        let line = self.line_and_column().0;
+        let line = self.source.previous_line();
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
             self.chunk_mut().write(
@@ -636,10 +629,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn method(&mut self) -> Result<(), String> {
         self.source
             .consume(TokenType::Identifier, "Expect method name.")?;
-        let name = self
-            .source
-            .scanner
-            .get_identifier_name((&self.source).previous.1)?;
+        let name = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
         let function_type = if name == "init" {
             FunctionType::Initializer
         } else {
@@ -882,7 +872,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         };
 
         if let Err(msg) = result {
-            let (l, c) = self.line_and_column();
+            let (l, c) =
+                Scanner::line_and_column(self.source.source, self.source.previous_offset());
             println!("[line: {}, column: {}] {}", l, c, msg);
             self.source.error_count += 1;
             self.source.synchronize();
@@ -933,9 +924,10 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 }
 
 pub struct Source<'src> {
-    scanner: Scanner<'src>,
-    current: Token,
-    previous: Token,
+    source: &'src str,
+    tokens: Tokens,
+    lines: Vec<u16>,
+    current: usize,
     has_super: BitArray,
     class_depth: u8,
     // status
@@ -944,25 +936,38 @@ pub struct Source<'src> {
 
 impl<'src> Source<'src> {
     pub fn new(source: &'src str) -> Self {
-        let mut scanner = Scanner::new(source);
-        let current = scanner.next();
+        let tokens = Scanner::scan(source);
+        let lines = Source::get_line_numbers(source, &tokens.froms);
         Self {
-            scanner,
-            current,
-            previous: Token(TokenType::Begin, usize::MAX),
+            source,
+            tokens,
+            lines,
+            current: 0,
             has_super: BitArray::new(),
             class_depth: 0,
             error_count: 0,
         }
     }
 
+    fn get_line_numbers(source: &'src str, offsets: &Vec<usize>) -> Vec<u16> {
+        let new_lines = Scanner::new_lines(source);
+        let mut line_numbers = Vec::new();
+        let mut count = 0;
+        for &offset in offsets {
+            if count < new_lines.len() && new_lines[count] < offset {
+                count += 1;
+            }
+            line_numbers.push(count as u16 + 1);
+        }
+        line_numbers
+    }
+
     fn advance(&mut self) {
-        self.previous = self.current;
-        self.current = self.scanner.next();
+        self.current += 1;
     }
 
     fn check(&self, token_type: TokenType) -> bool {
-        self.current.0 == token_type
+        self.tokens.types[self.current] == token_type
     }
 
     fn match_type(&mut self, token_type: TokenType) -> bool {
@@ -983,9 +988,25 @@ impl<'src> Source<'src> {
         }
     }
 
+    fn current_type(&self) -> TokenType {
+        self.tokens.types[self.current]
+    }
+
+    fn previous_type(&self) -> TokenType {
+        self.tokens.types[self.current - 1]
+    }
+
+    fn previous_offset(&self) -> usize {
+        self.tokens.froms[self.current - 1]
+    }
+
+    fn previous_line(&self) -> u16 {
+        self.lines[self.current - 1]
+    }
+
     fn synchronize(&mut self) {
         loop {
-            match self.current.0 {
+            match self.current_type() {
                 TokenType::Class
                 | TokenType::End
                 | TokenType::Fun

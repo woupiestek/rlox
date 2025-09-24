@@ -4,9 +4,19 @@
 
 ### todo
 
+- update the scanner!
 - refactor the call stack/vm to not need the heap as often
-- also for strings and (maybe) classes.
+- compaction on doubling for strings and (maybe) classes.
 
+### strings
+
+It makes less and less sense to treat identifiers and strings the same way.
+
+### the big change
+
+One thing the compiler manages to do, is to seperate the data belonging to different functions.
+It is like putting everuthing in one big chunk,
+The functions just keep track of offsets and lengths into those chunks.
 
 ## 2025-09-23
 

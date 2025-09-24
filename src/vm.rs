@@ -155,10 +155,6 @@ impl VM {
     }
 
     fn init(&mut self) -> Result<(), String> {
-        let expected = self.heap.functions.arity(FunctionHandle::MAIN);
-        if 0 != expected {
-            return err!("Expected no arguments but got {}.", expected);
-        }
         let closure = self.heap.closures.new_closure(FunctionHandle::MAIN, 0);
         self.push(Value::from(closure));
         self.call_frame = CallFrame::new(self.stack_top - 1, closure);
