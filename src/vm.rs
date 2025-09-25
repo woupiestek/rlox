@@ -154,8 +154,8 @@ impl VM {
         self.values[self.stack_top - 1 - distance]
     }
 
-    fn init(&mut self) -> Result<(), String> {
-        let closure = self.heap.closures.new_closure(FunctionHandle::MAIN, 0);
+    fn init(&mut self, fh: FunctionHandle) -> Result<(), String> {
+        let closure = self.heap.closures.new_closure(fh, 0);
         self.push(Value::from(closure));
         self.call_frame = CallFrame::new(self.stack_top - 1, closure);
         self.call_stack.clear();
@@ -518,13 +518,13 @@ impl VM {
     }
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
-        compile(source, &mut self.heap)?;
+        let fh = compile(source, &mut self.heap)?;
         #[cfg(feature = "trace")]
         {
             use crate::debug::Disassembler;
             Disassembler::disassemble(&self.heap);
         }
-        self.init()?;
+        self.init(fh)?;
         if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
             self.call_frame.print(&self.heap);

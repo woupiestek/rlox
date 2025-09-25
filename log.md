@@ -1,6 +1,23 @@
 # Rlox
 
-## 2025-09-23
+## 2025-09-25
+
+### todo
+
+- update the scanner!
+- prepare compiler
+- refactor the call stack/vm to not need the heap as often
+- compaction on doubling for strings and (maybe) classes.
+
+### compile buffer
+
+Do not write direct to the heap, but to a 'local buffer' from which the functions can be copied when done.
+Follow up steps:
+
+- see what can be done with locals and upvalues
+- change the structure of functions--to the giant chunk model.
+
+## 2025-09-24
 
 ### todo
 
@@ -22,7 +39,8 @@ The functions just keep track of offsets and lengths into those chunks.
 
 It is a bit more complicated because chunks also keep track of constants and
 line numbers. Now there are three collections associated with each function,
-with complicated relations: 
+with complicated relations:
+
 - code contains offsets into constants and
 - there must be a way to tie line numbers to the instruct whose execution fails.
 

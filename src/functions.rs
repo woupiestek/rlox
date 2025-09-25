@@ -1,7 +1,6 @@
 use crate::{
     handles::Handles,
     heap::{Collector, Handle, Heap, Pool, FUNCTION},
-    op::Op,
     strings::StringHandle,
     values::Value,
 };
@@ -15,18 +14,12 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    fn put_line(&mut self, line: u16, run_length: u16) {
-        if self.lines.len() > 0 {
-            let index = self.lines.len() - 1;
-            if self.lines[index] == line {
-                self.run_lengths[index] += run_length;
-                return;
-            }
-        }
-        self.lines.push(line);
-        self.run_lengths.push(run_length);
+    pub fn fill(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) {
+        self.code.extend_from_slice(cd);
+        self.lines.extend_from_slice(ln);
+        self.run_lengths.extend_from_slice(rl);
+        self.constants.extend_from_slice(cn);
     }
-
     pub fn get_line(&self, ip: i32) -> u16 {
         let mut run_length: i32 = 0;
         for i in 0..self.lines.len() {
@@ -36,83 +29,6 @@ impl Chunk {
             }
         }
         return 0;
-    }
-
-    pub fn write(&mut self, bytes: &[u8], line: u16) {
-        self.code.extend_from_slice(bytes);
-        self.put_line(line, bytes.len() as u16);
-    }
-
-    pub fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
-        assert!({
-            let op = self.code[offset - 1];
-            op == (Op::Jump as u8) || op == (Op::JumpIfFalse as u8) || op == (Op::Loop as u8)
-        });
-        let jump = self.code.len() - offset;
-        if jump > u16::MAX as usize {
-            return err!("Jump too large");
-        }
-        if jump == 0 {
-            return err!("Not a jump");
-        }
-        self.code[offset] = (jump >> 8) as u8;
-        self.code[offset + 1] = jump as u8;
-        Ok(())
-    }
-    pub fn ip(&self) -> usize {
-        self.code.len()
-    }
-
-    // mind the offset...
-    fn add_constant(&mut self, value: Value) -> Result<(), String> {
-        let l = self.constants.len();
-        for i in 0..l {
-            if self.constants[i] == value {
-                self.code.push(i as u8);
-                return Ok(());
-            }
-        }
-        // can we change the offset of the current bucket?
-        // no, the 256 constants in there would be orphaned.
-        if l > u8::MAX as usize {
-            return err!("Too many constants in function");
-        }
-        self.constants.push(value);
-        self.code.push(l as u8);
-        Ok(())
-    }
-
-    pub fn write_constant_op(&mut self, op: Op, constant: Value, line: u16) -> Result<(), String> {
-        self.code.push(op as u8);
-        self.add_constant(constant)?;
-        self.put_line(line, 2);
-        Ok(())
-    }
-
-    pub fn write_byte_op(&mut self, op: Op, byte: u8, line: u16) {
-        self.code.push(op as u8);
-        self.code.push(byte);
-        self.put_line(line, 2);
-    }
-
-    pub fn write_invoke_op(
-        &mut self,
-        op: Op,
-        constant: Value,
-        arity: u8,
-        line: u16,
-    ) -> Result<(), String> {
-        self.code.push(op as u8);
-        self.add_constant(constant)?;
-        self.code.push(arity);
-        self.put_line(line, 3);
-        Ok(())
-    }
-    pub fn write_short_op(&mut self, op: Op, short: u16, line: u16) {
-        self.code.push(op as u8);
-        self.code.push((short >> 8) as u8);
-        self.code.push(short as u8);
-        self.put_line(line, 3);
     }
     pub fn read_byte(&self, index: usize) -> u8 {
         self.code[index]
@@ -152,10 +68,15 @@ impl Functions {
     }
 
     // repo pattern
-    pub fn new_function(&mut self, name: Option<StringHandle>) -> FunctionHandle {
+    pub fn new_function(
+        &mut self,
+        name: Option<StringHandle>,
+        arity: u8,
+        upvalue_count: u8,
+    ) -> FunctionHandle {
         let i = self.handles.next();
         while i as usize >= self.arities.len() {
-            self.arities.push(0);
+            self.arities.push(arity);
             self.chunks.push(Chunk {
                 code: Vec::new(),
                 lines: Vec::new(),
@@ -163,7 +84,7 @@ impl Functions {
                 constants: Vec::new(),
             });
             self.names.push(name.unwrap_or(StringHandle::EMPTY));
-            self.upvalue_counts.push(0);
+            self.upvalue_counts.push(upvalue_count);
         }
         FunctionHandle::from(i)
     }
@@ -176,20 +97,8 @@ impl Functions {
         &mut self.chunks[fh.index()]
     }
 
-    pub fn incr_arity(&mut self, fh: FunctionHandle) -> Result<(), String> {
-        if self.arities[fh.index()] == u8::MAX {
-            return err!("Can't have more than 255 parameters.");
-        }
-        self.arities[fh.index()] += 1;
-        Ok(())
-    }
-
     pub fn arity(&self, fh: FunctionHandle) -> u8 {
         self.arities[fh.index()]
-    }
-
-    pub fn set_upvalue_count(&mut self, fh: FunctionHandle, count: u8) {
-        self.upvalue_counts[fh.index()] = count
     }
 
     pub fn upvalue_count(&self, fh: FunctionHandle) -> usize {

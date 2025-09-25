@@ -50,9 +50,144 @@ enum FunctionType {
     Script,
 }
 
+struct CompileBuffer {
+    code: Vec<u8>,
+    lines: Vec<u16>,
+    run_lengths: Vec<u16>,
+    constants: Vec<Value>,
+    frames: Vec<(usize, usize, usize)>,
+}
+
+impl CompileBuffer {
+    pub fn new() -> Self {
+        Self {
+            code: Vec::new(),
+            lines: Vec::new(),
+            run_lengths: Vec::new(),
+            constants: Vec::new(),
+            frames: Vec::new(),
+        }
+    }
+
+    fn put_line(&mut self, line: u16, run_length: u16) {
+        if self.lines.len() > 0 {
+            let index = self.lines.len() - 1;
+            if self.lines[index] == line {
+                self.run_lengths[index] += run_length;
+                return;
+            }
+        }
+        self.lines.push(line);
+        self.run_lengths.push(run_length);
+    }
+
+    pub fn write(&mut self, bytes: &[u8], line: u16) {
+        self.code.extend_from_slice(bytes);
+        self.put_line(line, bytes.len() as u16);
+    }
+
+    pub fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
+        assert!({
+            let op = self.code[offset - 1];
+            op == (Op::Jump as u8) || op == (Op::JumpIfFalse as u8) || op == (Op::Loop as u8)
+        });
+        let jump = self.code.len() - offset;
+        if jump > u16::MAX as usize {
+            return err!("Jump too large");
+        }
+        if jump == 0 {
+            return err!("Not a jump");
+        }
+        self.code[offset] = (jump >> 8) as u8;
+        self.code[offset + 1] = jump as u8;
+        Ok(())
+    }
+
+    pub fn ip(&self) -> usize {
+        self.code.len()
+    }
+
+    // mind the offset!
+    fn add_constant(&mut self, value: Value) -> Result<(), String> {
+        // should this be faster?
+        let offset = if let Some(frame) = self.frames.last() {
+            frame.2
+        } else {
+            0
+        };
+        let length = self.constants.len();
+        for i in offset..length {
+            if self.constants[i] == value {
+                self.code.push((i - offset) as u8);
+                return Ok(());
+            }
+        }
+        if length - offset > u8::MAX as usize {
+            return err!("Too many constants in function");
+        }
+        self.constants.push(value);
+        self.code.push((length - offset) as u8);
+        Ok(())
+    }
+
+    pub fn write_constant_op(&mut self, op: Op, constant: Value, line: u16) -> Result<(), String> {
+        self.code.push(op as u8);
+        self.add_constant(constant)?;
+        self.put_line(line, 2);
+        Ok(())
+    }
+
+    pub fn write_byte_op(&mut self, op: Op, byte: u8, line: u16) {
+        self.code.push(op as u8);
+        self.code.push(byte);
+        self.put_line(line, 2);
+    }
+
+    pub fn write_invoke_op(
+        &mut self,
+        op: Op,
+        constant: Value,
+        arity: u8,
+        line: u16,
+    ) -> Result<(), String> {
+        self.code.push(op as u8);
+        self.add_constant(constant)?;
+        self.code.push(arity);
+        self.put_line(line, 3);
+        Ok(())
+    }
+    pub fn write_short_op(&mut self, op: Op, short: u16, line: u16) {
+        self.code.push(op as u8);
+        self.code.push((short >> 8) as u8);
+        self.code.push(short as u8);
+        self.put_line(line, 3);
+    }
+
+    pub fn open_frame(&mut self) {
+        self.frames
+            .push((self.code.len(), self.lines.len(), self.constants.len()));
+        // create a break in the run length encoding, just in case
+        self.lines.push(*self.lines.last().unwrap_or(&0));
+        self.run_lengths.push(0);
+    }
+
+    pub fn close_frame(&mut self, chunk: &mut Chunk) {
+        let (i, j, k) = self.frames.pop().unwrap_or((0, 0, 0));
+        chunk.fill(
+            &self.code[i..],
+            &self.lines[j..],
+            &self.run_lengths[j..],
+            &self.constants[k..],
+        );
+        self.code.truncate(i);
+        self.lines.truncate(j);
+        self.run_lengths.truncate(j);
+        self.constants.truncate(k);
+    }
+}
+
 struct CompileData {
     function_type: FunctionType,
-    function: FunctionHandle,
     locals_captured: BitArray,
     locals_initialized: BitArray,
     locals: Vec<StringHandle>,
@@ -62,12 +197,11 @@ struct CompileData {
 }
 
 impl CompileData {
-    fn new(function_type: FunctionType, function: FunctionHandle, this_name: StringHandle) -> Self {
+    fn new(function_type: FunctionType, this_name: StringHandle) -> Self {
         let mut initialized = BitArray::new();
         initialized.add(0); // first local
         Self {
             function_type,
-            function,
             locals_captured: BitArray::new(),
             locals_initialized: initialized,
             locals: vec![this_name],
@@ -150,6 +284,7 @@ impl CompileData {
 struct Compiler<'src, 'hp> {
     head: CompileData,
     tail: Vec<CompileData>,
+    buffer: CompileBuffer,
     source: Source<'src>,
     heap: &'hp mut Heap,
     this_name: StringHandle,
@@ -161,8 +296,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let this_name = heap.strings.put("this");
         let super_name = heap.strings.put("super");
         Self {
-            head: CompileData::new(function_type, heap.functions.new_function(None), this_name),
+            head: CompileData::new(function_type, this_name),
             tail: Vec::new(),
+            buffer: CompileBuffer::new(),
             source,
             heap,
             this_name,
@@ -170,28 +306,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    // todo
-    fn data_ref(&self) -> &CompileData {
-        &self.head
-    }
-
-    // todo
-    fn data_mut(&mut self) -> &mut CompileData {
-        &mut self.head
-    }
-
-    fn chunk_ref(&self) -> &Chunk {
-        let fi = self.data_ref().function;
-        self.heap.functions.chunk_ref(fi)
-    }
-
-    fn chunk_mut(&mut self) -> &mut Chunk {
-        let fi = self.data_ref().function;
-        self.heap.functions.chunk_mut(fi)
-    }
-
     fn emit_return(&mut self) {
-        if self.data_ref().function_type == FunctionType::Initializer {
+        if self.head.function_type == FunctionType::Initializer {
             self.emit_byte_op(Op::GetLocal, 0);
         } else {
             self.emit_op(Op::Nil);
@@ -201,26 +317,26 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_byte_op(&mut self, op: Op, byte: u8) {
         let line = self.source.previous_line();
-        self.chunk_mut().write_byte_op(op, byte, line);
+        self.buffer.write_byte_op(op, byte, line);
     }
 
     fn emit_short_op(&mut self, op: Op, short: u16) {
         let line = self.source.previous_line();
-        self.chunk_mut().write_short_op(op, short, line);
+        self.buffer.write_short_op(op, short, line);
     }
 
     fn emit_invoke_op(&mut self, op: Op, constant: Value, arity: u8) -> Result<(), String> {
         let line = self.source.previous_line();
-        self.chunk_mut().write_invoke_op(op, constant, arity, line)
+        self.buffer.write_invoke_op(op, constant, arity, line)
     }
 
     fn emit_op(&mut self, op: Op) {
         let line = self.source.previous_line();
-        self.chunk_mut().write(&[op as u8], line);
+        self.buffer.write(&[op as u8], line);
     }
 
     fn emit_loop(&mut self, start: usize) -> Result<(), String> {
-        let offset = self.chunk_ref().ip() - start + 1;
+        let offset = self.buffer.ip() - start + 1;
         if offset > u16::MAX as usize {
             err!("loop size to large")
         } else {
@@ -231,30 +347,30 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn emit_jump(&mut self, instruction: Op) -> usize {
         self.emit_short_op(instruction, 0xffff);
-        self.chunk_ref().ip() - 2
+        self.buffer.ip() - 2
     }
 
     fn emit_constant_op(&mut self, op: Op, value: Value) -> Result<(), String> {
         let line = self.source.previous_line();
-        self.chunk_mut().write_constant_op(op, value, line)
+        self.buffer.write_constant_op(op, value, line)
     }
 
     fn begin_scope(&mut self) {
-        let scope_depth = self.data_ref().locals.len() as u8;
-        self.data_mut().scopes.push(scope_depth);
+        let scope_depth = self.head.locals.len() as u8;
+        self.head.scopes.push(scope_depth);
     }
 
     fn end_scope(&mut self) {
-        let l = self.data_mut().scopes.pop().unwrap() as usize;
-        let mut index = self.data_ref().locals.len();
+        let l = self.head.scopes.pop().unwrap() as usize;
+        let mut index = self.head.locals.len();
         while index > l {
             index -= 1;
-            self.emit_op(if self.data_ref().locals_captured.has(index) {
+            self.emit_op(if self.head.locals_captured.has(index) {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
             });
-            self.data_mut().locals.pop();
+            self.head.locals.pop();
         }
     }
 
@@ -284,7 +400,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.emit_op(Op::Pop);
         self.parse_precedence(Prec::And)?;
 
-        self.chunk_mut().patch_jump(end_jump)
+        self.buffer.patch_jump(end_jump)
     }
 
     fn binary(&mut self) -> Result<(), String> {
@@ -367,12 +483,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         let else_jump = self.emit_jump(Op::JumpIfFalse);
         let end_jump = self.emit_jump(Op::Jump);
 
-        self.chunk_mut().patch_jump(else_jump)?;
+        self.buffer.patch_jump(else_jump)?;
         self.emit_op(Op::Pop);
 
         self.parse_precedence(Prec::Or)?;
 
-        self.chunk_mut().patch_jump(end_jump)?;
+        self.buffer.patch_jump(end_jump)?;
         Ok(())
     }
 
@@ -411,7 +527,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if is_assignment {
             self.expression()?;
         }
-        if let Some(arg) = self.data_ref().resolve_local(name)? {
+        if let Some(arg) = self.head.resolve_local(name)? {
             self.emit_byte_op(
                 if is_assignment {
                     Op::SetLocal
@@ -557,8 +673,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     fn parse_variable(&mut self, error_msg: &str) -> Result<Option<StringHandle>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name: StringHandle = self.store_identifier()?;
-        self.data_mut().declare_variable(name)?;
-        Ok(if self.data_ref().scopes.len() > 0 {
+        self.head.declare_variable(name)?;
+        Ok(if self.head.scopes.len() > 0 {
             None
         } else {
             // global
@@ -576,13 +692,17 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::RightParen, "Expect ')' after expression.")
     }
 
-    fn function_body(&mut self) -> Result<(), String> {
+    fn function_body(&mut self) -> Result<u8, String> {
         self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
+        let mut arity: u8 = 0;
         if !self.source.check(TokenType::RightParen) {
             loop {
-                self.heap.functions.incr_arity(self.data_ref().function)?;
+                if arity == u8::MAX {
+                    return err!("Can't have more than 255 parameters.");
+                }
+                arity += 1;
                 let index = self.parse_variable("Expect parameter name")?;
                 self.define_variable(index)?;
                 if !self.source.match_type(TokenType::Comma) {
@@ -596,40 +716,45 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block()?;
         self.emit_return();
-        Ok(())
+        Ok(arity)
     }
 
     fn define_variable(&mut self, index: Option<StringHandle>) -> Result<(), String> {
         Ok(if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
         } else {
-            self.data_mut().mark_initialized();
+            self.head.mark_initialized();
         })
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
         let name = self.heap.strings.put(name);
-        let function = self.heap.functions.new_function(Some(name));
 
         self.tail.push(mem::replace(
             &mut self.head,
-            CompileData::new(function_type, function, self.this_name),
+            CompileData::new(function_type, self.this_name),
         ));
-
+        self.buffer.open_frame();
         // the 'recursive' call
-        self.function_body()?;
+        let arity = self.function_body()?;
 
         let enclosed = mem::replace(&mut self.head, self.tail.pop().unwrap());
 
-        self.heap
-            .functions
-            .set_upvalue_count(function, enclosed.upvalues.len() as u8);
+        // function creation on the heap
+        let function =
+            self.heap
+                .functions
+                .new_function(Some(name), arity, enclosed.upvalues.len() as u8);
+        self.buffer
+            .close_frame(self.heap.functions.chunk_mut(function));
+
         self.emit_constant_op(Op::Closure, Value::from(function))?;
+
         let line = self.source.previous_line();
         // notice the inefficient encoding. o/c the vm would have to use the bitarrays as well.
         for upvalue in enclosed.upvalues {
-            self.chunk_mut().write(
+            self.buffer.write(
                 &[enclosed.upvalues_local.has(upvalue as usize) as u8, upvalue],
                 line,
             );
@@ -656,15 +781,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
-        self.data_mut().declare_variable(class_name)?;
+        self.head.declare_variable(class_name)?;
         self.emit_constant_op(Op::Class, Value::from(class_name))?;
-        self.define_variable(if self.data_ref().scopes.len() == 0 {
+        self.define_variable(if self.head.scopes.len() == 0 {
             Some(class_name)
         } else {
             None
         })?;
 
-        self.data_mut().mark_initialized();
+        self.head.mark_initialized();
 
         if self.source.class_depth == 127 {
             return err!("Cannot nest classes that deep");
@@ -683,8 +808,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.begin_scope();
             // yes, rust asks for this
             let name = self.super_name;
-            self.data_mut().add_local(name)?;
-            self.data_mut().mark_initialized();
+            self.head.add_local(name)?;
+            self.head.mark_initialized();
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
             self.source.has_super.add(self.source.class_depth as usize);
@@ -720,7 +845,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn fun_declaration(&mut self) -> Result<(), String> {
         let index = self.parse_variable("Expect function name.")?;
-        self.data_mut().mark_initialized();
+        self.head.mark_initialized();
         self.function(FunctionType::Function)?;
         if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
@@ -761,7 +886,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                 self.expression_statement()
             }?;
         }
-        let mut loop_start = self.chunk_ref().ip();
+        let mut loop_start = self.buffer.ip();
         let mut exit_jump: Option<usize> = None;
         if !self.source.match_type(TokenType::Semicolon) {
             self.expression()?;
@@ -775,7 +900,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
         if !self.source.match_type(TokenType::RightParen) {
             let body_jump = self.emit_jump(Op::Jump);
-            let increment_start = self.chunk_ref().ip();
+            let increment_start = self.buffer.ip();
             self.expression()?;
             self.emit_op(Op::Pop);
             self.source
@@ -784,13 +909,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.emit_loop(loop_start)?;
             loop_start = increment_start;
 
-            self.chunk_mut().patch_jump(body_jump)?;
+            self.buffer.patch_jump(body_jump)?;
         }
 
         self.statement()?;
         self.emit_loop(loop_start)?;
         if let Some(i) = exit_jump {
-            self.chunk_mut().patch_jump(i)?;
+            self.buffer.patch_jump(i)?;
             self.emit_op(Op::Pop);
         }
         self.end_scope();
@@ -809,13 +934,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.statement()?;
         let else_jump = self.emit_jump(Op::Jump);
 
-        self.chunk_mut().patch_jump(then_jump)?;
+        self.buffer.patch_jump(then_jump)?;
         self.emit_op(Op::Pop);
         if self.source.match_type(TokenType::Else) {
             self.statement()?;
         }
 
-        self.chunk_mut().patch_jump(else_jump)?;
+        self.buffer.patch_jump(else_jump)?;
         Ok(())
     }
 
@@ -828,7 +953,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn return_statement(&mut self) -> Result<(), String> {
-        if self.data_ref().function_type == FunctionType::Script {
+        if self.head.function_type == FunctionType::Script {
             return err!("Can't return from top-level code.");
         }
 
@@ -836,7 +961,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.emit_return();
             Ok(())
         } else {
-            if self.data_ref().function_type == FunctionType::Initializer {
+            if self.head.function_type == FunctionType::Initializer {
                 return err!("Can't return a value from an initializer.");
             }
 
@@ -849,7 +974,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn while_statement(&mut self) -> Result<(), String> {
-        let loop_start = self.chunk_ref().ip();
+        let loop_start = self.buffer.ip();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after 'while'.")?;
         self.expression()?;
@@ -861,7 +986,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.statement()?;
         self.emit_loop(loop_start)?;
 
-        self.chunk_mut().patch_jump(exit_jump)?;
+        self.buffer.patch_jump(exit_jump)?;
         self.emit_op(Op::Pop);
         Ok(())
     }
@@ -912,16 +1037,21 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn script(mut self) -> Result<(), String> {
+    fn script(mut self) -> Result<FunctionHandle, String> {
         while !self.source.match_type(TokenType::End) {
             self.declaration();
         }
         self.emit_return();
         match self.source.error_count {
-            0 => Ok(()),
-            1 => err!("There was a compile time error."),
-            more => err!("There were {} compile time errors.", more),
+            0 => (),
+            1 => return err!("There was a compile time error."),
+            more => return err!("There were {} compile time errors.", more),
         }
+
+        let fh = self.heap.functions.new_function(None, 0, 0);
+        self.buffer.close_frame(self.heap.functions.chunk_mut(fh));
+        assert!(self.buffer.frames.is_empty());
+        Ok(fh)
     }
 
     fn block(&mut self) -> Result<(), String> {
@@ -1042,16 +1172,16 @@ impl<'src> Source<'src> {
     }
 }
 
-pub fn compile(source: &str, heap: &mut Heap) -> Result<(), String> {
+pub fn compile(source: &str, heap: &mut Heap) -> Result<FunctionHandle, String> {
     let start = Instant::now();
     let source = Source::new(source);
     let compiler = Compiler::new(FunctionType::Script, source, heap);
-    compiler.script()?;
+    let fh = compiler.script()?;
     println!(
         "Compilation finished in {} ns.",
         Instant::now().duration_since(start).as_nanos(),
     );
-    Ok(())
+    Ok(fh)
 }
 
 #[cfg(test)]

@@ -1,20 +1,5 @@
-var a = 0;
-print a;
-var b = 0;
-print b;
-var c = 0;
-print c;
-var d = 0;
-print d;
-var e = 0;
-print e;
-var f = 0;
-print f;
-var g = 0;
-print g;
-var h = 0;
-print h;
-var i = 0;
-print i;
-
-
+fun fib(n) {
+  if (n <= 1) return n;
+  return fib(n - 2) + fib(n - 1);
+}
+for (var i = 0; i < 20; i = i + 1) { print fib(i); }
