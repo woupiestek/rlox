@@ -2,7 +2,7 @@ use std::{mem, time::Instant};
 
 use crate::{
     bitarray::BitArray,
-    functions::{Chunk, FunctionHandle},
+    functions::{Chunk, ChunkFrame, FunctionHandle},
     heap::Heap,
     op::Op,
     scanner::{Scanner, TokenType, Tokens},
@@ -55,7 +55,7 @@ struct CompileBuffer {
     lines: Vec<u16>,
     run_lengths: Vec<u16>,
     constants: Vec<Value>,
-    frames: Vec<(usize, usize, usize)>,
+    frames: Vec<ChunkFrame>,
 }
 
 impl CompileBuffer {
@@ -111,7 +111,7 @@ impl CompileBuffer {
     fn add_constant(&mut self, value: Value) -> Result<(), String> {
         // should this be faster?
         let offset = if let Some(frame) = self.frames.last() {
-            frame.2
+            frame.cp
         } else {
             0
         };
@@ -164,25 +164,32 @@ impl CompileBuffer {
     }
 
     pub fn open_frame(&mut self) {
-        self.frames
-            .push((self.code.len(), self.lines.len(), self.constants.len()));
+        self.frames.push(ChunkFrame {
+            ip: self.code.len(),
+            lp: self.lines.len(),
+            cp: self.constants.len(),
+        });
         // create a break in the run length encoding, just in case
         self.lines.push(*self.lines.last().unwrap_or(&0));
         self.run_lengths.push(0);
     }
 
     pub fn close_frame(&mut self, chunk: &mut Chunk) {
-        let (i, j, k) = self.frames.pop().unwrap_or((0, 0, 0));
-        chunk.fill(
-            &self.code[i..],
-            &self.lines[j..],
-            &self.run_lengths[j..],
-            &self.constants[k..],
+        let ChunkFrame { ip, lp, cp } = self.frames.pop().unwrap_or(ChunkFrame {
+            ip: 0,
+            lp: 0,
+            cp: 0,
+        });
+        chunk.add(
+            &self.code[ip..],
+            &self.lines[lp..],
+            &self.run_lengths[lp..],
+            &self.constants[cp..],
         );
-        self.code.truncate(i);
-        self.lines.truncate(j);
-        self.run_lengths.truncate(j);
-        self.constants.truncate(k);
+        self.code.truncate(ip);
+        self.lines.truncate(lp);
+        self.run_lengths.truncate(lp);
+        self.constants.truncate(cp);
     }
 }
 
@@ -746,8 +753,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.heap
                 .functions
                 .new_function(Some(name), arity, enclosed.upvalues.len() as u8);
-        self.buffer
-            .close_frame(self.heap.functions.chunk_mut(function));
+        // careful: this only works because of the function up there.
+        self.buffer.close_frame(&mut self.heap.functions.chunk);
 
         self.emit_constant_op(Op::Closure, Value::from(function))?;
 
@@ -1049,7 +1056,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
 
         let fh = self.heap.functions.new_function(None, 0, 0);
-        self.buffer.close_frame(self.heap.functions.chunk_mut(fh));
+        self.buffer.close_frame(&mut self.heap.functions.chunk);
         assert!(self.buffer.frames.is_empty());
         Ok(fh)
     }

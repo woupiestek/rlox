@@ -51,8 +51,8 @@ impl VM {
         let mut s = Self {
             values: [Value::NIL; STACK_SIZE],
             stack_top: 0,
-            // dangerous placeholder
-            call_frame: CallFrame::new(0, Handle(0)),
+            // risky placeholder
+            call_frame: CallFrame::placeholder(),
             call_stack: Vec::new(),
             globals: Properties::with_capacity(8),
             init_string,
@@ -157,7 +157,7 @@ impl VM {
     fn init(&mut self, fh: FunctionHandle) -> Result<(), String> {
         let closure = self.heap.closures.new_closure(fh, 0);
         self.push(Value::from(closure));
-        self.call_frame = CallFrame::new(self.stack_top - 1, closure);
+        self.call_frame = CallFrame::new(self.stack_top - 1, closure, &mut self.heap);
         self.call_stack.clear();
         Ok(())
     }
@@ -170,7 +170,7 @@ impl VM {
         }
         self.call_stack.push(mem::replace(
             &mut self.call_frame,
-            CallFrame::new(self.stack_top - arity as usize - 1, closure),
+            CallFrame::new(self.stack_top - arity as usize - 1, closure, &self.heap),
         ));
         Ok(())
     }

@@ -1,6 +1,6 @@
 use crate::{
     closures::ClosureHandle,
-    functions::Chunk,
+    functions::ChunkFrame,
     heap::{Collector, Heap},
     strings::StringHandle,
     upvalues::UpvalueHandle,
@@ -10,15 +10,30 @@ use crate::{
 // get these on the stack.
 pub struct CallFrame {
     ip: isize,
+    lp: usize,
+    cp: usize,
     pub slot: usize,
     closure: ClosureHandle,
 }
 
 impl CallFrame {
-    pub fn new(slot: usize, closure: ClosureHandle) -> Self {
+    pub fn placeholder() -> Self {
         Self {
-            // move, then use pointer. Hence the weird start
-            ip: -1,
+            ip: 0,
+            lp: 0,
+            cp: 0,
+            slot: 0,
+            closure: ClosureHandle::from(0),
+        }
+    }
+    pub fn new(slot: usize, closure: ClosureHandle, heap: &Heap) -> Self {
+        let function = heap.closures.get_function(closure);
+        let &ChunkFrame { ip, lp, cp } = heap.functions.get_frame(function);
+        Self {
+            // stick to putting the pointer next to the code to read
+            ip: ip as isize - 1,
+            lp,
+            cp,
             slot,
             closure,
         }
@@ -29,22 +44,18 @@ impl CallFrame {
         self.ip as usize
     }
 
-    fn get_chunk<'b>(&self, heap: &'b Heap) -> &'b Chunk {
-        let fi = heap.closures.get_function(self.closure);
-        heap.functions.chunk_ref(fi)
-    }
-
     pub fn read_byte(&mut self, heap: &Heap) -> u8 {
-        self.get_chunk(heap).read_byte(self.pop())
+        heap.functions.chunk.read_byte(self.pop()) //
     }
 
     pub fn read_constant(&mut self, heap: &Heap) -> Value {
-        self.get_chunk(heap).read_constant(self.pop())
+        heap.functions
+            .chunk
+            .read_constant(self.cp + self.read_byte(heap) as usize)
     }
 
     pub fn read_string(&mut self, heap: &Heap) -> Result<StringHandle, String> {
-        let value = self.read_constant(heap);
-        StringHandle::try_from(value)
+        StringHandle::try_from(self.read_constant(heap))
     }
 
     pub fn get_upvalues<'b>(&self, heap: &'b Heap) -> &'b [UpvalueHandle] {
@@ -57,11 +68,11 @@ impl CallFrame {
     }
 
     pub fn jump_forward(&mut self, heap: &Heap) {
-        self.ip += self.get_chunk(heap).read_short(self.ip as usize + 1) as isize;
+        self.ip += heap.functions.chunk.read_short(self.ip as usize + 1) as isize;
     }
 
     pub fn jump_back(&mut self, heap: &Heap) {
-        self.ip -= self.get_chunk(heap).read_short(self.ip as usize + 1) as isize;
+        self.ip -= heap.functions.chunk.read_short(self.ip as usize + 1) as isize;
     }
 
     pub fn skip(&mut self) {
@@ -77,7 +88,7 @@ impl CallFrame {
         eprintln!(
             "  at {} line {}",
             heap.functions.to_string(fh, heap),
-            self.get_chunk(heap).get_line(self.ip as i32)
+            heap.functions.chunk.get_line(self.lp, self.ip as usize)
         )
     }
 }

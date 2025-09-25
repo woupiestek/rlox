@@ -8,14 +8,45 @@
 - prepare compiler
 - refactor the call stack/vm to not need the heap as often
 - compaction on doubling for strings and (maybe) classes.
+- use handles for 'chunk'
+- reverse order for code?
+- fix the placeholder closure in the vm?
+- compaction for functions?
+- separate names and strings?
 
 ### compile buffer
 
-Do not write direct to the heap, but to a 'local buffer' from which the functions can be copied when done.
-Follow up steps:
+Do not write direct to the heap, but to a 'local buffer' from which the
+functions can be copied when done. Follow up steps:
 
 - see what can be done with locals and upvalues
 - change the structure of functions--to the giant chunk model.
+
+### variables
+
+The local variable could be stur in their own array. It is the upvalue part that
+gives trouble. On the way down, varaible resolution is much simpler. The way up
+is harder: captures must be copied from closure to closure. This is a new
+mapping at each stage, which has to be created correctly. Maybe some other time.
+
+### chunks
+
+I have done it: there are basically two chunks, so the compiler can separate and
+reorder the code of each function. Instructions and constants are read from the
+second chunk, and while this still involves the heap, there is no jumping around
+small and scattered chunks of code. One way or another, this gives a dramatic
+speed up.
+
+It might actually be good to reverse order of instructions. I say this mainly
+because of how bytes are 'popped' of the instruction stack.
+
+### garbage collection when
+
+This project cycles through the object pools. If the members where separate that
+would still work: the difference is that the set of entities to visit grows as
+more members get defined.
+
+Growing each field requires the object handles.
 
 ## 2025-09-24
 
@@ -32,9 +63,9 @@ It makes less and less sense to treat identifiers and strings the same way.
 
 ### the big change
 
-One thing the compiler manages to do, is to seperate the data belonging to different functions.
-It is like putting everything in two big chunks:
-One for functions that are still getting compiled, and one for functions that are ready.
+One thing the compiler manages to do, is to seperate the data belonging to
+different functions. It is like putting everything in two big chunks: One for
+functions that are still getting compiled, and one for functions that are ready.
 The functions just keep track of offsets and lengths into those chunks.
 
 It is a bit more complicated because chunks also keep track of constants and
@@ -44,9 +75,11 @@ with complicated relations:
 - code contains offsets into constants and
 - there must be a way to tie line numbers to the instruct whose execution fails.
 
-The last one is important for debugging, but it doesn't need to be super performant.
+The last one is important for debugging, but it doesn't need to be super
+performant.
 
-As usual, the garbage collector may not need to bother about memory used for complication.
+As usual, the garbage collector may not need to bother about memory used for
+complication.
 
 ## 2025-09-23
 
@@ -60,57 +93,51 @@ As usual, the garbage collector may not need to bother about memory used for com
 
 ### heap power
 
-The bench marks don't show a clear winner, so maybe binary heaps are pretty good?
-In any case, the project show a 32-heap, which takes more time to search
+The bench marks don't show a clear winner, so maybe binary heaps are pretty
+good? In any case, the project show a 32-heap, which takes more time to search
 segments of the underlying array for the best fit, but doesn't have to do that
-as often as a deeper structure would. This can make it faster. I just need a test that
-creates masses of open upvalues.
+as often as a deeper structure would. This can make it faster. I just need a
+test that creates masses of open upvalues.
 
-I keep thinking that removing several minimal values at once, like we do, might have a better solution.
-E.g.
+I keep thinking that removing several minimal values at once, like we do, might
+have a better solution. E.g.
 
 - start from the last index.
-- find an element going out of scope: put the last index in its place,
-  do the heapify up step (or remove it)
+- find an element going out of scope: put the last index in its place, do the
+  heapify up step (or remove it)
 
-Why might this be this worse?
-Because of the linear scan of the entire list.
-If we are going to do that anyway,
-Why bother with the heap property?
+Why might this be this worse? Because of the linear scan of the entire list. If
+we are going to do that anyway, Why bother with the heap property?
 
-Can we find the maximally excessive element some other way?
-Perhaps by doing it depth first:
-Close all the child trees first,
-Then delete_max there.
+Can we find the maximally excessive element some other way? Perhaps by doing it
+depth first: Close all the child trees first, Then delete_max there.
 
-I don't see the great advantage. It all comes down to numbers of comparsion required.
+I don't see the great advantage. It all comes down to numbers of comparsion
+required.
 
 ### instruction buffer
 
-Put all instructions in one buffer. Functions just have an offset into it.
-This does demand something of the compiler,
-like first use one buffer to write into, then move the content to another,
-to correctly interpret nested functions.
-The idea: getting all instruction this way is faster than the mani levelled structure
-used now.
+Put all instructions in one buffer. Functions just have an offset into it. This
+does demand something of the compiler, like first use one buffer to write into,
+then move the content to another, to correctly interpret nested functions. The
+idea: getting all instruction this way is faster than the mani levelled
+structure used now.
 
 ### generational garbage collections with lazy sweeps
 
-The basic plan: use bump allocation with size limits.
-When the allocator is full, move marked objects to the next allocator.
-These marks comes form mark cycles that can be triggered by needing a
-new buffer. However, given a multitude of buffers, each can ignore the
-marks until their time to grow comes.
+The basic plan: use bump allocation with size limits. When the allocator is
+full, move marked objects to the next allocator. These marks comes form mark
+cycles that can be triggered by needing a new buffer. However, given a multitude
+of buffers, each can ignore the marks until their time to grow comes.
 
-The generational version does not replace the first buffer,
-but empties it into the second one.
-The second one in turn may empty itself into a third.
+The generational version does not replace the first buffer, but empties it into
+the second one. The second one in turn may empty itself into a third.
 
-Each could be twice or more times the size of the last,
-So bigger colllection cycles happen less often.
+Each could be twice or more times the size of the last, So bigger colllection
+cycles happen less often.
 
-Actual lazy sweeps may not even be in order here: generally always mark
-when the first buffer is full, so the sweep is bound to happen.
+Actual lazy sweeps may not even be in order here: generally always mark when the
+first buffer is full, so the sweep is bound to happen.
 
 ## 2025-09-22
 
@@ -124,36 +151,36 @@ when the first buffer is full, so the sweep is bound to happen.
 
 ### similarity of closures and strings
 
-It is an idea right. An array of upvalues can be compressed using variable length encoding,
-since the handles are kept small. The upvalues of the current call frame are decompressed,
-for faster access.
+It is an idea right. An array of upvalues can be compressed using variable
+length encoding, since the handles are kept small. The upvalues of the current
+call frame are decompressed, for faster access.
 
-Currently, the upvalue array is compacted during garbage collection.
-This could perhaps be done better by not copying everything to a new array,
-at the cost of some fragmentation.
+Currently, the upvalue array is compacted during garbage collection. This could
+perhaps be done better by not copying everything to a new array, at the cost of
+some fragmentation.
 
-Maybe a better alternative here is to disconnect it from sweeping:
-at some point the upvalue buffer is full, and while copying data,
-use the marked handles.
+Maybe a better alternative here is to disconnect it from sweeping: at some point
+the upvalue buffer is full, and while copying data, use the marked handles.
 
-Such a strategy might work on strings: have a large mutable string, keep everthing in there.
+Such a strategy might work on strings: have a large mutable string, keep
+everthing in there.
 
 ### controlling fragmentation with alignment
 
-I have no idea what works. Aligning by next power of two would clearly worsen alignment in
-some cases, so it count on amny smaller elements filling the gaps.
+I have no idea what works. Aligning by next power of two would clearly worsen
+alignment in some cases, so it count on amny smaller elements filling the gaps.
 
 ### lazy sweep
 
-That is what I observe: sweep doesn't do much anymore.
-memory is marked as free, and only when memory runs out
-and a new allocation is needed, anything gets freed.
+That is what I observe: sweep doesn't do much anymore. memory is marked as free,
+and only when memory runs out and a new allocation is needed, anything gets
+freed.
 
 ### messing with methods
 
-Better to look at how method calling works, rather than playing with the data strucures again.
-I guess I woorid too much about fragmentation the last time, causing all kinds of coping
-strategies, which few clear benefits.
+Better to look at how method calling works, rather than playing with the data
+strucures again. I guess I woorid too much about fragmentation the last time,
+causing all kinds of coping strategies, which few clear benefits.
 
 ## 2025-09-21
 
@@ -167,46 +194,49 @@ strategies, which few clear benefits.
 
 ### bit array integration
 
-Previous model was a free list, that is currently regenerated
-on every GC cycle. However, the GB uses a bit array to
-mark which indices are used, and keeps it arround for future cycles,
-so why not search it for free incides.
+Previous model was a free list, that is currently regenerated on every GC cycle.
+However, the GB uses a bit array to mark which indices are used, and keeps it
+arround for future cycles, so why not search it for free incides.
 
 ### monotone indices
 
 To manage arrays of differing sizes:
 
 1. use one big backing array
-2. when full, copy everything into a new array double the size (or is there a better factor?)
-3. to the outside, add the length of the array to the indices. that way, indices always change
-   and it becomes clear which ones have expired. o/c assuming a slow path to recovering the array is available.
+2. when full, copy everything into a new array double the size (or is there a
+   better factor?)
+3. to the outside, add the length of the array to the indices. that way, indices
+   always change and it becomes clear which ones have expired. o/c assuming a
+   slow path to recovering the array is available.
 
 ### using rusts stack
 
-Instead of storing call frames, the 'run' function in the vm could just call itself with
-closure arguments. Simpler--so would it therefore be slower? I guess the loop can have a series of
-optimisations that would be lost if the functions called cannot be inlined.
+Instead of storing call frames, the 'run' function in the vm could just call
+itself with closure arguments. Simpler--so would it therefore be slower? I guess
+the loop can have a series of optimisations that would be lost if the functions
+called cannot be inlined.
 
 ### variable length encoding
 
-For the upvalue array, e.g., so that is it smaller in memory. When the upvalues are loaded,
-They are unpacked for easier usage.
+For the upvalue array, e.g., so that is it smaller in memory. When the upvalues
+are loaded, They are unpacked for easier usage.
 
 ### boxing functions
 
-Idea: inlining is the default meaning of calling a function.
-This does not work in all situations, so functions must be boxed and called indirectly.
-Examples are recursion and dynamic functions. Calling fucntions from modules might be another.
-Perhaps Rust operates on this basis, yet not so explicitly.
-It could be an issue for VMs that the bytecode files can get huge, or the VM has to generate
+Idea: inlining is the default meaning of calling a function. This does not work
+in all situations, so functions must be boxed and called indirectly. Examples
+are recursion and dynamic functions. Calling fucntions from modules might be
+another. Perhaps Rust operates on this basis, yet not so explicitly. It could be
+an issue for VMs that the bytecode files can get huge, or the VM has to generate
 all the bytecode after loading the modules.
 
 ### rethinking upvalues
 
-It is just a sparse binary relation between handles for boxed values and stack locations.
-When getting and setting upvalues, it is nice to have a fast map from handles to values,
-whether upvalues are closed or open. When a referenced value leaves the stack,
-it gets boxed. This naturally affects upvalues the reference the top of the stack.
+It is just a sparse binary relation between handles for boxed values and stack
+locations. When getting and setting upvalues, it is nice to have a fast map from
+handles to values, whether upvalues are closed or open. When a referenced value
+leaves the stack, it gets boxed. This naturally affects upvalues the reference
+the top of the stack.
 
 Munificent had upvalue objects have pointers to values and form a linked list.
 `typedef struct ObjUpvalue
@@ -228,44 +258,38 @@ Idea: encode stuff into 'location':
 To still avoid the linked list structure:
 
 - list all the handles to open upvalues,
-- ad hoc sorting when upvalues need to be closed?
-  I think the latter actually mean linearly go through the list to check all upvalues
-  before deleting.
+- ad hoc sorting when upvalues need to be closed? I think the latter actually
+  mean linearly go through the list to check all upvalues before deleting.
 
-It could be an inbox/outbox situation:
-new open upvalues are simply stack up until the call to close comes in
-and only get sorted then.
+It could be an inbox/outbox situation: new open upvalues are simply stack up
+until the call to close comes in and only get sorted then.
 
-Other ideas:
-Min heap is now based on comparisons.
-What is the division was based on `ilog2`?
-Each 'node' has a minimum value
-Where the next is found is a matter of `ilog2` comparison:
+Other ideas: Min heap is now based on comparisons. What is the division was
+based on `ilog2`? Each 'node' has a minimum value Where the next is found is a
+matter of `ilog2` comparison:
 
 - the equal ones go left, but the head gets bitten off
 - the lesser ones go right and keep their head.
 
-Note: the current logic puts an element at the end of a vec
-and then sinks it deeper into the heap based on weight.
-The implementation with the ilogs cannot do that.
+Note: the current logic puts an element at the end of a vec and then sinks it
+deeper into the heap based on weight. The implementation with the ilogs cannot
+do that.
 
-It is fitting that locations get set to the highest value,
-because that naturally forces a heap rebalancing.
+It is fitting that locations get set to the highest value, because that
+naturally forces a heap rebalancing.
 
 ### strings
 
-The orginal clox kept hash codes for all strings for lookup in hash tables.
-I achieved a speed up by using the hash codes as string handles.
-No more lookup of the full hash code needed, just mange the handle itself.
-This mainly requires a uniform distrisbution of hash codes,
-that remains uniform modulo powers of two, it does not
-have to relate to the string and indeed, the handles are adjusted
-to avoid collisions.
+The orginal clox kept hash codes for all strings for lookup in hash tables. I
+achieved a speed up by using the hash codes as string handles. No more lookup of
+the full hash code needed, just mange the handle itself. This mainly requires a
+uniform distrisbution of hash codes, that remains uniform modulo powers of two,
+it does not have to relate to the string and indeed, the handles are adjusted to
+avoid collisions.
 
-Could is work as well with normal handles?
-I.e. I imagine something like taking the last few digits,
-and reversing the bits to scatter first,
-or maybe just a multiplication with a magic number.
+Could is work as well with normal handles? I.e. I imagine something like taking
+the last few digits, and reversing the bits to scatter first, or maybe just a
+multiplication with a magic number.
 
 Reversing the bits seem like an effective scatter trick anyway...
 
@@ -274,37 +298,41 @@ What do we actually have?
 - A hash map with `&str` keys, to ensure unique handles for strings.
 - A general hash map structure to attachs values to string handles.
 
-Hmm. I was just thing the general hash maps should use weak references for the strings,
-That may not be a good idea, though, if string can come out of nowhere.
+Hmm. I was just thing the general hash maps should use weak references for the
+strings, That may not be a good idea, though, if string can come out of nowhere.
 
 ### needed structure
 
-Given an `&str` see if there is a handle for it and return it. Given a handle, get the `&str` back.
-Technically, it could be a list of pairs, or even just a vector.
-Okay, the reason not to use the vector is the fear that handles will be reused,
-but that cannot actually happen, since the keys are traced during garbage collection.
-Hence, handles could be reused without risk.
+Given an `&str` see if there is a handle for it and return it. Given a handle,
+get the `&str` back. Technically, it could be a list of pairs, or even just a
+vector. Okay, the reason not to use the vector is the fear that handles will be
+reused, but that cannot actually happen, since the keys are traced during
+garbage collection. Hence, handles could be reused without risk.
 
-Note: string handles are offset by at least 2, for tombstones and nulls.
-This is used in properties, which are the back bones for objects.
+Note: string handles are offset by at least 2, for tombstones and nulls. This is
+used in properties, which are the back bones for objects.
 
-This is worth considering in lox: a user could reintroduce a string that existed before and use that
-in a map. Hence no weak reference used. This will be the case here.
+This is worth considering in lox: a user could reintroduce a string that existed
+before and use that in a map. Hence no weak reference used. This will be the
+case here.
 
-Now the other way around is still an issue: how ot find the handle of a string that
-already? A second map with hash codes would work here. It would use handles as its values.
-Possibly a quadratically growing array of handles, basically the inverse, of the former,
-though it may cheat by using the vector to check.
+Now the other way around is still an issue: how ot find the handle of a string
+that already? A second map with hash codes would work here. It would use handles
+as its values. Possibly a quadratically growing array of handles, basically the
+inverse, of the former, though it may cheat by using the vector to check.
 
-- `handles1: Handles, strings: Vec<Box<str>>, handles2: Box<[u32]>`... some supporting structure,
-  but the essence is there.
+- `handles1: Handles, strings: Vec<Box<str>>, handles2: Box<[u32]>`... some
+  supporting structure, but the essence is there.
 
 ### classes
 
-Last time I worked on this, I just kept redoing the hash maps. I had the idea that memory management would be more efficient
-if classes shared hash maps of methods. Only in small batches though: god forbid we put all on them in only big one.
+Last time I worked on this, I just kept redoing the hash maps. I had the idea
+that memory management would be more efficient if classes shared hash maps of
+methods. Only in small batches though: god forbid we put all on them in only big
+one.
 
-It could try another hash function, for example `((i+j)(i+j-1)/2 + i)*KNUTH_PHI/2^k`.
+It could try another hash function, for example
+`((i+j)(i+j-1)/2 + i)*KNUTH_PHI/2^k`.
 
 ## 2025-09-20
 
@@ -317,17 +345,17 @@ It could try another hash function, for example `((i+j)(i+j-1)/2 + i)*KNUTH_PHI/
 
 ### how it works now
 
-Basically, `Handles` is a bitset that marks the handles cuirrently in use,
-so that when a new handle is needed, it uses a free one instead.
+Basically, `Handles` is a bitset that marks the handles cuirrently in use, so
+that when a new handle is needed, it uses a free one instead.
 
-A garbage collection cycle first clears these bits set,
-then traverses the heap to mark the objects to be preserved.
-There is no freeing of memory at this stage.
+A garbage collection cycle first clears these bits set, then traverses the heap
+to mark the objects to be preserved. There is no freeing of memory at this
+stage.
 
 ### call stack optimisation
 
-Idea: keep the top on rusts stack, push the rest on a vec for safe keeping.
-This seems to work, actually.
+Idea: keep the top on rusts stack, push the rest on a vec for safe keeping. This
+seems to work, actually.
 
 ### closures and call stacks
 
@@ -337,48 +365,47 @@ three aims:
 2. more straightforward array of upvalue implementation
 3. integration of the bitarray into clsure memeory management
 
-Moving the upvalues around is not a good option,
-and copying into the call frame takes up much space.
-There could just be one array of current upvalues in the vm
-fetched from repo once when the top frame loads.
-the same could be done for constants of course:
+Moving the upvalues around is not a good option, and copying into the call frame
+takes up much space. There could just be one array of current upvalues in the vm
+fetched from repo once when the top frame loads. the same could be done for
+constants of course:
 
-- 256 \* (32 + 64)
-  or just peacemeal, like a cache.
+- 256 \* (32 + 64) or just peacemeal, like a cache.
 
 The plan:
 
 - have 256 slots for upvalues
 - have 256 slots of constants
-- every time a call frame is loaded,
-  the constants and upvalues are brought there.
+- every time a call frame is loaded, the constants and upvalues are brought
+  there.
 
 ### other ideas
 
 In C, there would just be a pointer to the upvalues, constants and instructions.
-I have moved away from that here because of life times and unsafe rust,
-but maybe I can retry. Basic idea: the vm temporarily borrows from the heap
-for fast access.
+I have moved away from that here because of life times and unsafe rust, but
+maybe I can retry. Basic idea: the vm temporarily borrows from the heap for fast
+access.
 
-Not the right temporary: the heap remains borrowed as long as the structures it owns are.
-Meaning nothing can be changes in the heap, unless the references are dropped,
-which means they must be fetched again at that point.
+Not the right temporary: the heap remains borrowed as long as the structures it
+owns are. Meaning nothing can be changes in the heap, unless the references are
+dropped, which means they must be fetched again at that point.
 
-So the same workaround, with constants, instructions, and arrays of upvalues living behind
-handles might work. If they get to move around, then the values must be reloaded
-after garbage collection cycles.
+So the same workaround, with constants, instructions, and arrays of upvalues
+living behind handles might work. If they get to move around, then the values
+must be reloaded after garbage collection cycles.
 
-That is an idea, though. The functions and closures repos need to keep track of locations,
-but the handles used by the VM could have generation markers, to indicate a refetch is
-needed because the values behind have moved.
+That is an idea, though. The functions and closures repos need to keep track of
+locations, but the handles used by the VM could have generation markers, to
+indicate a refetch is needed because the values behind have moved.
 
 ### conclusion
 
 - Just caching the data in the VM seems costly
 - References are probably not going to work, because of the borrow checker
-- I don't want the unsafe route again, unless it is the only possible improvement left
-- There is the idea of expiring handles: the indices give direct access as long as they are
-  fresh. Once expired, new handles can be fetched in a slower way.
+- I don't want the unsafe route again, unless it is the only possible
+  improvement left
+- There is the idea of expiring handles: the indices give direct access as long
+  as they are fresh. Once expired, new handles can be fetched in a slower way.
 
 ## 2025-09-19
 
@@ -386,18 +413,18 @@ needed because the values behind have moved.
 
 The string do move around, and therefore require indirection.
 
-- the string pool tries to assign a single handle to each string, and never change it.
-- there are mutable mappings from handle to index, index to handle and index to str
-  so the pool does not need a 4 billion entries long array
+- the string pool tries to assign a single handle to each string, and never
+  change it.
+- there are mutable mappings from handle to index, index to handle and index to
+  str so the pool does not need a 4 billion entries long array
 
-The latter two mappings are pretty standard now,
-The first one is the indirection, that allows
-moving data around as needed.
+The latter two mappings are pretty standard now, The first one is the
+indirection, that allows moving data around as needed.
 
 ### closure trouble
 
-The same issue here: there is an indirection, now because closure can be 'zero size'
-just a pointer to the heap.
+The same issue here: there is an indirection, now because closure can be 'zero
+size' just a pointer to the heap.
 
 ### more
 
@@ -2093,7 +2120,7 @@ seem ok.
 
 Take up an additional byte to distinguish 'locals' and 'non locals'
 
-###
+### 
 
 We could make it more clox like by wrapping uszie in a struct and defining
 Deref... How to do the implicit dependency on the stack?

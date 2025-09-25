@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::{
     handles::Handles,
     heap::{Collector, Handle, Heap, Pool, FUNCTION},
@@ -6,38 +8,76 @@ use crate::{
 };
 
 #[derive(Debug)]
+pub struct ChunkFrame {
+    pub ip: usize,
+    pub lp: usize,
+    pub cp: usize,
+}
+
+#[derive(Debug)]
 pub struct Chunk {
     code: Vec<u8>,
     lines: Vec<u16>,
     run_lengths: Vec<u16>,
-    constants: Vec<Value>, // run time data structure
+    constants: Vec<Value>,   // run time data structure
+    frames: Vec<ChunkFrame>, //
 }
 
 impl Chunk {
-    pub fn fill(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) {
+    pub fn new() -> Self {
+        Self {
+            code: Vec::new(),
+            lines: Vec::new(),
+            run_lengths: Vec::new(),
+            constants: Vec::new(),
+            frames: Vec::new(),
+        }
+    }
+    pub fn add(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) {
         self.code.extend_from_slice(cd);
         self.lines.extend_from_slice(ln);
         self.run_lengths.extend_from_slice(rl);
         self.constants.extend_from_slice(cn);
     }
-    pub fn get_line(&self, ip: i32) -> u16 {
-        let mut run_length: i32 = 0;
-        for i in 0..self.lines.len() {
-            run_length += self.run_lengths[i] as i32;
+    pub fn close_frame(&mut self) -> usize {
+        let len = self.frames.len();
+        self.frames.push(ChunkFrame {
+            ip: self.code.len(),
+            lp: self.lines.len(),
+            cp: self.constants.len(),
+        });
+        len
+    }
+
+    // the problem case
+    pub fn get_line(&self, frame: usize, ip: usize) -> u16 {
+        // start from start of frame, not from the beginning!
+        let mut run_length: usize = self.frames[frame].lp;
+
+        let i0 = self.frames[frame].lp;
+        let l = self.lines.len();
+        let i1 = if frame + 1 == l {
+            l
+        } else {
+            self.frames[frame + 2].lp
+        };
+        for i in i0..i1 {
+            run_length += self.run_lengths[i] as usize;
             if run_length > ip {
                 return self.lines[i];
             }
         }
         return 0;
     }
+
     pub fn read_byte(&self, index: usize) -> u8 {
         self.code[index]
     }
     pub fn read_short(&self, index: usize) -> u16 {
         (self.read_byte(index) as u16) << 8 | (self.read_byte(index + 1) as u16)
     }
-    pub fn read_constant(&self, ip: usize) -> Value {
-        self.constants[self.read_byte(ip) as usize]
+    pub fn read_constant(&self, cp: usize) -> Value {
+        self.constants[cp]
     }
 }
 
@@ -51,7 +91,8 @@ pub struct Functions {
     names: Vec<StringHandle>, // run time data structure
     arities: Vec<u8>,
     upvalue_counts: Vec<u8>,
-    chunks: Vec<Chunk>,
+    frames: Vec<usize>,
+    pub chunk: Chunk,
     handles: Handles,
 }
 
@@ -62,7 +103,9 @@ impl Functions {
             names: Vec::new(), // run time data structure
             arities: Vec::new(),
             upvalue_counts: Vec::new(),
-            chunks: Vec::new(),
+            // indirection to allow compactification...
+            frames: Vec::new(),
+            chunk: Chunk::new(),
             handles: Handles::new(),
         }
     }
@@ -77,24 +120,11 @@ impl Functions {
         let i = self.handles.next();
         while i as usize >= self.arities.len() {
             self.arities.push(arity);
-            self.chunks.push(Chunk {
-                code: Vec::new(),
-                lines: Vec::new(),
-                run_lengths: Vec::new(),
-                constants: Vec::new(),
-            });
+            self.frames.push(self.chunk.close_frame());
             self.names.push(name.unwrap_or(StringHandle::EMPTY));
             self.upvalue_counts.push(upvalue_count);
         }
         FunctionHandle::from(i)
-    }
-
-    pub fn chunk_ref(&self, fh: FunctionHandle) -> &Chunk {
-        &self.chunks[fh.index()]
-    }
-
-    pub fn chunk_mut(&mut self, fh: FunctionHandle) -> &mut Chunk {
-        &mut self.chunks[fh.index()]
     }
 
     pub fn arity(&self, fh: FunctionHandle) -> u8 {
@@ -103,6 +133,22 @@ impl Functions {
 
     pub fn upvalue_count(&self, fh: FunctionHandle) -> usize {
         self.upvalue_counts[fh.index()] as usize
+    }
+
+    pub fn get_frame(&self, fh: FunctionHandle) -> &ChunkFrame {
+        &self.chunk.frames[self.frames[fh.index()]]
+    }
+
+    pub fn constants(&self, fh: FunctionHandle) -> Range<usize> {
+        let frame = self.frames[fh.index()];
+        let from = self.chunk.frames[frame].cp;
+        let len = self.chunk.frames.len();
+        let to = if frame + 1 == len {
+            self.chunk.constants.len()
+        } else {
+            self.chunk.frames[frame + 1].cp
+        };
+        from..to
     }
 
     #[cfg(feature = "trace")]
@@ -124,19 +170,6 @@ impl Functions {
             )
         }
     }
-
-    pub fn sweep(&mut self) {
-        for i in 0..self.names.len() {
-            if !self.handles.is_marked(i as u32) {
-                self.names[i] = StringHandle::EMPTY;
-                self.arities[i] = 0;
-                self.chunks[i].code.clear();
-                self.chunks[i].constants.clear();
-                self.chunks[i].lines.clear();
-                self.chunks[i].run_lengths.clear();
-            }
-        }
-    }
 }
 
 impl Pool<FUNCTION> for Functions {
@@ -152,8 +185,8 @@ impl Pool<FUNCTION> for Functions {
         if self.names[handle.index()] != StringHandle::EMPTY {
             collector.push(self.names[handle.index()])
         }
-        for constant in &self.chunks[handle.index()].constants {
-            constant.trace(collector)
+        for constant in self.constants(handle) {
+            self.chunk.constants[constant].trace(collector)
         }
     }
 
@@ -161,5 +194,9 @@ impl Pool<FUNCTION> for Functions {
         self.handles.clear();
     }
 
-    fn sweep(&mut self) {}
+    fn sweep(&mut self) {
+        // compaction:
+        // if the number of frames is (much) larger than the number of handles
+        // then it may be useful to start moving stuff around.
+    }
 }
