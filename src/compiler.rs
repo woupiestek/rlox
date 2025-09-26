@@ -174,13 +174,13 @@ impl CompileBuffer {
         self.run_lengths.push(0);
     }
 
-    pub fn close_frame(&mut self, chunk: &mut Chunk) {
+    pub fn close_frame(&mut self, chunk: &mut Chunk) -> usize {
         let ChunkFrame { ip, lp, cp } = self.frames.pop().unwrap_or(ChunkFrame {
             ip: 0,
             lp: 0,
             cp: 0,
         });
-        chunk.add(
+        let frame = chunk.add(
             &self.code[ip..],
             &self.lines[lp..],
             &self.run_lengths[lp..],
@@ -190,6 +190,7 @@ impl CompileBuffer {
         self.lines.truncate(lp);
         self.run_lengths.truncate(lp);
         self.constants.truncate(cp);
+        frame
     }
 }
 
@@ -748,13 +749,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
         let enclosed = mem::replace(&mut self.head, self.tail.pop().unwrap());
 
-        // function creation on the heap
-        let function =
-            self.heap
-                .functions
-                .new_function(Some(name), arity, enclosed.upvalues.len() as u8);
         // careful: this only works because of the function up there.
-        self.buffer.close_frame(&mut self.heap.functions.chunk);
+        let frame = self.buffer.close_frame(&mut self.heap.functions.chunk);
+        // function creation on the heap
+        let function = self.heap.functions.new_function(
+            Some(name),
+            arity,
+            enclosed.upvalues.len() as u8,
+            frame,
+        );
 
         self.emit_constant_op(Op::Closure, Value::from(function))?;
 
@@ -1055,8 +1058,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             more => return err!("There were {} compile time errors.", more),
         }
 
-        let fh = self.heap.functions.new_function(None, 0, 0);
-        self.buffer.close_frame(&mut self.heap.functions.chunk);
+        let frame = self.buffer.close_frame(&mut self.heap.functions.chunk);
+        let fh = self.heap.functions.new_function(None, 0, 0, frame);
         assert!(self.buffer.frames.is_empty());
         Ok(fh)
     }

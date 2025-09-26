@@ -29,7 +29,7 @@ impl Properties {
         Self {
             count: 0,
             keys: vec![StringHandle::EMPTY; capacity].into_boxed_slice(),
-            mask: capacity - 1,
+            mask,
             leading_zeros: (mask as u32).leading_zeros(),
             values: vec![Value::NIL; capacity].into_boxed_slice(),
         }

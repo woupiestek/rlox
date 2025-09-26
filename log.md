@@ -4,8 +4,41 @@
 
 ### todo
 
-- update the scanner!
-- prepare compiler
+- reduce madness: where columns are always used together and can be stored without loss, do it!
+- record new performance numbers
+- local variables refactor
+- line numbers
+- fix the placeholder call frame in the vm?
+- refactor the call stack/vm to not need the heap as often
+- compaction on doubling for strings and (maybe) classes.
+- separate names and strings?
+- reverse order for code?
+- compaction for functions?
+- use handles for 'chunk'?
+
+### a hash function for strings
+
+Would it be hard to create a function that can tell a predefined set of strings apart?
+In particular to change the function 
+collision by collision?
+
+Downsides: 
+- function must be dynamic, e.g. rely on a selection of bits needed to tell strings apart
+- every improvement might require that handles are place differently
+
+e.g. mutliply the previous function and add the first different bit.
+
+Something like an inproduct:
+a vec of bytes, each multiplied with the start of each string,
+then summed. Somehow produces a unique value for each string.
+Finding a point that is not in line with any pair of existing vectors.
+
+## 2025-09-25
+
+### todo
+
+- ~~update the scanner!~~
+- ~~prepare compiler~~
 - refactor the call stack/vm to not need the heap as often
 - compaction on doubling for strings and (maybe) classes.
 - use handles for 'chunk'

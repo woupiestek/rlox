@@ -98,9 +98,9 @@ impl VM {
         {
             println!("collect frames");
         }
-        self.call_frame.trace(&mut self.collector);
+        self.collector.push(self.call_frame.closure);
         for frame in &self.call_stack {
-            frame.trace(&mut self.collector);
+            self.collector.push(frame.closure);
         }
         #[cfg(feature = "log_gc")]
         {
@@ -156,9 +156,10 @@ impl VM {
 
     fn init(&mut self, fh: FunctionHandle) -> Result<(), String> {
         let closure = self.heap.closures.new_closure(fh, 0);
+        // if the closure is on the stack, does it need to be traces separately?
         self.push(Value::from(closure));
-        self.call_frame = CallFrame::new(self.stack_top - 1, closure, &mut self.heap);
         self.call_stack.clear();
+        self.call_frame = CallFrame::new(self.stack_top - 1, closure, &mut self.heap);
         Ok(())
     }
 
@@ -198,9 +199,8 @@ impl VM {
             Some(BOUND_METHOD) => {
                 // more flexibility by passing the stck around
                 let bound_method = BoundMethodHandle::try_from(callee)?;
-                let receiver = self.heap.bound_methods.get_receiver(bound_method);
+                let (receiver, method) = self.heap.bound_methods.unpack(bound_method);
                 self.values[self.stack_top - arity as usize - 1] = Value::from(receiver);
-                let method = self.heap.bound_methods.get_method(bound_method);
                 return self.call(method, arity);
             }
             Some(NATIVE) => {
@@ -335,12 +335,9 @@ impl VM {
                     let function = Handle::try_from(self.call_frame.read_constant(&self.heap))?;
                     // garbage collection risks?
                     self.collect_garbage_if_needed();
-                    let closure = self
-                        .heap
-                        .closures
-                        .new_closure(function, self.heap.functions.upvalue_count(function));
-                    self.push(Value::from(closure));
                     let count = self.heap.functions.upvalue_count(function);
+                    let closure = self.heap.closures.new_closure(function, count);
+                    self.push(Value::from(closure));
                     for i in 0..count {
                         let is_local = self.call_frame.read_byte(&self.heap);
                         let index = self.call_frame.read_byte(&self.heap) as usize;
@@ -348,9 +345,9 @@ impl VM {
                             let location = self.call_frame.slot + index;
                             self.capture_upvalue(location)
                         } else {
-                            self.call_frame.get_upvalues(&self.heap)[i]
+                            self.call_frame.get_upvalue(&self.heap, i)
                         };
-                        self.heap.closures.mut_upvalues(closure)[i] = uh;
+                        self.heap.closures.upvalues_mut(closure)[i] = uh;
                     }
                 }
                 Op::Constant => {

@@ -1,10 +1,6 @@
 use crate::{
-    closures::ClosureHandle,
-    functions::ChunkFrame,
-    heap::{Collector, Heap},
-    strings::StringHandle,
-    upvalues::UpvalueHandle,
-    values::Value,
+    closures::ClosureHandle, functions::ChunkFrame, heap::Heap, strings::StringHandle,
+    upvalues::UpvalueHandle, values::Value,
 };
 
 // get these on the stack.
@@ -13,13 +9,13 @@ pub struct CallFrame {
     lp: usize,
     cp: usize,
     pub slot: usize,
-    closure: ClosureHandle,
+    pub closure: ClosureHandle,
 }
 
 impl CallFrame {
     pub fn placeholder() -> Self {
         Self {
-            ip: 0,
+            ip: -1,
             lp: 0,
             cp: 0,
             slot: 0,
@@ -45,7 +41,7 @@ impl CallFrame {
     }
 
     pub fn read_byte(&mut self, heap: &Heap) -> u8 {
-        heap.functions.chunk.read_byte(self.pop()) //
+        heap.functions.chunk.read_byte(self.pop())
     }
 
     pub fn read_constant(&mut self, heap: &Heap) -> Value {
@@ -58,13 +54,13 @@ impl CallFrame {
         StringHandle::try_from(self.read_constant(heap))
     }
 
-    pub fn get_upvalues<'b>(&self, heap: &'b Heap) -> &'b [UpvalueHandle] {
-        heap.closures.get_upvalues(self.closure)
+    pub fn get_upvalue(&self, heap: &Heap, index: usize) -> UpvalueHandle {
+        heap.closures.upvalues[heap.closures.up(self.closure) + index]
     }
 
     pub fn read_upvalue<'b>(&mut self, heap: &Heap) -> UpvalueHandle {
         let index = self.read_byte(heap) as usize;
-        self.get_upvalues(heap)[index]
+        self.get_upvalue(heap, index)
     }
 
     pub fn jump_forward(&mut self, heap: &Heap) {
@@ -77,10 +73,6 @@ impl CallFrame {
 
     pub fn skip(&mut self) {
         self.ip += 2
-    }
-
-    pub fn trace(&self, collector: &mut Collector) {
-        collector.push(self.closure)
     }
 
     pub fn print(&self, heap: &Heap) {

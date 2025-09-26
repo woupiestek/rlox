@@ -9,53 +9,46 @@ pub type BoundMethodHandle = Handle<BOUND_METHOD>;
 
 pub struct BoundMethods {
     handles: Handles,
-    methods: Vec<ClosureHandle>,
-    receivers: Vec<InstanceHandle>,
+    pairs: Vec<(InstanceHandle, ClosureHandle)>,
 }
 
 impl BoundMethods {
     pub fn new() -> Self {
         Self {
             handles: Handles::new(),
-            methods: Vec::new(),
-            receivers: Vec::new(),
+            pairs: Vec::new(),
         }
     }
 
     pub fn bind(&mut self, instance: InstanceHandle, method: ClosureHandle) -> BoundMethodHandle {
         let i = self.handles.next();
-        while self.receivers.len() <= i as usize {
+        while self.pairs.len() <= i as usize {
             // pushing fake handles just in case
-            self.methods.push(Handle(0));
-            self.receivers.push(Handle(0));
+            self.pairs.push((Handle(0), Handle(0)));
         }
-        self.methods[i as usize] = method;
-        self.receivers[i as usize] = instance;
+        self.pairs[i as usize] = (instance, method);
         BoundMethodHandle::from(i)
     }
 
-    pub fn get_receiver(&self, handle: BoundMethodHandle) -> InstanceHandle {
-        self.receivers[handle.index()]
-    }
-
-    pub fn get_method(&self, handle: BoundMethodHandle) -> ClosureHandle {
-        self.methods[handle.index()]
+    pub fn unpack(&self, handle: BoundMethodHandle) -> (InstanceHandle, ClosureHandle) {
+        self.pairs[handle.index()]
     }
 
     pub fn to_string(&self, handle: BoundMethodHandle, heap: &Heap) -> String {
         heap.functions
-            .to_string(heap.closures.get_function(self.get_method(handle)), heap)
+            .to_string(heap.closures.get_function(self.unpack(handle).1), heap)
     }
 }
 
 impl Pool<BOUND_METHOD> for BoundMethods {
     fn byte_count(&self) -> usize {
-        48 + 4 * (self.receivers.capacity() + self.methods.capacity())
+        48 + 8 * (self.pairs.capacity())
     }
     fn trace(&mut self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
         if self.handles.mark(handle.0) {
-            collector.push(self.get_receiver(handle));
-            collector.push(self.get_method(handle));
+            let (i, c) = self.unpack(handle);
+            collector.push(i);
+            collector.push(c);
         }
     }
 

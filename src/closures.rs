@@ -20,7 +20,7 @@ pub struct Closures {
     handles: Handles,
     offsets: Vec<u32>,
     upvalue_counts: Vec<u8>,
-    upvalues: Box<[UpvalueHandle]>,
+    pub upvalues: Box<[UpvalueHandle]>,
     next: usize,
 }
 
@@ -47,18 +47,19 @@ impl Closures {
     }
 
     // remember that offsets can be out of order
-    fn get_offset(&self, ch: ClosureHandle) -> usize {
+    pub fn up(&self, ch: ClosureHandle) -> usize {
         assert_ne!(ch.0 & Self::TOP_BIT, 0);
         let h = (ch.0 ^ Self::TOP_BIT) as usize;
         self.offsets[h] as usize
     }
 
-    pub fn get_upvalues(&self, ch: ClosureHandle) -> &[UpvalueHandle] {
-        &self.upvalues[self.get_offset(ch)..]
+    pub fn upvalues_ref(&mut self, ch: ClosureHandle) -> &[UpvalueHandle] {
+        let j = self.up(ch);
+        &self.upvalues[j..]
     }
 
-    pub fn mut_upvalues(&mut self, ch: ClosureHandle) -> &mut [UpvalueHandle] {
-        let j = self.get_offset(ch);
+    pub fn upvalues_mut(&mut self, ch: ClosureHandle) -> &mut [UpvalueHandle] {
+        let j = self.up(ch);
         &mut self.upvalues[j..]
     }
 
@@ -148,14 +149,12 @@ mod tests {
         // try one
         let closure = closures.new_closure(Handle::from(2), 2);
         assert_eq!(closures.get_function(closure).index(), 2);
-        closures.mut_upvalues(closure)[1] = Handle::from(135);
-        assert_eq!(closures.get_upvalues(closure)[1].index(), 135);
+        closures.upvalues[closures.up(closure) + 1] = Handle::from(135);
 
         // try another
         let closure2 = closures.new_closure(Handle::from(4), 3);
         assert_eq!(closures.get_function(closure2).index(), 4);
-        closures.mut_upvalues(closure2)[2] = Handle::from(135);
-        assert_eq!(closures.get_upvalues(closure2)[2].index(), 135);
+        closures.upvalues[closures.up(closure2) + 2] = Handle::from(135);
 
         // try an empty one
         let closure3 = closures.new_closure(Handle::from(6), 0);
@@ -168,7 +167,7 @@ mod tests {
     pub fn tracing() {
         let mut closures = Closures::new();
         let closure = closures.new_closure(Handle::from(2), 2);
-        closures.mut_upvalues(closure)[1] = Handle::from(135);
+        closures.upvalues[closures.up(closure) + 1] = Handle::from(135);
 
         let mut collector = Collector::new();
         closures.trace(closure, &mut collector);

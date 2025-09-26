@@ -33,19 +33,17 @@ impl Chunk {
             frames: Vec::new(),
         }
     }
-    pub fn add(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) {
-        self.code.extend_from_slice(cd);
-        self.lines.extend_from_slice(ln);
-        self.run_lengths.extend_from_slice(rl);
-        self.constants.extend_from_slice(cn);
-    }
-    pub fn close_frame(&mut self) -> usize {
+    pub fn add(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) -> usize {
         let len = self.frames.len();
         self.frames.push(ChunkFrame {
             ip: self.code.len(),
             lp: self.lines.len(),
             cp: self.constants.len(),
         });
+        self.code.extend_from_slice(cd);
+        self.lines.extend_from_slice(ln);
+        self.run_lengths.extend_from_slice(rl);
+        self.constants.extend_from_slice(cn);
         len
     }
 
@@ -116,11 +114,12 @@ impl Functions {
         name: Option<StringHandle>,
         arity: u8,
         upvalue_count: u8,
+        frame: usize,
     ) -> FunctionHandle {
         let i = self.handles.next();
         while i as usize >= self.arities.len() {
             self.arities.push(arity);
-            self.frames.push(self.chunk.close_frame());
+            self.frames.push(frame);
             self.names.push(name.unwrap_or(StringHandle::EMPTY));
             self.upvalue_counts.push(upvalue_count);
         }
