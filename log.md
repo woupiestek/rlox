@@ -19,13 +19,27 @@
 
 ### new hash maps
 
-So this new implementation doesn't drop anything...
-But the result is slower. Why?
+So this new implementation doesn't drop anything... But the result is slower.
+Why?
 
 - maybe batching actually is a real good idea, at least for classes.
-- maybe the garbage collector is actually slower due to thing I 'fixed'... like byte count and sweep
+- maybe the garbage collector is actually slower due to thing I 'fixed'... like
+  byte count and sweep
 
 Let's do some tests.
+
+Tests inconclusive. At least, if there are any losses, then it comes from
+implementing garbage collection without leaks.
+
+### what else to try?
+
+Replace hash maps. Don't throw away the unused ones, but keep those in the
+pools. A placeholder for zero size... won't work.
+
+### back in the race!
+
+Separation by size is only used to hang on to old maps. Stashing seems to help
+performance, only partly because of the byte counts.
 
 ## 2025-09-27
 

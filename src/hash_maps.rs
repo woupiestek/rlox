@@ -105,6 +105,10 @@ impl<A: Copy + Default + Traceable> HashMap<A> {
         self.keys.fill(StringHandle::EMPTY);
         self.values.fill(A::default());
     }
+
+    fn capacity(&self) -> usize {
+        self.keys.len()
+    }
 }
 
 impl<A: Copy + Default + Traceable> Traceable for HashMap<A> {
@@ -118,205 +122,159 @@ impl<A: Copy + Default + Traceable> Traceable for HashMap<A> {
     }
 }
 
-// keep unused maps
-struct SizePool<A: Copy + Default + Traceable> {
-    capacity: usize,
-    handles: Handles,
-    hash_maps: Vec<HashMap<A>>,
-}
-
-impl<A: Copy + Default + Traceable> SizePool<A> {
-    fn for_capacity(capacity: usize) -> Self {
-        Self {
-            capacity,
-            handles: Handles::new(),
-            hash_maps: Vec::new(),
-        }
-    }
-
-    fn alloc(&mut self) -> u32 {
-        let next = self.handles.next();
-        if self.hash_maps.len() > next as usize {
-            self.hash_maps[next as usize].clear();
-            return next;
-        }
-        while self.hash_maps.len() <= next as usize {
-            self.hash_maps.push(HashMap::with_capacity(self.capacity));
-        }
-        next
-    }
-
-    fn free(&mut self, handle: u32) {
-        if self.handles.unmark(handle) {
-            // self.hash_maps[handle as usize].clear();
-        }
-    }
-
-    // another reason to not let HahsMaps resize themselves:
-    // traversing all object to finds their sizes is a lot of work...
-    fn byte_count(&self) -> usize {
-        mem::size_of::<Self>()
-            + mem::size_of::<HashMap<A>>() * self.hash_maps.capacity()
-            + (4 + mem::size_of::<A>()) * self.capacity * self.hash_maps.len()
-    }
-}
-
 pub struct HashMaps<A: Copy + Default + Traceable, const KIND: usize> {
     handles: Handles,
-    pools: Vec<SizePool<A>>,
-    rank: Vec<u8>,
-    index: Vec<u32>,
+    active: Vec<Option<HashMap<A>>>,
+    stash: Vec<Vec<HashMap<A>>>,
+    hash_map_byte_count: usize,
 }
 
 impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
     pub fn new() -> Self {
         Self {
-            pools: Vec::new(),
             handles: Handles::new(),
-            rank: Vec::new(),
-            index: Vec::new(), // rank = 0, no index needed...
+            active: Vec::new(),
+            stash: Vec::new(),
+            hash_map_byte_count: 0,
         }
-    }
-
-    fn pool_ref(&self, rank: u8) -> &SizePool<A> {
-        &self.pools[rank as usize - 3]
-    }
-
-    fn pool_mut(&mut self, rank: u8) -> &mut SizePool<A> {
-        while self.pools.len() <= rank as usize - 3 {
-            let capacity = 1 << (3 + self.pools.len());
-            self.pools.push(SizePool::for_capacity(capacity))
-        }
-        &mut self.pools[rank as usize - 3]
-    }
-    fn hash_map_ref(&self, rank: u8, index: u32) -> &HashMap<A> {
-        &self.pool_ref(rank).hash_maps[index as usize]
-    }
-
-    fn hash_map_mut(&mut self, rank: u8, index: u32) -> &mut HashMap<A> {
-        &mut self.pool_mut(rank).hash_maps[index as usize]
     }
 
     pub fn new_hash_map(&mut self) -> Handle<KIND> {
         let next = self.handles.next();
-
-        while self.rank.len() <= next as usize {
-            self.rank.push(0);
-            self.index.push(0);
+        while self.active.len() <= next as usize {
+            self.active.push(None);
         }
-
         Handle(next)
     }
 
     pub fn get(&self, handle: Handle<KIND>, key: StringHandle) -> Option<A> {
-        let rank = self.rank[handle.index()];
-        if rank < 3 {
-            return None;
+        if let Some(hash_map) = &self.active[handle.index()] {
+            hash_map.get(key)
+        } else {
+            None
         }
-        self.hash_map_ref(rank, self.index[handle.index()]).get(key)
+    }
+
+    fn rank(capacity: usize) -> usize {
+        capacity.ilog2() as usize - 3
+    }
+
+    fn alloc(&mut self, capacity: usize) -> HashMap<A> {
+        let index = Self::rank(capacity);
+        if index < self.stash.len() {
+            if let Some(mut hash_map) = self.stash[index].pop() {
+                hash_map.clear();
+                return hash_map;
+            }
+        }
+        self.hash_map_byte_count +=
+            mem::size_of::<HashMap<A>>() + (4 + mem::size_of::<A>()) * capacity;
+        return HashMap::with_capacity(capacity);
+    }
+
+    fn stash(&mut self, hash_map: HashMap<A>) {
+        let rank = Self::rank(hash_map.capacity());
+        while self.stash.len() <= rank {
+            self.stash.push(Vec::new());
+        }
+        self.stash[Self::rank(hash_map.capacity())].push(hash_map);
+    }
+
+    fn resize(&mut self, handle: Handle<KIND>, capacity: usize) {
+        if let Some(hash_map) = &self.active[handle.index()] {
+            if hash_map.capacity() >= capacity {
+                return;
+            }
+        }
+        let mut new_map = self.alloc(capacity);
+        let old_map = self.active[handle.index()].take(); //.replace(new_map);
+        if let Some(hash_map) = old_map {
+            for i in 0..hash_map.keys.len() {
+                let k = hash_map.keys[i];
+                if k.is_valid() {
+                    let v = hash_map.values[i];
+                    new_map.put(k, v);
+                }
+            }
+            self.stash(hash_map);
+        }
+        self.active[handle.index()] = Some(new_map);
+    }
+
+    fn hash_map_ref(&mut self, handle: Handle<KIND>) -> &HashMap<A> {
+        self.active[handle.index()].as_ref().unwrap()
+    }
+
+    fn hash_map_mut(&mut self, handle: Handle<KIND>) -> &mut HashMap<A> {
+        self.active[handle.index()].as_mut().unwrap()
     }
 
     pub fn put(&mut self, handle: Handle<KIND>, key: StringHandle, value: A) -> bool {
-        let rank = self.rank[handle.index()];
-
-        if rank < 3 {
-            let map = self.pool_mut(3).alloc();
-            self.rank[handle.index()] = 3;
-            self.index[handle.index()] = map;
-            return self.hash_map_mut(3, map).put(key, value);
-        }
-
-        let index = self.index[handle.index()];
-        if self.hash_map_ref(rank, index).is_full() {
-            let map = self.pool_mut(rank + 1).alloc();
-            self.add_all_raw(handle, rank + 1, map);
-            // free
-            self.pool_mut(rank).free(index);
-            // adjust
-            self.rank[handle.index()] += 1;
-            self.index[handle.index()] = map;
-            return self.hash_map_mut(rank + 1, map).put(key, value);
-        }
-        self.hash_map_mut(rank, index).put(key, value)
+        let capacity = if let Some(hash_map) = &mut self.active[handle.index()] {
+            if !hash_map.is_full() {
+                return hash_map.put(key, value);
+            }
+            hash_map.keys.len() * 2
+        } else {
+            8
+        };
+        self.resize(handle, capacity);
+        self.hash_map_mut(handle).put(key, value)
     }
 
-    fn add_all_raw(&mut self, source: Handle<KIND>, target_rank: u8, target_index: u32) {
-        let rank = self.rank[source.index()];
-        if rank < 3 {
+    pub fn count(&self, handle: Handle<KIND>) -> usize {
+        if let Some(hash_map) = &self.active[handle.index()] {
+            hash_map.count
+        } else {
+            0
+        }
+    }
+
+    pub fn add_all(&mut self, source: Handle<KIND>, target: Handle<KIND>) {
+        if self.active[source.index()].is_none() {
             return;
         }
-        let index = self.index[source.index()];
-        for i in 0..self.pool_ref(rank).capacity {
-            let k = self.hash_map_ref(rank, index).keys[i];
+
+        let count = self.count(source) + self.count(target);
+        let target_capacity = if count > 8 {
+            ((count - 1) * 4 / 3 + 1).next_power_of_two()
+        } else {
+            8
+        };
+
+        self.resize(target, target_capacity);
+        for i in 0..self.hash_map_ref(source).keys.len() {
+            let k = self.hash_map_ref(source).keys[i];
             if k.is_valid() {
-                let v = self.hash_map_ref(rank, index).values[i];
-                self.hash_map_mut(target_rank, target_index).put(k, v);
+                let v = self.hash_map_ref(source).values[i];
+                self.hash_map_mut(target).put(k, v);
             }
         }
     }
 
-    pub fn count(&self, handle: Handle<KIND>) -> usize {
-        let rank = self.rank[handle.index()];
-        if rank < 3 {
-            return 0;
-        }
-        self.hash_map_ref(rank, self.index[handle.index()]).count
-    }
-
-    pub fn add_all(&mut self, source: Handle<KIND>, target: Handle<KIND>) {
-        let count = self.count(source) + self.count(target);
-        if count == 0 {
-            return;
-        }
-        let target_rank = if count > 8 {
-            ((count - 1) * 4 / 3 + 1)
-                .next_power_of_two()
-                .trailing_zeros() as u8
-        } else {
-            3
-        };
-        if self.rank[target.index()] < target_rank {
-            let target_index = self.pool_mut(target_rank).alloc();
-            self.add_all_raw(target, target_rank, target_index);
-            self.rank[target.index()] = target_rank;
-            let index = self.index[target.index()];
-            self.pool_mut(target_rank).free(index);
-            self.index[target.index()] = target_index;
-        }
-        self.add_all_raw(
-            source,
-            self.rank[target.index()],
-            self.index[target.index()],
-        );
-    }
-
     pub fn delete(&mut self, handle: Handle<KIND>, key: StringHandle) -> bool {
-        let rank = self.rank[handle.index()];
-        if rank < 3 {
-            return false;
+        if let Some(hash_map) = &mut self.active[handle.index()] {
+            hash_map.delete(key)
+        } else {
+            false
         }
-        self.hash_map_mut(rank, self.index[handle.index()])
-            .delete(key)
     }
 }
 
 impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A, KIND> {
     fn byte_count(&self) -> usize {
-        let mut bc = mem::size_of::<Self>();
-        for pool in &self.pools {
-            bc += pool.byte_count();
-        }
-        bc
+        mem::size_of::<Self>()
+            + self.active.capacity() * mem::size_of::<Option<HashMap<A>>>()
+            + self.stash.capacity() * mem::size_of::<Vec<HashMap<A>>>()
+            + self.hash_map_byte_count
     }
 
     fn trace(&mut self, handle: Handle<KIND>, collector: &mut Collector) {
         if !self.handles.mark(handle.0) {
             return;
         }
-        let rank = self.rank[handle.index()];
-        if rank >= 3 {
-            let index = self.index[handle.index()];
-            self.hash_map_ref(rank, index).trace(collector);
+        if let Some(hash_map) = &self.active[handle.index()] {
+            hash_map.trace(collector);
         }
     }
 
@@ -325,13 +283,11 @@ impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A
     }
 
     fn sweep(&mut self) {
-        for i in 0..self.rank.len() {
-            let rank = self.rank[i];
-            if rank >= 3 && !self.handles.is_marked(i as u32) {
-                let index = self.index[i];
-                self.pool_mut(self.rank[i]).free(index);
-                self.rank[i] = 0;
-                self.index[i] = 0;
+        for i in 0..self.active.len() {
+            if !self.handles.is_marked(i as u32) {
+                if let Some(hash_map) = self.active[i].take() {
+                    self.stash(hash_map);
+                }
             }
         }
     }
