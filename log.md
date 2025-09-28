@@ -1,10 +1,38 @@
 # Rlox
 
+## 2025-09-28
+
+### todo
+
+- reduce madness: where columns are always used together and can be stored
+  without loss, do it!
+- record new performance numbers
+- local variables refactor
+- line numbers
+- fix the placeholder call frame in the vm?
+- refactor the call stack/vm to not need the heap as often
+- compaction on doubling for strings and (maybe) classes.
+- separate names and strings?
+- reverse order for code?
+- compaction for functions?
+- use handles for 'chunk'?
+
+### new hash maps
+
+So this new implementation doesn't drop anything...
+But the result is slower. Why?
+
+- maybe batching actually is a real good idea, at least for classes.
+- maybe the garbage collector is actually slower due to thing I 'fixed'... like byte count and sweep
+
+Let's do some tests.
+
 ## 2025-09-27
 
 ### todo
 
-- reduce madness: where columns are always used together and can be stored without loss, do it!
+- reduce madness: where columns are always used together and can be stored
+  without loss, do it!
 - record new performance numbers
 - local variables refactor
 - line numbers
@@ -18,48 +46,48 @@
 
 ### generational gc
 
-Have a nursery, insteads of just marking objects/space as still in use, count garbage collection cycles,
-and move object that get too old.
+Have a nursery, insteads of just marking objects/space as still in use, count
+garbage collection cycles, and move object that get too old.
 
 ### globals vs instance members
 
-Lox requires variables to be declared, and being declared is different from having a value other than `Nil`.
-So while `Nil` could mark tombstones in instances, this won't work for globals.
+Lox requires variables to be declared, and being declared is different from
+having a value other than `Nil`. So while `Nil` could mark tombstones in
+instances, this won't work for globals.
 
-For objects, the distinction is just as important though: unset value means that the class must provide the member
-instead.
+For objects, the distinction is just as important though: unset value means that
+the class must provide the member instead.
 
-We can add new values, like `Placeholder` specifically for this usecase. 
+We can add new values, like `Placeholder` specifically for this usecase.
 
 ### blocked
 
-Two problems: safe space when allocating it for small hash maps, 
-while doing few allocations overall. Also, keep track of how much is allocated.
+Two problems: safe space when allocating it for small hash maps, while doing few
+allocations overall. Also, keep track of how much is allocated.
 
-Information: map sizes are null or a power of two.
-It is realively easy to allocate objects of the same size,
-But with vecs, the objects get moves secretly,
-when capacity runs out.
+Information: map sizes are null or a power of two. It is realively easy to
+allocate objects of the same size, But with vecs, the objects get moves
+secretly, when capacity runs out.
 
 0, 8, 16, 32, 64, 128, 256, 512, 1024, ...
 
-Idea: do not bother to allocate one bug buffer up front and managing the data inside
-without moving the object. Instead make a pool of maps for each capacity.
-If the pool needs to resize, it does not affect the objects.
-If the hashmap need to resize, the move to the next pool. 
+Idea: do not bother to allocate one bug buffer up front and managing the data
+inside without moving the object. Instead make a pool of maps for each capacity.
+If the pool needs to resize, it does not affect the objects. If the hashmap need
+to resize, the move to the next pool.
 
 ### strategy
 
-So the hash map repo just allocates more and more space,
-by the geometric sequence.
-It somehow also keeps track of which part are occupied and how big they are.
-
+So the hash map repo just allocates more and more space, by the geometric
+sequence. It somehow also keeps track of which part are occupied and how big
+they are.
 
 ## 2025-09-26
 
 ### todo
 
-- reduce madness: where columns are always used together and can be stored without loss, do it!
+- reduce madness: where columns are always used together and can be stored
+  without loss, do it!
 - record new performance numbers
 - local variables refactor
 - line numbers
@@ -73,19 +101,19 @@ It somehow also keeps track of which part are occupied and how big they are.
 
 ### a hash function for strings
 
-Would it be hard to create a function that can tell a predefined set of strings apart?
-In particular to change the function 
-collision by collision?
+Would it be hard to create a function that can tell a predefined set of strings
+apart? In particular to change the function collision by collision?
 
-Downsides: 
-- function must be dynamic, e.g. rely on a selection of bits needed to tell strings apart
+Downsides:
+
+- function must be dynamic, e.g. rely on a selection of bits needed to tell
+  strings apart
 - every improvement might require that handles are place differently
 
 e.g. mutliply the previous function and add the first different bit.
 
-Something like an inproduct:
-a vec of bytes, each multiplied with the start of each string,
-then summed. Somehow produces a unique value for each string.
+Something like an inproduct: a vec of bytes, each multiplied with the start of
+each string, then summed. Somehow produces a unique value for each string.
 Finding a point that is not in line with any pair of existing vectors.
 
 ## 2025-09-25

@@ -145,6 +145,13 @@ impl<const KIND: usize> From<u32> for Handle<KIND> {
     }
 }
 
+// this worries me
+impl<const KIND: usize> Default for Handle<KIND> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
 impl<const KIND: usize> Traceable for Handle<KIND> {
     fn trace(&self, collector: &mut Collector) {
         collector.push(KIND, self.0);

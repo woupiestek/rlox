@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::{
     classes::ClassHandle,
     hash_maps::HashMaps,
@@ -9,7 +11,6 @@ use crate::{
 pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
-    byte_count: usize,
     classes: Vec<ClassHandle>,
     properties: HashMaps<Value, INSTANCE>,
 }
@@ -17,7 +18,6 @@ pub struct Instances {
 impl Instances {
     pub fn new() -> Self {
         Self {
-            byte_count: 56,
             classes: Vec::new(),
             properties: HashMaps::new(),
         }
@@ -59,8 +59,11 @@ impl Instances {
 
 impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
-        self.byte_count + self.classes.len() * 4
+        self.properties.byte_count()
+            + self.classes.capacity() * 4
+            + mem::size_of::<Vec<ClassHandle>>()
     }
+
     fn trace(&mut self, handle: Handle<INSTANCE>, collector: &mut Collector) {
         self.properties.trace(handle, collector);
         self.classes[handle.index()].trace(collector);
@@ -70,5 +73,7 @@ impl Pool<INSTANCE> for Instances {
         self.properties.reset();
     }
 
-    fn sweep(&mut self) {}
+    fn sweep(&mut self) {
+        self.properties.sweep();
+    }
 }

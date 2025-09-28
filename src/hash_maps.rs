@@ -100,7 +100,7 @@ impl<A: Copy + Default + Traceable> HashMap<A> {
         false
     }
 
-    pub fn reset(&mut self) {
+    pub fn clear(&mut self) {
         self.count = 0;
         self.keys.fill(StringHandle::EMPTY);
         self.values.fill(A::default());
@@ -136,6 +136,10 @@ impl<A: Copy + Default + Traceable> SizePool<A> {
 
     fn alloc(&mut self) -> u32 {
         let next = self.handles.next();
+        if self.hash_maps.len() > next as usize {
+            self.hash_maps[next as usize].clear();
+            return next;
+        }
         while self.hash_maps.len() <= next as usize {
             self.hash_maps.push(HashMap::with_capacity(self.capacity));
         }
@@ -144,7 +148,7 @@ impl<A: Copy + Default + Traceable> SizePool<A> {
 
     fn free(&mut self, handle: u32) {
         if self.handles.unmark(handle) {
-            self.hash_maps[handle as usize].reset();
+            // self.hash_maps[handle as usize].clear();
         }
     }
 
@@ -225,14 +229,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         let index = self.index[handle.index()];
         if self.hash_map_ref(rank, index).is_full() {
             let map = self.pool_mut(rank + 1).alloc();
-            // copy data
-            for i in 0..self.pool_ref(rank).capacity {
-                let k = self.hash_map_ref(rank, index).keys[i];
-                if k.is_valid() {
-                    let v = self.hash_map_ref(rank, index).values[i];
-                    self.hash_map_mut(rank + 1, map).put(k, v);
-                }
-            }
+            self.add_all_raw(handle, rank + 1, map);
             // free
             self.pool_mut(rank).free(index);
             // adjust
@@ -241,6 +238,56 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
             return self.hash_map_mut(rank + 1, map).put(key, value);
         }
         self.hash_map_mut(rank, index).put(key, value)
+    }
+
+    fn add_all_raw(&mut self, source: Handle<KIND>, target_rank: u8, target_index: u32) {
+        let rank = self.rank[source.index()];
+        if rank < 3 {
+            return;
+        }
+        let index = self.index[source.index()];
+        for i in 0..self.pool_ref(rank).capacity {
+            let k = self.hash_map_ref(rank, index).keys[i];
+            if k.is_valid() {
+                let v = self.hash_map_ref(rank, index).values[i];
+                self.hash_map_mut(target_rank, target_index).put(k, v);
+            }
+        }
+    }
+
+    pub fn count(&self, handle: Handle<KIND>) -> usize {
+        let rank = self.rank[handle.index()];
+        if rank < 3 {
+            return 0;
+        }
+        self.hash_map_ref(rank, self.index[handle.index()]).count
+    }
+
+    pub fn add_all(&mut self, source: Handle<KIND>, target: Handle<KIND>) {
+        let count = self.count(source) + self.count(target);
+        if count == 0 {
+            return;
+        }
+        let target_rank = if count > 8 {
+            ((count - 1) * 4 / 3 + 1)
+                .next_power_of_two()
+                .trailing_zeros() as u8
+        } else {
+            3
+        };
+        if self.rank[target.index()] < target_rank {
+            let target_index = self.pool_mut(target_rank).alloc();
+            self.add_all_raw(target, target_rank, target_index);
+            self.rank[target.index()] = target_rank;
+            let index = self.index[target.index()];
+            self.pool_mut(target_rank).free(index);
+            self.index[target.index()] = target_index;
+        }
+        self.add_all_raw(
+            source,
+            self.rank[target.index()],
+            self.index[target.index()],
+        );
     }
 
     pub fn delete(&mut self, handle: Handle<KIND>, key: StringHandle) -> bool {
@@ -267,8 +314,10 @@ impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A
             return;
         }
         let rank = self.rank[handle.index()];
-        let index = self.index[handle.index()];
-        self.hash_map_ref(rank, index).trace(collector);
+        if rank >= 3 {
+            let index = self.index[handle.index()];
+            self.hash_map_ref(rank, index).trace(collector);
+        }
     }
 
     fn reset(&mut self) {
