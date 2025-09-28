@@ -9,7 +9,7 @@ use crate::{
     compiler::compile,
     functions::FunctionHandle,
     heap::{Collector, Handle, Heap, Pool, Traceable, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
-    instances::{InstanceHandle, Properties},
+    instances::InstanceHandle,
     natives::{NativeHandle, Natives},
     op::Op,
     strings::StringHandle,
@@ -37,7 +37,7 @@ pub struct VM {
     stack_top: usize,
     call_frame: CallFrame,
     call_stack: Vec<CallFrame>,
-    globals: Properties,
+    globals: InstanceHandle,
     init_string: StringHandle,
     heap: Heap,
     natives: Natives,
@@ -48,13 +48,15 @@ impl VM {
     pub fn new() -> Self {
         let mut heap = Heap::new();
         let init_string = heap.strings.put("init");
+        let global_class = heap.classes.new_class(StringHandle::EMPTY);
+        let globals = heap.instances.new_instance(global_class);
         let mut s = Self {
             values: [Value::NIL; STACK_SIZE],
             stack_top: 0,
             // risky placeholder
             call_frame: CallFrame::placeholder(),
             call_stack: Vec::new(),
-            globals: Properties::with_capacity(8),
+            globals,
             init_string,
             heap,
             natives: Natives::new(),
@@ -269,13 +271,8 @@ impl VM {
         Ok(())
     }
 
-    fn set_global(&mut self, name: StringHandle, value: Value) -> bool {
-        if self.globals.is_full() {
-            // inform the heap somehow?
-            // why aren't the globals just an instance anyway?
-            self.globals = self.globals.grow();
-        }
-        self.globals.put(name, value)
+    fn set_global(&mut self, key: StringHandle, value: Value) -> bool {
+        self.heap.instances.set_property(self.globals, key, value)
     }
 
     fn run(&mut self) -> Result<(), String> {
@@ -368,7 +365,7 @@ impl VM {
                 Op::False => self.push(Value::FALSE),
                 Op::GetGlobal => {
                     let name = self.call_frame.read_string(&self.heap)?;
-                    if let Some(value) = self.globals.get(name) {
+                    if let Some(value) = self.heap.instances.get_property(self.globals, name) {
                         self.push(value);
                     } else {
                         return err!(
@@ -462,7 +459,7 @@ impl VM {
                     let name = self.call_frame.read_string(&self.heap)?;
                     // the booleans are killing me
                     if self.set_global(name, self.peek(0)) {
-                        self.globals.delete(name);
+                        self.heap.instances.delete_property(self.globals, name);
                         return err!(
                             "Undefined variable '{}'.",
                             self.heap.strings.get(name).unwrap()
