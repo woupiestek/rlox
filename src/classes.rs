@@ -32,7 +32,7 @@ impl Classes {
     }
 
     pub fn get_name<'s>(&self, ch: ClassHandle, strings: &'s Strings) -> &'s str {
-        strings.get(self.names[ch.index()]).unwrap()
+        strings.get(self.names[ch.index()])
     }
 
     pub fn to_string(&self, ch: ClassHandle, strings: &Strings) -> String {

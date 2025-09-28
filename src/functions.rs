@@ -55,7 +55,7 @@ impl Chunk {
         let i0 = self.frames[frame].lp;
         let l = self.lines.len();
         let i1 = if frame + 1 == l {
-            l
+            self.frames.len()
         } else {
             self.frames[frame + 2].lp
         };
@@ -163,7 +163,7 @@ impl Functions {
         } else {
             format!(
                 "<fn {} ({}/{})>",
-                heap.strings.get(name).unwrap(),
+                heap.strings.get(name),
                 self.arities[i],
                 self.upvalue_counts[i]
             )

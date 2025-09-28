@@ -228,10 +228,7 @@ impl VM {
         arity: u8,
     ) -> Result<(), String> {
         match self.heap.classes.get_method(class, name) {
-            None => err!(
-                "Undefined property '{}'",
-                self.heap.strings.get(name).unwrap()
-            ),
+            None => err!("Undefined property '{}'", self.heap.strings.get(name)),
             Some(method) => self.call(method, arity),
         }
     }
@@ -248,10 +245,7 @@ impl VM {
 
     fn bind_method(&mut self, class: ClassHandle, name: StringHandle) -> Result<(), String> {
         match self.heap.classes.get_method(class, name) {
-            None => err!(
-                "Undefined property '{}'.",
-                self.heap.strings.get(name).unwrap()
-            ),
+            None => err!("Undefined property '{}'.", self.heap.strings.get(name)),
             Some(method) => {
                 let instance = Handle::try_from(self.peek(0))?;
                 self.collect_garbage_if_needed();
@@ -307,7 +301,7 @@ impl VM {
                     } else {
                         let a = StringHandle::try_from(self.peek(1))?;
                         let b = StringHandle::try_from(self.peek(0))?;
-                        let c = self.heap.strings.concat(a, b).ok_or("Missing strings")?;
+                        let c = self.heap.strings.concat(a, b);
                         self.stack_top -= 2;
                         self.push(Value::from(c));
                     }
@@ -368,10 +362,7 @@ impl VM {
                     if let Some(value) = self.heap.instances.get_property(self.globals, name) {
                         self.push(value);
                     } else {
-                        return err!(
-                            "Undefined variable '{}'.",
-                            self.heap.strings.get(name).unwrap(),
-                        );
+                        return err!("Undefined variable '{}'.", self.heap.strings.get(name),);
                     }
                 }
                 Op::GetLocal => {
@@ -460,10 +451,7 @@ impl VM {
                     // the booleans are killing me
                     if self.set_global(name, self.peek(0)) {
                         self.heap.instances.delete_property(self.globals, name);
-                        return err!(
-                            "Undefined variable '{}'.",
-                            self.heap.strings.get(name).unwrap()
-                        );
+                        return err!("Undefined variable '{}'.", self.heap.strings.get(name));
                     }
                 }
                 Op::SetLocal => {

@@ -15,6 +15,41 @@ impl StringHandle {
     }
 }
 
+struct Buffer {
+    string: String,
+    tos: Vec<u32>,
+}
+
+impl Buffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            string: String::with_capacity(capacity),
+            tos: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.tos.len()
+    }
+
+    fn get(&self, index: usize) -> &str {
+        let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
+        let to = self.tos[index] as usize;
+        &self.string[from..to]
+    }
+
+    fn add(&mut self, str: &str) -> usize {
+        self.string.push_str(str);
+        let index = self.tos.len();
+        self.tos.push(self.string.len() as u32);
+        index
+    }
+
+    fn byte_count(&self) -> usize {
+        mem::size_of::<Self>() + self.string.capacity()
+    }
+}
+
 pub struct Strings {
     handle_set: Box<[StringHandle]>,
     keys: Handles,
@@ -23,8 +58,8 @@ pub struct Strings {
     // even one Box<str>?
     // Box<[u8]> would be a better choice, simply because
     // it makes the intent to mutate clearer
-    strings: Vec<Option<Box<str>>>,
-    string_byte_count: usize,
+    buffer: Buffer,
+    offsets: Vec<u32>,
 }
 
 impl Strings {
@@ -34,8 +69,8 @@ impl Strings {
             handle_set: vec![StringHandle::EMPTY; 8].into_boxed_slice(),
             keys: Handles::new(),
             mask: 7, // self.handle_set.len() - 1
-            strings: Vec::new(),
-            string_byte_count: 0,
+            buffer: Buffer::with_capacity(0),
+            offsets: Vec::new(),
         }
     }
 
@@ -49,13 +84,13 @@ impl Strings {
     }
 
     fn find(&self, string: &str) -> (bool, usize) {
-        assert!(self.strings.len() * 4 < self.handle_set.len() * 3);
+        assert!(self.buffer.len() * 4 < self.handle_set.len() * 3);
         let mut index = self.hash(string);
         loop {
             match self.handle_set[index] {
                 StringHandle::EMPTY => return (false, index),
                 handle => {
-                    if self.get(handle) == Some(string) {
+                    if self.get(handle) == string {
                         return (true, index);
                     }
                 }
@@ -65,8 +100,8 @@ impl Strings {
         }
     }
 
-    pub fn get(&self, handle: StringHandle) -> Option<&str> {
-        self.strings[(handle.0 - Self::OFFSET) as usize].as_deref()
+    pub fn get(&self, handle: StringHandle) -> &str {
+        self.buffer.get((handle.0 - Self::OFFSET) as usize)
     }
 
     fn grow(&mut self) {
@@ -77,12 +112,11 @@ impl Strings {
         };
         self.handle_set = vec![StringHandle::EMPTY; capacity].into_boxed_slice();
         self.mask = capacity - 1;
-        for i in 0..self.strings.len() {
+        for i in 0..self.buffer.len() {
             if self.keys.is_marked(i as u32) {
-                if let Some(str) = &self.strings[i] {
-                    let (_, index) = self.find(str);
-                    self.handle_set[index] = Handle(i as u32 + Self::OFFSET)
-                }
+                let str = self.buffer.get(i);
+                let (_, index) = self.find(str);
+                self.handle_set[index] = Handle(i as u32 + Self::OFFSET)
             }
         }
     }
@@ -98,25 +132,20 @@ impl Strings {
         }
 
         let key = self.keys.next() as usize;
-        while self.strings.len() <= key as usize {
-            self.strings.push(None);
+        while self.offsets.len() <= key as usize {
+            self.offsets.push(u32::MAX);
         }
-        self.strings[key as usize] = Some(Box::from(string));
-        self.string_byte_count += string.len();
+        self.offsets[key] = self.buffer.add(string) as u32;
         let handle = Handle(key as u32 + Self::OFFSET);
         self.handle_set[index] = handle;
         handle
     }
 
-    pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> Option<StringHandle> {
-        if let (Some(a), Some(b)) = (self.get(a), self.get(b)) {
-            let mut c = String::new();
-            c.push_str(a);
-            c.push_str(b);
-            Some(self.put(&c))
-        } else {
-            None
-        }
+    pub fn concat(&mut self, a: StringHandle, b: StringHandle) -> StringHandle {
+        let mut c = String::new();
+        c.push_str(self.get(a));
+        c.push_str(self.get(b));
+        self.put(&c)
     }
 }
 
@@ -124,7 +153,7 @@ impl Pool<STRING> for Strings {
     fn byte_count(&self) -> usize {
         mem::size_of::<Strings>()
             + self.handle_set.len() * 4
-            + self.strings.capacity() * mem::size_of::<Option<Box<str>>>()
+            + self.buffer.byte_count()
             + self.keys.byte_count()
     }
 
@@ -148,12 +177,17 @@ impl Pool<STRING> for Strings {
     }
 
     fn sweep(&mut self) {
-        for i in 0..self.strings.len() {
-            if !self.keys.is_marked(i as u32) {
-                if let Some(str) = &self.strings[i] {
-                    self.string_byte_count -= str.len();
-                    self.strings[i] = None;
-                }
+        if self.keys.count() * 4 > self.buffer.len() * 3 {
+            // don't compactify yet
+            return;
+        }
+        let capacity = self.buffer.string.capacity();
+        let buffer = mem::replace(&mut self.buffer, Buffer::with_capacity(capacity));
+        for i in 0..self.offsets.len() {
+            if self.keys.is_marked(i as u32) {
+                self.offsets[i] = self.buffer.add(buffer.get(self.offsets[i] as usize)) as u32;
+            } else {
+                self.offsets[i] = u32::MAX;
             }
         }
     }
@@ -169,12 +203,12 @@ mod tests {
         let mut strings = Strings::new();
         let key = strings.put("str");
         assert_eq!(key, strings.put("str"));
-        assert_eq!(Some("str"), strings.get(key));
+        assert_eq!("str", strings.get(key));
 
         let key1 = strings.put("one");
         let key2 = strings.put("two");
         assert_eq!(key2, strings.put("two"));
-        assert_eq!(Some("one"), strings.get(key1));
+        assert_eq!("one", strings.get(key1));
         assert_ne!(key1, key2);
     }
 
@@ -189,7 +223,7 @@ mod tests {
             values.push(value.clone());
         }
         for i in 0..12 {
-            assert_eq!(Some(values[i].as_str()), strings.get(handles[i]));
+            assert_eq!(values[i].as_str(), strings.get(handles[i]));
         }
     }
 }

@@ -60,25 +60,6 @@ impl Handles {
         }
     }
 
-    // pub fn unmark(&mut self, h: u32) -> bool {
-    //     let i = (h >> 3) as usize;
-    //     if self.marked.len() <= i {
-    //         return false;
-    //     }
-    //     let j = 1 << (h & THREE_BIT_MASK);
-    //     if self.marked[i] & j == 1 {
-    //         self.count -= 1;
-    //         self.marked[i] &= !j;
-    //         if self.index > i {
-    //             // put first in line to allocate
-    //             self.index = i
-    //         }
-    //         true
-    //     } else {
-    //         false
-    //     }
-    // }
-
     // look for a free spot
     // start in the 'current bucket'
     // move up by one every time

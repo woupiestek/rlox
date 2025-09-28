@@ -11,7 +11,7 @@
 - line numbers
 - fix the placeholder call frame in the vm?
 - refactor the call stack/vm to not need the heap as often
-- compaction on doubling for strings and (maybe) classes.
+- ~~compaction on doubling for strings and (maybe) classes.~~
 - separate names and strings?
 - reverse order for code?
 - compaction for functions?
@@ -40,6 +40,24 @@ pools. A placeholder for zero size... won't work.
 
 Separation by size is only used to hang on to old maps. Stashing seems to help
 performance, only partly because of the byte counts.
+
+### performance numbers
+
+- binary_trees: 2.1788599491119385
+- equality: loop 2.139660596847534 elapsed 2.2305803298950195 equals
+  0.09091973304748535
+- fib: 1.6649506092071533
+- instantiation: 0.7938528060913086
+- invocation: 0.5113131999969482
+- method_call: 0.37403106689453125
+- properties: 0.7400572299957275
+- string_equality: loop 1.220015287399292 elapsed 1.355548620223999 equals
+  0.13553333282470703
+- trees: 5.302673816680908
+- zoo_batch: 3147
+- zoo: 0.5276131629943848
+
+This last batch sped things up.
 
 ## 2025-09-27
 

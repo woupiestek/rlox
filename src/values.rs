@@ -108,14 +108,8 @@ impl Value {
                         .to_string(heap.closures.get_function(Handle::from(index)), heap)
                 }
                 INSTANCE => return heap.instances.to_string(Handle::from(index), heap),
-                FUNCTION => {
-                    return heap.functions.to_string(Handle::from(index), heap);
-                }
-                STRING => {
-                    if let Some(str) = heap.strings.get(Handle::from(index)) {
-                        return str.to_string();
-                    }
-                }
+                FUNCTION => return heap.functions.to_string(Handle::from(index), heap),
+                STRING => return heap.strings.get(Handle::from(index)).to_string(),
                 NATIVE => return format!("<native function>"),
                 _ => (),
             }
