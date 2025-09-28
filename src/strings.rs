@@ -46,7 +46,7 @@ impl Buffer {
     }
 
     fn byte_count(&self) -> usize {
-        mem::size_of::<Self>() + self.string.capacity()
+        mem::size_of::<Self>() + self.string.capacity() + self.tos.capacity() * 4
     }
 }
 
@@ -54,10 +54,6 @@ pub struct Strings {
     handle_set: Box<[StringHandle]>,
     keys: Handles,
     mask: usize,
-    // could be one big string and a vec of offsets...
-    // even one Box<str>?
-    // Box<[u8]> would be a better choice, simply because
-    // it makes the intent to mutate clearer
     buffer: Buffer,
     offsets: Vec<u32>,
 }

@@ -194,12 +194,21 @@ impl CompileBuffer {
     }
 }
 
+struct Scope(usize);
+
+impl Scope {
+    const GLOBAL: Self = Self(usize::MAX);
+
+    pub fn is_global(&self) -> bool {
+        self.0 == usize::MAX
+    }
+}
+
 struct CompileData {
     function_type: FunctionType,
     locals_captured: BitArray,
     locals_initialized: BitArray,
     locals: Vec<StringHandle>,
-    scopes: Vec<u8>,
     upvalues_local: BitArray,
     upvalues: Vec<u8>,
 }
@@ -213,7 +222,6 @@ impl CompileData {
             locals_captured: BitArray::new(),
             locals_initialized: initialized,
             locals: vec![this_name],
-            scopes: Vec::new(),
             upvalues_local: BitArray::new(),
             upvalues: Vec::new(),
         }
@@ -263,8 +271,8 @@ impl CompileData {
         Ok(())
     }
 
-    fn mark_initialized(&mut self) -> bool {
-        if self.scopes.len() == 0 {
+    fn mark_initialized(&mut self, scope: &Scope) -> bool {
+        if scope.is_global() {
             // global scope, so initialization is not needed
             return false;
         }
@@ -272,14 +280,13 @@ impl CompileData {
         true
     }
 
-    fn declare_variable(&mut self, name: StringHandle) -> Result<(), String> {
-        if self.scopes.len() == 0 {
+    fn declare_variable(&mut self, name: StringHandle, scope: &Scope) -> Result<(), String> {
+        if scope.is_global() {
             // global scope, nothing to declare
             return Ok(());
         }
-        let l = self.scopes[self.scopes.len() - 1] as usize;
         let mut i = self.locals.len();
-        while i > l {
+        while i > scope.0 {
             i -= 1;
             if self.locals[i] == name {
                 return Err(format!("Already a variable with this name in this scope."));
@@ -363,15 +370,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.buffer.write_constant_op(op, value, line)
     }
 
-    fn begin_scope(&mut self) {
-        let scope_depth = self.head.locals.len() as u8;
-        self.head.scopes.push(scope_depth);
+    fn begin_scope(&mut self) -> Scope {
+        Scope(self.head.locals.len())
     }
 
-    fn end_scope(&mut self) {
-        let l = self.head.scopes.pop().unwrap() as usize;
+    fn end_scope(&mut self, scope: Scope) {
         let mut index = self.head.locals.len();
-        while index > l {
+        while index > scope.0 {
             index -= 1;
             self.emit_op(if self.head.locals_captured.has(index) {
                 Op::CloseUpvalue
@@ -678,11 +683,15 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn parse_variable(&mut self, error_msg: &str) -> Result<Option<StringHandle>, String> {
+    fn parse_variable(
+        &mut self,
+        scope: &Scope,
+        error_msg: &str,
+    ) -> Result<Option<StringHandle>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name: StringHandle = self.store_identifier()?;
-        self.head.declare_variable(name)?;
-        Ok(if self.head.scopes.len() > 0 {
+        self.head.declare_variable(name, scope)?;
+        Ok(if !scope.is_global() {
             None
         } else {
             // global
@@ -701,7 +710,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn function_body(&mut self) -> Result<u8, String> {
-        self.begin_scope();
+        let scope = self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         let mut arity: u8 = 0;
@@ -711,8 +720,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
                     return err!("Can't have more than 255 parameters.");
                 }
                 arity += 1;
-                let index = self.parse_variable("Expect parameter name")?;
-                self.define_variable(index)?;
+                let index = self.parse_variable(&scope, "Expect parameter name")?;
+                self.define_variable(index, &scope)?;
                 if !self.source.match_type(TokenType::Comma) {
                     break;
                 }
@@ -722,16 +731,21 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             .consume(TokenType::RightParen, "Expect ')' after parameters.")?;
         self.source
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
-        self.block()?;
+        self.block(&scope)?;
         self.emit_return();
+        self.end_scope(scope);
         Ok(arity)
     }
 
-    fn define_variable(&mut self, index: Option<StringHandle>) -> Result<(), String> {
+    fn define_variable(
+        &mut self,
+        index: Option<StringHandle>,
+        scope: &Scope,
+    ) -> Result<(), String> {
         Ok(if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
         } else {
-            self.head.mark_initialized();
+            self.head.mark_initialized(&scope);
         })
     }
 
@@ -787,19 +801,23 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn class(&mut self) -> Result<(), String> {
+    fn class(&mut self, scope: &Scope) -> Result<(), String> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
-        self.head.declare_variable(class_name)?;
+        self.head.declare_variable(class_name, scope)?;
         self.emit_constant_op(Op::Class, Value::from(class_name))?;
-        self.define_variable(if self.head.scopes.len() == 0 {
-            Some(class_name)
-        } else {
-            None
-        })?;
+        // oops
+        self.define_variable(
+            if scope.is_global() {
+                Some(class_name)
+            } else {
+                None
+            },
+            &scope,
+        )?;
 
-        self.head.mark_initialized();
+        self.head.mark_initialized(scope);
 
         if self.source.class_depth == 127 {
             return err!("Cannot nest classes that deep");
@@ -807,7 +825,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source.class_depth += 1;
 
         // super decl
-        if self.source.match_type(TokenType::Less) {
+        let maybe_scope = if self.source.match_type(TokenType::Less) {
             self.source
                 .consume(TokenType::Identifier, "Expect superclass name.")?;
             let super_name = self.store_identifier()?;
@@ -815,15 +833,18 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             if class_name == super_name {
                 return err!("A class can't inherit from itself.");
             }
-            self.begin_scope();
-            // yes, rust asks for this
+            let scope = self.begin_scope();
             let name = self.super_name;
             self.head.add_local(name)?;
-            self.head.mark_initialized();
+            self.head.mark_initialized(&scope);
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
+            // doesn't the extra scope tell us this?
             self.source.has_super.add(self.source.class_depth as usize);
-        }
+            Some(scope)
+        } else {
+            None
+        };
 
         // why this again?
         self.variable(class_name, false)?;
@@ -842,8 +863,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
         self.emit_op(Op::Pop);
 
-        if self.source.has_super.has(self.source.class_depth as usize) {
-            self.end_scope();
+        if let Some(scope) = maybe_scope {
+            self.end_scope(scope);
         }
 
         self.source
@@ -853,9 +874,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn fun_declaration(&mut self) -> Result<(), String> {
-        let index = self.parse_variable("Expect function name.")?;
-        self.head.mark_initialized();
+    fn fun_declaration(&mut self, scope: &Scope) -> Result<(), String> {
+        let index = self.parse_variable(scope, "Expect function name.")?;
+        self.head.mark_initialized(scope);
         self.function(FunctionType::Function)?;
         if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
@@ -863,8 +884,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(())
     }
 
-    fn var_declaration(&mut self) -> Result<(), String> {
-        let index = self.parse_variable("Expect variable name.")?;
+    fn var_declaration(&mut self, scope: &Scope) -> Result<(), String> {
+        let index = self.parse_variable(scope, "Expect variable name.")?;
         if self.source.match_type(TokenType::Equal) {
             self.expression()?;
         } else {
@@ -874,7 +895,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             TokenType::Semicolon,
             "Expect ';' after variable declaration.",
         )?;
-        self.define_variable(index)
+        self.define_variable(index, scope)
     }
 
     fn expression_statement(&mut self) -> Result<(), String> {
@@ -886,12 +907,12 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn for_statement(&mut self) -> Result<(), String> {
-        self.begin_scope();
+        let scope = self.begin_scope();
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after 'for'.")?;
         if !self.source.match_type(TokenType::Semicolon) {
             if self.source.match_type(TokenType::Var) {
-                self.var_declaration()
+                self.var_declaration(&scope)
             } else {
                 self.expression_statement()
             }?;
@@ -928,7 +949,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             self.buffer.patch_jump(i)?;
             self.emit_op(Op::Pop);
         }
-        self.end_scope();
+        self.end_scope(scope);
         Ok(())
     }
 
@@ -1006,13 +1027,13 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(Value::from(self.store_identifier()?))
     }
 
-    fn declaration(&mut self) {
+    fn declaration(&mut self, scope: &Scope) {
         let result = if self.source.match_type(TokenType::Class) {
-            self.class()
+            self.class(scope)
         } else if self.source.match_type(TokenType::Fun) {
-            self.fun_declaration()
+            self.fun_declaration(scope)
         } else if self.source.match_type(TokenType::Var) {
-            self.var_declaration()
+            self.var_declaration(scope)
         } else {
             self.statement()
         };
@@ -1038,9 +1059,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         } else if self.source.match_type(TokenType::While) {
             self.while_statement()
         } else if self.source.match_type(TokenType::LeftBrace) {
-            self.begin_scope();
-            let result = self.block();
-            self.end_scope();
+            let scope = self.begin_scope();
+            let result = self.block(&scope);
+            self.end_scope(scope);
             result
         } else {
             self.expression_statement()
@@ -1049,7 +1070,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn script(mut self) -> Result<FunctionHandle, String> {
         while !self.source.match_type(TokenType::End) {
-            self.declaration();
+            self.declaration(&Scope::GLOBAL);
         }
         self.emit_return();
         match self.source.error_count {
@@ -1064,9 +1085,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(fh)
     }
 
-    fn block(&mut self) -> Result<(), String> {
+    fn block(&mut self, scope: &Scope) -> Result<(), String> {
         while !self.source.check(TokenType::RightBrace) && !self.source.check(TokenType::End) {
-            self.declaration();
+            self.declaration(scope);
         }
         self.source
             .consume(TokenType::RightBrace, "Expect '}' after block.")?;

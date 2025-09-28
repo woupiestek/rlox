@@ -4,18 +4,18 @@
 
 ### todo
 
-- reduce madness: where columns are always used together and can be stored
-  without loss, do it!
-- record new performance numbers
+- ~~reduce madness: where columns are always used together and can be stored~~
+  ~~without loss, do it!~~
+- ~~record new performance numbers~~
 - local variables refactor
 - line numbers
 - fix the placeholder call frame in the vm?
-- refactor the call stack/vm to not need the heap as often
+- ~~refactor the call stack/vm to not need the heap as often~~
 - ~~compaction on doubling for strings and (maybe) classes.~~
-- separate names and strings?
-- reverse order for code?
+- ~~separate names and strings?~~
+- ~~reverse order for code?~~
 - compaction for functions?
-- use handles for 'chunk'?
+- ~~use handles for 'chunk'?~~
 
 ### new hash maps
 
@@ -53,7 +53,7 @@ performance, only partly because of the byte counts.
 - properties: 0.7400572299957275
 - string_equality: loop 1.220015287399292 elapsed 1.355548620223999 equals
   0.13553333282470703
-- trees: 5.302673816680908
+- trees: 4.618741989135742
 - zoo_batch: 3147
 - zoo: 0.5276131629943848
 
