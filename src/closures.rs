@@ -3,17 +3,11 @@ use std::mem;
 use crate::{
     functions::FunctionHandle,
     handles::Handles,
-    heap::{Collector, Handle, Pool, CLOSURE, FUNCTION},
+    heap::{Collector, Handle, Pool, Traceable, CLOSURE, FUNCTION},
     upvalues::UpvalueHandle,
 };
 
 pub type ClosureHandle = Handle<CLOSURE>;
-
-impl Default for ClosureHandle {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
 
 pub struct Closures {
     functions: Vec<FunctionHandle>,
@@ -118,16 +112,16 @@ impl Pool<CLOSURE> for Closures {
     }
     fn trace(&mut self, handle: Handle<CLOSURE>, collector: &mut Collector) {
         if handle.0 & Self::TOP_BIT == 0 {
-            collector.push_raw(FUNCTION, handle.0);
+            collector.push(FUNCTION, handle.0);
             return;
         }
 
         let index = (handle.0 ^ Self::TOP_BIT) as usize;
-        collector.push(self.functions[index]);
+        self.functions[index].trace(collector);
         let from = self.offsets[index] as usize;
         let to = from + self.upvalue_counts[index] as usize;
         for j in from..to {
-            collector.push(self.upvalues[j]);
+            self.upvalues[j].trace(collector);
         }
     }
 

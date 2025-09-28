@@ -3,6 +3,10 @@ use crate::{
     instances::Instances, strings::Strings, upvalues::Upvalues,
 };
 
+pub trait Traceable {
+    fn trace(&self, collector: &mut Collector);
+}
+
 pub struct Collector {
     pub handles: [Vec<u32>; 7],
 }
@@ -23,11 +27,7 @@ impl Collector {
         }
     }
 
-    pub fn push<const KIND: usize>(&mut self, handle: Handle<KIND>) {
-        self.push_raw(KIND, handle.0);
-    }
-
-    pub fn push_raw(&mut self, kind: usize, handle: u32) {
+    pub fn push(&mut self, kind: usize, handle: u32) {
         self.handles[kind].push(handle);
     }
 
@@ -142,6 +142,12 @@ impl<const KIND: usize> Handle<KIND> {
 impl<const KIND: usize> From<u32> for Handle<KIND> {
     fn from(value: u32) -> Self {
         Self(value)
+    }
+}
+
+impl<const KIND: usize> Traceable for Handle<KIND> {
+    fn trace(&self, collector: &mut Collector) {
+        collector.push(KIND, self.0);
     }
 }
 

@@ -3,7 +3,6 @@ use crate::{
     upvalues::UpvalueHandle, values::Value,
 };
 
-// get these on the stack.
 pub struct CallFrame {
     ip: isize,
     lp: usize,

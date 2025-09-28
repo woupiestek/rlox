@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::{
     handles::Handles,
-    heap::{Collector, Handle, Heap, Pool, FUNCTION},
+    heap::{Collector, Handle, Heap, Pool, Traceable, FUNCTION},
     strings::StringHandle,
     values::Value,
 };
@@ -182,7 +182,7 @@ impl Pool<FUNCTION> for Functions {
             return;
         }
         if self.names[handle.index()] != StringHandle::EMPTY {
-            collector.push(self.names[handle.index()])
+            self.names[handle.index()].trace(collector);
         }
         for constant in self.constants(handle) {
             self.chunk.constants[constant].trace(collector)

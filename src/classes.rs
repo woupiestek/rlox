@@ -1,7 +1,9 @@
+use std::mem;
+
 use crate::{
     closures::ClosureHandle,
     handles::Handles,
-    heap::{Collector, Handle, Pool, CLASS},
+    heap::{Collector, Handle, Pool, Traceable, CLASS},
     strings::{StringHandle, Strings},
 };
 
@@ -110,6 +112,7 @@ pub struct Classes {
     byte_count: usize,
     names: Vec<StringHandle>,
     methods: Vec<Batch>,
+    // to find all methods of a class for gc
     indices: Vec<Vec<u32>>,
     handles: Handles,
 }
@@ -117,7 +120,7 @@ pub struct Classes {
 impl Classes {
     pub fn new() -> Self {
         Self {
-            byte_count: 80,
+            byte_count: mem::size_of::<Classes>(),
             names: Vec::new(),
             methods: Vec::new(),
             indices: Vec::new(),
@@ -217,10 +220,10 @@ impl Pool<CLASS> for Classes {
         if !self.handles.mark(handle.0) {
             return;
         }
-        collector.push(self.names[handle.index()]);
+        self.names[handle.index()].trace(collector);
         for &index in &self.indices[handle.index()] {
-            collector.push(self.methods[handle.batch()].keys[index as usize]);
-            collector.push(self.methods[handle.batch()].closures[index as usize]);
+            self.methods[handle.batch()].keys[index as usize].trace(collector);
+            self.methods[handle.batch()].closures[index as usize].trace(collector);
         }
     }
 

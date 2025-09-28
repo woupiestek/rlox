@@ -1,6 +1,61 @@
 # Rlox
 
-## 2025-09-25
+## 2025-09-27
+
+### todo
+
+- reduce madness: where columns are always used together and can be stored without loss, do it!
+- record new performance numbers
+- local variables refactor
+- line numbers
+- fix the placeholder call frame in the vm?
+- refactor the call stack/vm to not need the heap as often
+- compaction on doubling for strings and (maybe) classes.
+- separate names and strings?
+- reverse order for code?
+- compaction for functions?
+- use handles for 'chunk'?
+
+### generational gc
+
+Have a nursery, insteads of just marking objects/space as still in use, count garbage collection cycles,
+and move object that get too old.
+
+### globals vs instance members
+
+Lox requires variables to be declared, and being declared is different from having a value other than `Nil`.
+So while `Nil` could mark tombstones in instances, this won't work for globals.
+
+For objects, the distinction is just as important though: unset value means that the class must provide the member
+instead.
+
+We can add new values, like `Placeholder` specifically for this usecase. 
+
+### blocked
+
+Two problems: safe space when allocating it for small hash maps, 
+while doing few allocations overall. Also, keep track of how much is allocated.
+
+Information: map sizes are null or a power of two.
+It is realively easy to allocate objects of the same size,
+But with vecs, the objects get moves secretly,
+when capacity runs out.
+
+0, 8, 16, 32, 64, 128, 256, 512, 1024, ...
+
+Idea: do not bother to allocate one bug buffer up front and managing the data inside
+without moving the object. Instead make a pool of maps for each capacity.
+If the pool needs to resize, it does not affect the objects.
+If the hashmap need to resize, the move to the next pool. 
+
+### strategy
+
+So the hash map repo just allocates more and more space,
+by the geometric sequence.
+It somehow also keeps track of which part are occupied and how big they are.
+
+
+## 2025-09-26
 
 ### todo
 

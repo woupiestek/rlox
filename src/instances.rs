@@ -1,7 +1,9 @@
+use std::mem;
+
 use crate::{
     classes::ClassHandle,
     handles::Handles,
-    heap::{Collector, Handle, Heap, Pool, INSTANCE},
+    heap::{Collector, Handle, Heap, Pool, Traceable, INSTANCE},
     strings::StringHandle,
     values::Value,
 };
@@ -20,7 +22,7 @@ const KNUTH_PHI: u32 = 2654435761;
 // so the garbage collector can count how many bytes were used
 impl Properties {
     fn byte_count(&self) -> usize {
-        40 + self.keys.len() * 12
+        mem::size_of::<Properties>() + self.keys.len() * 12
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
@@ -43,27 +45,24 @@ impl Properties {
         (key.0.wrapping_mul(KNUTH_PHI) >> self.leading_zeros) as usize
     }
 
-    fn find(&self, key: StringHandle) -> (bool, usize) {
+    fn find(&self, key: StringHandle) -> usize {
         let mut index = self.hash(key);
         let mut tombstone = usize::MAX;
         loop {
             match self.keys[index] {
                 StringHandle::EMPTY => {
-                    return (
-                        false,
-                        if tombstone < usize::MAX {
-                            tombstone
-                        } else {
-                            index
-                        },
-                    );
+                    return if tombstone < usize::MAX {
+                        tombstone
+                    } else {
+                        index
+                    };
                 }
                 StringHandle::TOMBSTONE => {
                     tombstone = index;
                 }
                 other => {
                     if other == key {
-                        return (true, index);
+                        return index;
                     }
                 }
             }
@@ -72,8 +71,8 @@ impl Properties {
     }
 
     pub fn get(&self, key: StringHandle) -> Option<Value> {
-        let (found, index) = self.find(key);
-        if found {
+        let index = self.find(key);
+        if self.keys[index] == key {
             Some(self.values[index])
         } else {
             None
@@ -91,9 +90,9 @@ impl Properties {
         if self.is_full() {
             return false;
         }
-        let (found, index) = self.find(key);
+        let index = self.find(key);
         self.values[index] = value;
-        if found {
+        if self.keys[index] == key {
             return false;
         }
         self.keys[index] = key;
@@ -107,7 +106,7 @@ impl Properties {
             if !key.is_valid() {
                 continue;
             }
-            collector.push(key);
+            key.trace(collector);
             self.values[index].trace(collector);
         }
     }
@@ -124,11 +123,12 @@ impl Properties {
         new_properties
     }
 
-    pub fn delete(&mut self, name: StringHandle) {
-        let (found, index) = self.find(name);
-        if found {
+    pub fn delete(&mut self, key: StringHandle) {
+        let index = self.find(key);
+        if self.keys[index] == key {
             self.keys[index] = StringHandle::TOMBSTONE;
             self.values[index] = Value::NIL;
+            // not counted. tombstones must be removed
         }
     }
 }
@@ -204,7 +204,7 @@ impl Pool<INSTANCE> for Instances {
         if !self.handles.mark(handle.0) {
             return;
         }
-        collector.push(self.classes[handle.index()]);
+        self.classes[handle.index()].trace(collector);
         self.properties[handle.index()].trace(collector);
     }
 

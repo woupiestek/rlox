@@ -3,7 +3,7 @@ use std::{mem, ops::RangeInclusive};
 use crate::{
     common::STACK_SIZE,
     handles::Handles,
-    heap::{Collector, Handle, Pool, UPVALUE},
+    heap::{Collector, Handle, Pool, Traceable, UPVALUE},
     values::Value,
 };
 
@@ -171,7 +171,7 @@ impl Upvalues {
 
     pub fn trace_roots(&self, collector: &mut Collector) {
         for &i in &self.open_heap {
-            collector.push(i)
+            i.trace(collector);
         }
     }
 

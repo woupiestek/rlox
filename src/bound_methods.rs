@@ -1,7 +1,7 @@
 use crate::{
     closures::ClosureHandle,
     handles::Handles,
-    heap::{Collector, Handle, Heap, Pool, BOUND_METHOD},
+    heap::{Collector, Handle, Heap, Pool, Traceable, BOUND_METHOD},
     instances::InstanceHandle,
 };
 
@@ -47,8 +47,8 @@ impl Pool<BOUND_METHOD> for BoundMethods {
     fn trace(&mut self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
         if self.handles.mark(handle.0) {
             let (i, c) = self.unpack(handle);
-            collector.push(i);
-            collector.push(c);
+            i.trace(collector);
+            c.trace(collector);
         }
     }
 

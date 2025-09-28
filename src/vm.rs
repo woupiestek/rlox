@@ -8,7 +8,7 @@ use crate::{
     common::STACK_SIZE,
     compiler::compile,
     functions::FunctionHandle,
-    heap::{Collector, Handle, Heap, Pool, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
+    heap::{Collector, Handle, Heap, Pool, Traceable, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
     instances::{InstanceHandle, Properties},
     natives::{NativeHandle, Natives},
     op::Op,
@@ -98,9 +98,9 @@ impl VM {
         {
             println!("collect frames");
         }
-        self.collector.push(self.call_frame.closure);
+        self.call_frame.closure.trace(&mut self.collector);
         for frame in &self.call_stack {
-            self.collector.push(frame.closure);
+            frame.closure.trace(&mut self.collector);
         }
         #[cfg(feature = "log_gc")]
         {
@@ -117,7 +117,7 @@ impl VM {
         {
             println!("collect init string");
         }
-        self.collector.push(self.init_string);
+        self.init_string.trace(&mut self.collector);
         #[cfg(feature = "log_gc")]
         {
             println!("collect main function");

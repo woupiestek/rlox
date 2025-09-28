@@ -1,7 +1,8 @@
 // run time data structures
 
 use crate::heap::{
-    Collector, Handle, Heap, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE, STRING,
+    Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE,
+    STRING,
 };
 
 // nan box?
@@ -84,14 +85,6 @@ impl Value {
         return Some(((self.0 >> 32) & 0xffff) as usize);
     }
 
-    pub fn trace(&self, collector: &mut Collector) {
-        if let Some(kind) = self.kind() {
-            if kind < 7 {
-                collector.push_raw(kind, self.0 as u32);
-            }
-        }
-    }
-
     pub fn to_string(&self, heap: &Heap) -> String {
         match self {
             &Value::FALSE => return format!("false"),
@@ -133,6 +126,16 @@ impl Value {
         }
 
         format!("<invalid {:#x}>", self.0)
+    }
+}
+
+impl Traceable for Value {
+    fn trace(&self, collector: &mut Collector) {
+        if let Some(kind) = self.kind() {
+            if kind < 7 {
+                collector.push(kind, self.0 as u32);
+            }
+        }
     }
 }
 
