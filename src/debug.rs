@@ -2,12 +2,14 @@ use crate::{
     functions::{Chunk, FunctionHandle},
     heap::Heap,
     op::Op,
+    values::Value,
 };
 
 pub struct Disassembler<'hp> {
     heap: &'hp Heap,
     fh: FunctionHandle,
     ip: usize,
+    cp: usize,
 }
 
 impl<'hp> Disassembler<'hp> {
@@ -16,25 +18,43 @@ impl<'hp> Disassembler<'hp> {
             heap,
             fh: FunctionHandle::MAIN,
             ip: 0,
+            cp: 0,
         }
         .run();
     }
 
     fn chunk(&self) -> &Chunk {
-        self.heap.functions.chunk_ref(self.fh)
+        &self.heap.functions.chunk
+    }
+
+    fn read_constant(&self) -> Value {
+        // fuck!
+        self.chunk()
+            .read_constant(self.cp + self.chunk().read_byte(self.ip) as usize)
     }
 
     fn run(&mut self) {
-        for i in 0..self.heap.functions.count() {
+        let l = self.heap.functions.count();
+        for i in 0..l {
             self.fh = FunctionHandle::from(i as u32);
             println!("{}:", self.heap.functions.to_string(self.fh, self.heap));
-            self.ip = 0;
-            self.code();
+            let frame = self.heap.functions.get_frame(self.fh);
+            self.cp = frame.cp;
+            self.ip = frame.ip;
+            let end = if i + 1 < l {
+                self.heap
+                    .functions
+                    .get_frame(FunctionHandle::from(i as u32 + 1))
+                    .ip
+            } else {
+                self.chunk().len()
+            };
+            self.code(end);
         }
     }
 
-    fn code(&mut self) {
-        while self.ip < self.chunk().ip() {
+    fn code(&mut self, len: usize) {
+        while self.ip < len {
             print!("{}:", self.ip);
             let op_code = match Op::try_from(self.chunk().read_byte(self.ip)) {
                 Err(_) => {
@@ -75,14 +95,14 @@ impl<'hp> Disassembler<'hp> {
         self.ip += 1;
     }
     fn constant(&mut self) {
-        let value = self.chunk().read_constant(self.ip);
+        let value = self.read_constant();
         print!(" {}", value.to_string(&self.heap));
         self.ip += 1;
     }
     fn invoke(&mut self) {
         print!(
             " {} ({})",
-            self.chunk().read_constant(self.ip).to_string(&self.heap),
+            self.read_constant().to_string(&self.heap),
             self.chunk().read_byte(self.ip + 1)
         );
         self.ip += 2;

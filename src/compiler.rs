@@ -199,49 +199,99 @@ struct Scope(usize);
 impl Scope {
     const GLOBAL: Self = Self(usize::MAX);
 
-    pub fn is_global(&self) -> bool {
+    fn is_global(&self) -> bool {
         self.0 == usize::MAX
+    }
+}
+
+struct Locals {
+    captured: BitArray,
+    initialized: BitArray,
+    names: Vec<StringHandle>,
+}
+
+impl Locals {
+    fn new() -> Self {
+        Self {
+            captured: BitArray::new(),
+            initialized: BitArray::new(),
+            names: Vec::new(),
+        }
+    }
+
+    fn truncate(&mut self, index: usize) {
+        self.captured.truncate(index);
+        self.initialized.truncate(index);
+        self.names.truncate(index);
+    }
+
+    fn find(&self, name: StringHandle) -> Option<usize> {
+        for i in (0..self.names.len()).rev() {
+            if self.names[i] == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn resolve(&self, name: StringHandle) -> Result<Option<usize>, String> {
+        if let Some(i) = self.find(name) {
+            if !self.initialized.has(i) {
+                err!("Can't read local variable in its own initializer.")
+            } else {
+                Ok(Some(i))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn add(&mut self, name: StringHandle) {
+        self.names.push(name);
+    }
+
+    fn mark_initialized(&mut self, scope: &Scope) -> bool {
+        if scope.is_global() {
+            // global scope, so initialization is not needed
+            return false;
+        }
+        self.initialized.add(self.names.len() - 1);
+        true
+    }
+
+    fn declare(&mut self, name: StringHandle, scope: &Scope) -> Result<(), String> {
+        if scope.is_global() {
+            // global scope, nothing to declare
+            return Ok(());
+        }
+        let mut i = self.names.len();
+        if i > scope.0 + u8::MAX as usize {
+            return err!("Too many local variables in function.");
+        }
+        while i > scope.0 {
+            i -= 1;
+            if self.names[i] == name {
+                return Err(format!("Already a variable with this name in this scope."));
+            }
+        }
+        Ok(self.add(name))
     }
 }
 
 struct CompileData {
     function_type: FunctionType,
-    locals_captured: BitArray,
-    locals_initialized: BitArray,
-    locals: Vec<StringHandle>,
     upvalues_local: BitArray,
     upvalues: Vec<u8>,
+    offset: usize,
 }
 
 impl CompileData {
-    fn new(function_type: FunctionType, this_name: StringHandle) -> Self {
-        let mut initialized = BitArray::new();
-        initialized.add(0); // first local
+    fn new(function_type: FunctionType, offset: usize) -> Self {
         Self {
             function_type,
-            locals_captured: BitArray::new(),
-            locals_initialized: initialized,
-            locals: vec![this_name],
             upvalues_local: BitArray::new(),
             upvalues: Vec::new(),
-        }
-    }
-
-    fn resolve_local(&self, name: StringHandle) -> Result<Option<u8>, String> {
-        let mut i = self.locals.len();
-        loop {
-            if i == 0 {
-                return Ok(None);
-            } else {
-                i -= 1;
-            }
-            if self.locals[i] == name {
-                return if !self.locals_initialized.has(i) {
-                    err!("Can't read local variable in its own initializer.")
-                } else {
-                    Ok(Some(i as u8))
-                };
-            }
+            offset,
         }
     }
 
@@ -263,36 +313,9 @@ impl CompileData {
         Ok(count as u8)
     }
 
-    fn add_local(&mut self, name: StringHandle) -> Result<(), String> {
-        if self.locals.len() > u8::MAX as usize {
-            return err!("Too many local variables in function.");
-        }
-        self.locals.push(name);
-        Ok(())
-    }
-
-    fn mark_initialized(&mut self, scope: &Scope) -> bool {
-        if scope.is_global() {
-            // global scope, so initialization is not needed
-            return false;
-        }
-        self.locals_initialized.add(self.locals.len() - 1);
-        true
-    }
-
-    fn declare_variable(&mut self, name: StringHandle, scope: &Scope) -> Result<(), String> {
-        if scope.is_global() {
-            // global scope, nothing to declare
-            return Ok(());
-        }
-        let mut i = self.locals.len();
-        while i > scope.0 {
-            i -= 1;
-            if self.locals[i] == name {
-                return Err(format!("Already a variable with this name in this scope."));
-            }
-        }
-        self.add_local(name)
+    fn offset(&self, local: usize) -> u8 {
+        assert!(local <= self.offset + u8::MAX as usize);
+        (local - self.offset) as u8
     }
 }
 
@@ -304,20 +327,25 @@ struct Compiler<'src, 'hp> {
     heap: &'hp mut Heap,
     this_name: StringHandle,
     super_name: StringHandle,
+    locals: Locals,
 }
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
         let this_name = heap.strings.put("this");
         let super_name = heap.strings.put("super");
+        let mut locals = Locals::new();
+        locals.add(this_name);
+        locals.initialized.add(0);
         Self {
-            head: CompileData::new(function_type, this_name),
+            head: CompileData::new(function_type, 0),
             tail: Vec::new(),
             buffer: CompileBuffer::new(),
             source,
             heap,
             this_name,
             super_name,
+            locals,
         }
     }
 
@@ -371,20 +399,20 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     fn begin_scope(&mut self) -> Scope {
-        Scope(self.head.locals.len())
+        Scope(self.locals.names.len())
     }
 
     fn end_scope(&mut self, scope: Scope) {
-        let mut index = self.head.locals.len();
+        let mut index = self.locals.names.len();
         while index > scope.0 {
             index -= 1;
-            self.emit_op(if self.head.locals_captured.has(index) {
+            self.emit_op(if self.locals.captured.has(index) {
                 Op::CloseUpvalue
             } else {
                 Op::Pop
             });
-            self.head.locals.pop();
         }
+        self.locals.truncate(scope.0);
     }
 
     fn argument_list(&mut self) -> Result<u8, String> {
@@ -511,27 +539,29 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.emit_constant_op(Op::Constant, Value::from(value))
     }
 
-    // this says something about resolve upvalue...
-    fn data(&mut self, i: usize) -> &mut CompileData {
-        if i == self.tail.len() {
-            &mut self.head
-        } else {
-            &mut self.tail[i]
+    // most likely cause, but how!?
+    fn capture_upvalue(&mut self, index: usize) -> Result<u8, String> {
+        assert!(self.head.offset > index);
+        self.locals.captured.add(index);
+        // find the home of the local variable
+        let mut cd = self.tail.len();
+        loop {
+            cd -= 1;
+            if self.tail[cd].offset <= index {
+                break;
+            }
         }
-    }
-
-    fn resolve_upvalue(&mut self, i: usize, name: StringHandle) -> Result<Option<u8>, String> {
-        if i == 0 {
-            return Ok(None);
+        let local = self.tail[cd].offset(index);
+        cd += 1;
+        if cd == self.tail.len() {
+            return Ok(self.head.add_upvalue(local, true)?);
         }
-        if let Some(index) = self.data(i - 1).resolve_local(name)? {
-            self.data(i - 1).locals_captured.add(index as usize);
-            return Ok(Some(self.data(i).add_upvalue(index, true)?));
+        // create all necessary upvalues.
+        let mut upvalue = self.tail[cd].add_upvalue(local, true)?;
+        for i in (cd + 1)..self.tail.len() {
+            upvalue = self.tail[i].add_upvalue(upvalue, false)?;
         }
-        if let Some(upvalue) = self.resolve_upvalue(i - 1, name)? {
-            return Ok(Some(self.data(i).add_upvalue(upvalue, false)?));
-        }
-        return Ok(None);
+        return Ok(self.head.add_upvalue(upvalue, false)?);
     }
 
     // emit code for variable access
@@ -540,28 +570,30 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         if is_assignment {
             self.expression()?;
         }
-        if let Some(arg) = self.head.resolve_local(name)? {
-            self.emit_byte_op(
-                if is_assignment {
-                    Op::SetLocal
-                } else {
-                    Op::GetLocal
-                },
-                arg,
-            );
-            return Ok(());
-        }
-        if let Some(arg) = self.resolve_upvalue(self.tail.len(), name)? {
+        if let Some(arg) = self.locals.resolve(name)? {
+            if self.head.offset <= arg {
+                self.emit_byte_op(
+                    if is_assignment {
+                        Op::SetLocal
+                    } else {
+                        Op::GetLocal
+                    },
+                    self.head.offset(arg),
+                );
+                return Ok(());
+            }
+            let uv = self.capture_upvalue(arg)?;
             self.emit_byte_op(
                 if is_assignment {
                     Op::SetUpvalue
                 } else {
                     Op::GetUpvalue
                 },
-                arg,
+                uv,
             );
             return Ok(());
         }
+
         self.emit_constant_op(
             if is_assignment {
                 Op::SetGlobal
@@ -690,7 +722,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     ) -> Result<Option<StringHandle>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
         let name: StringHandle = self.store_identifier()?;
-        self.head.declare_variable(name, scope)?;
+        self.locals.declare(name, scope)?;
         Ok(if !scope.is_global() {
             None
         } else {
@@ -711,6 +743,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn function_body(&mut self) -> Result<u8, String> {
         let scope = self.begin_scope();
+        self.locals.add(self.this_name);
+        self.locals.mark_initialized(&scope);
         self.source
             .consume(TokenType::LeftParen, "Expect '(' after function name.")?;
         let mut arity: u8 = 0;
@@ -732,8 +766,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source
             .consume(TokenType::LeftBrace, "Expect '{' before function body")?;
         self.block(&scope)?;
-        self.emit_return();
         self.end_scope(scope);
+        self.emit_return();
         Ok(arity)
     }
 
@@ -745,23 +779,27 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         Ok(if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
         } else {
-            self.head.mark_initialized(&scope);
+            self.locals.mark_initialized(&scope);
         })
     }
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
         let name = self.heap.strings.put(name);
-
+        self.buffer.open_frame();
+        let offset = self.locals.names.len();
         self.tail.push(mem::replace(
             &mut self.head,
-            CompileData::new(function_type, self.this_name),
+            CompileData::new(function_type, offset),
         ));
-        self.buffer.open_frame();
+
         // the 'recursive' call
         let arity = self.function_body()?;
 
         let enclosed = mem::replace(&mut self.head, self.tail.pop().unwrap());
+
+        // avoid generating more instructions
+        self.locals.truncate(offset);
 
         // careful: this only works because of the function up there.
         let frame = self.buffer.close_frame(&mut self.heap.functions.chunk);
@@ -772,6 +810,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             enclosed.upvalues.len() as u8,
             frame,
         );
+        // end scope here, and see errors about undefined variables with panics over line numbers
 
         self.emit_constant_op(Op::Closure, Value::from(function))?;
 
@@ -805,7 +844,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.source
             .consume(TokenType::Identifier, "Expect class name.")?;
         let class_name = self.store_identifier()?;
-        self.head.declare_variable(class_name, scope)?;
+        self.locals.declare(class_name, scope)?;
         self.emit_constant_op(Op::Class, Value::from(class_name))?;
         // oops
         self.define_variable(
@@ -817,7 +856,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             &scope,
         )?;
 
-        self.head.mark_initialized(scope);
+        self.locals.mark_initialized(scope);
 
         if self.source.class_depth == 127 {
             return err!("Cannot nest classes that deep");
@@ -835,8 +874,8 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
             }
             let scope = self.begin_scope();
             let name = self.super_name;
-            self.head.add_local(name)?;
-            self.head.mark_initialized(&scope);
+            self.locals.add(name);
+            self.locals.mark_initialized(&scope);
             self.variable(class_name, false)?;
             self.emit_op(Op::Inherit);
             // doesn't the extra scope tell us this?
@@ -876,7 +915,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn fun_declaration(&mut self, scope: &Scope) -> Result<(), String> {
         let index = self.parse_variable(scope, "Expect function name.")?;
-        self.head.mark_initialized(scope);
+        self.locals.mark_initialized(scope);
         self.function(FunctionType::Function)?;
         if let Some(name) = index {
             self.emit_constant_op(Op::DefineGlobal, Value::from(name))?;
@@ -1220,11 +1259,11 @@ mod tests {
     use super::*;
 
     macro_rules! disassemble {
-        ($bc:expr,$h:expr) => {
+        ($h:expr) => {
             #[cfg(feature = "trace")]
             {
                 use crate::debug::Disassembler;
-                Disassembler::disassemble($bc, $h);
+                Disassembler::disassemble($h);
             }
         };
     }
@@ -1309,7 +1348,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1318,7 +1357,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1327,7 +1366,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1343,7 +1382,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1355,7 +1394,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1364,7 +1403,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1385,7 +1424,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1401,7 +1440,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1431,7 +1470,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1448,7 +1487,7 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 
     #[test]
@@ -1468,6 +1507,6 @@ mod tests {
         let mut heap = Heap::new();
         let result = compile(test, &mut heap);
         assert!(result.is_ok(), "{}", result.unwrap_err());
-        disassemble!(&result.unwrap(), &heap);
+        disassemble!(&heap);
     }
 }

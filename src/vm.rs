@@ -279,18 +279,6 @@ impl VM {
                     print!("{};", &self.values[i].to_string(&self.heap));
                 }
                 println!("");
-
-                print!("globals: ");
-                for k in self.globals.keys() {
-                    print!(
-                        "{}:{};",
-                        self.heap.strings.get(k).unwrap(),
-                        self.globals.get(k).unwrap().to_string(&self.heap)
-                    )
-                }
-                println!("");
-
-                self.call_stack.print_trace(&self.heap);
                 println!("op code: {:?}", instruction);
                 println!();
             }

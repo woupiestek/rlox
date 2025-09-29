@@ -41,6 +41,15 @@ impl BitArray {
         }
         self.save(i, self.data[i] & !(1 << (index & 7)))
     }
+
+    pub fn truncate(&mut self, index: usize) -> bool {
+        let i = index / 8;
+        if i >= self.data.len() {
+            return false;
+        }
+        self.data.truncate(i + 1);
+        self.save(i, self.data[i] & ((1 << (index & 7)) - 1))
+    }
 }
 
 #[cfg(test)]

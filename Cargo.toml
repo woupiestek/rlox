@@ -5,3 +5,4 @@ edition = "2021"
 [features]
 trace = []
 log_gc = []
+# default = ["trace"]

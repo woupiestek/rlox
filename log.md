@@ -1,5 +1,69 @@
 # Rlox
 
+## 2025-09-29
+
+### todo
+
+- local variables refactor
+- line numbers
+- fix the placeholder call frame in the vm?
+- compaction for functions?
+
+### trees
+
+In order traversal: is more than one bit of data needed? i.e.
+`is_right_most_sibling` ok, maybe four options:
+
+- leaf node
+- last node
+- last leaf node
+- neither
+
+### broken
+
+I tried the local variable refactor and broke the compiler.
+
+One failing test:
+
+    vm::tests::upvalues
+
+    "
+        fun makeCounter() {
+            var i = 0;
+            fun count() {
+              i = i + 1;
+              print i;
+            }
+            return count;
+        }
+        var counter = makeCounter();
+        counter();
+        ";
+
+But why?
+
+<fn count (0/1)>: 0:GetUpvalue 0; 2:Constant 1; 4:Add; 5:SetUpvalue 0; 7:Pop;
+8:GetUpvalue 0; 10:Print; 11:Nil; 12:Return; 13:Pop; <fn makeCounter (0/1)>:
+14:Constant 0; 16:Closure <fn count (0/1)>; 18:Constant 0; 20:GetLocal 2;
+22:Return; 23:Nil; 24:Return; 25:Pop; 26:CloseUpvalue; 27:Pop;
+
+<script>:
+28:Closure <fn makeCounter (0/1)>;
+30:Nil;
+31:Nil;
+32:DefineGlobal makeCounter;
+34:GetGlobal makeCounter;
+36:Call 0;
+38:DefineGlobal counter;
+40:GetGlobal counter;
+42:Call 0;
+44:Pop;
+45:Nil;
+46:Return;
+
+An off by one error. Of course.
+
+
 ## 2025-09-28
 
 ### todo
@@ -2268,7 +2332,7 @@ seem ok.
 
 Take up an additional byte to distinguish 'locals' and 'non locals'
 
-### 
+###
 
 We could make it more clox like by wrapping uszie in a struct and defining
 Deref... How to do the implicit dependency on the stack?

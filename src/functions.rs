@@ -77,6 +77,11 @@ impl Chunk {
     pub fn read_constant(&self, cp: usize) -> Value {
         self.constants[cp]
     }
+
+    #[cfg(feature = "trace")]
+    pub fn len(&self) -> usize {
+        self.code.len()
+    }
 }
 
 pub type FunctionHandle = Handle<FUNCTION>;
@@ -152,7 +157,7 @@ impl Functions {
 
     #[cfg(feature = "trace")]
     pub fn count(&self) -> usize {
-        self.chunks.len()
+        self.chunk.frames.len()
     }
 
     pub fn to_string(&self, fh: FunctionHandle, heap: &Heap) -> String {
