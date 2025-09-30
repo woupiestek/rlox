@@ -4,7 +4,41 @@
 
 ### todo
 
-- local variables refactor
+- line numbers
+- fix the placeholder call frame in the vm?
+- compaction for functions?
+
+### run the call frame
+
+Running the call frame...
+Would that work?
+Change the place that date is stored.
+
+Steps: 
+- run always called from call or init, so integrate those.
+- then do the loop with the data in the local frame.
+
+Universal function idea.
+
+What might the effect be?
+
+On the positive side, keeping callframe on the stack etc. could be more efficient.
+On the negative, recursive calls may not be optimised as much.
+
+### boxes
+
+Idea for language 2: instead of objects, access to the heap is controlled with garbage collected boxes.
+So basically there are alegebraic types, probabaly parametric and general as well.
+To have something that gets passed by reference, though, you need to box it.
+
+Perhaps an extra limitation is that there need ot be classes of boxes, but idk.
+
+
+## 2025-09-29
+
+### todo
+
+- ~~local variables refactor~~
 - line numbers
 - fix the placeholder call frame in the vm?
 - compaction for functions?

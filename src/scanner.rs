@@ -94,12 +94,25 @@ impl<'src> Scanner<'src> {
         return (line, column);
     }
 
-    pub fn new_lines(source: &str) -> Vec<usize> {
-        source
-            .char_indices()
-            .filter(|it| it.1 == '\n')
-            .map(|it| it.0)
-            .collect()
+    pub fn line_numbers(source: &str, token_offsets: &[usize]) -> Box<[u16]> {
+        let mut lines = vec![0; token_offsets.len()].into_boxed_slice();
+        let mut line: u16 = 1;
+        let mut index = 0;
+        for (i, c) in source.char_indices() {
+            if c != '\n' {
+                continue;
+            }
+            while token_offsets[index] < i {
+                lines[index] = line;
+                index += 1;
+            }
+            line += 1;
+        }
+        while token_offsets[index] < source.len() {
+            lines[index] = line;
+            index += 1;
+        }
+        lines
     }
 
     fn next_utf8(&self, index: usize) -> usize {

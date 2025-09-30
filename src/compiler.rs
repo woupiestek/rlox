@@ -1137,7 +1137,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 pub struct Source<'src> {
     source: &'src str,
     tokens: Tokens,
-    lines: Vec<u16>,
+    lines: Box<[u16]>,
     current: usize,
     has_super: BitArray,
     class_depth: u8,
@@ -1148,7 +1148,7 @@ pub struct Source<'src> {
 impl<'src> Source<'src> {
     pub fn new(source: &'src str) -> Self {
         let tokens = Scanner::scan(source);
-        let lines = Source::get_line_numbers(source, &tokens.froms);
+        let lines = Scanner::line_numbers(source, &tokens.froms);
         Self {
             source,
             tokens,
@@ -1158,19 +1158,6 @@ impl<'src> Source<'src> {
             class_depth: 0,
             error_count: 0,
         }
-    }
-
-    fn get_line_numbers(source: &'src str, offsets: &Vec<usize>) -> Vec<u16> {
-        let new_lines = Scanner::new_lines(source);
-        let mut line_numbers = Vec::new();
-        let mut count = 0;
-        for &offset in offsets {
-            if count < new_lines.len() && new_lines[count] < offset {
-                count += 1;
-            }
-            line_numbers.push(count as u16 + 1);
-        }
-        line_numbers
     }
 
     fn advance(&mut self) {
