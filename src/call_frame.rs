@@ -4,33 +4,24 @@ use crate::{
 };
 
 pub struct CallFrame {
-    ip: isize,
-    lp: usize,
-    cp: usize,
-    pub slot: usize,
-    pub closure: ClosureHandle,
+    pub ip: isize, // changing
+    cp: usize,     // stored in closure
+    up: usize,     // stored in closure
+    pub slot: usize, // unique
+                   //    pub closure: ClosureHandle, // closure
 }
 
 impl CallFrame {
-    pub fn placeholder() -> Self {
-        Self {
-            ip: -1,
-            lp: 0,
-            cp: 0,
-            slot: 0,
-            closure: ClosureHandle::from(0),
-        }
-    }
     pub fn new(slot: usize, closure: ClosureHandle, heap: &Heap) -> Self {
         let function = heap.closures.get_function(closure);
-        let &ChunkFrame { ip, lp, cp } = heap.functions.get_frame(function);
+        let &ChunkFrame { ip, lp: _, cp } = heap.functions.get_frame(function);
+        let up = heap.closures.up(closure);
         Self {
             // stick to putting the pointer next to the code to read
             ip: ip as isize - 1,
-            lp,
             cp,
+            up,
             slot,
-            closure,
         }
     }
 
@@ -54,7 +45,7 @@ impl CallFrame {
     }
 
     pub fn get_upvalue(&self, heap: &Heap, index: usize) -> UpvalueHandle {
-        heap.closures.upvalues[heap.closures.up(self.closure) + index]
+        heap.closures.upvalues[self.up + index]
     }
 
     pub fn read_upvalue<'b>(&mut self, heap: &Heap) -> UpvalueHandle {
@@ -74,12 +65,13 @@ impl CallFrame {
         self.ip += 2
     }
 
-    pub fn print(&self, heap: &Heap) {
-        let fh = heap.closures.get_function(self.closure);
+    pub fn print(ip: isize, ch: ClosureHandle, heap: &Heap) {
+        let fh = heap.closures.get_function(ch);
+        let lp = heap.functions.get_frame(fh).lp;
         eprintln!(
             "  at {} line {}",
             heap.functions.to_string(fh, heap),
-            heap.functions.chunk.get_line(self.lp, self.ip as usize)
+            heap.functions.chunk.get_line(lp, ip as usize)
         )
     }
 }

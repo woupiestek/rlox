@@ -42,7 +42,10 @@ impl Closures {
 
     // remember that offsets can be out of order
     pub fn up(&self, ch: ClosureHandle) -> usize {
-        assert_ne!(ch.0 & Self::TOP_BIT, 0);
+        // assert_ne!(ch.0 & Self::TOP_BIT, 0);
+        if ch.0 & Self::TOP_BIT == 0 {
+            return 0;
+        }
         let h = (ch.0 ^ Self::TOP_BIT) as usize;
         self.offsets[h] as usize
     }

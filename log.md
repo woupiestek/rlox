@@ -1,11 +1,12 @@
 # Rlox
 
-## 2025-09-29
+## 2025-09-30
 
 ### todo
 
+- restore stack traces
 - line numbers
-- fix the placeholder call frame in the vm?
+- ~~fix the placeholder call frame in the vm?~~
 - compaction for functions?
 
 ### run the call frame
@@ -24,6 +25,16 @@ What might the effect be?
 
 On the positive side, keeping callframe on the stack etc. could be more efficient.
 On the negative, recursive calls may not be optimised as much.
+
+### conclusions:
+
+- For stack traces, it is necessary to keep closures and instruction pointers
+- From these the call frames can always be restored
+- For performance, there either is no difference, or it is slightly worse than before.
+
+Plan: 
+- Keep a called vec and ip vec
+- Keep the arg to run, but don't do recursive calls.
 
 ### boxes
 
