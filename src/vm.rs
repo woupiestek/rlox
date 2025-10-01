@@ -1,4 +1,4 @@
-use std::time;
+use std::{mem, time};
 
 use crate::{
     bound_methods::BoundMethodHandle,
@@ -35,14 +35,14 @@ macro_rules! binary_op {
 pub struct VM {
     values: [Value; STACK_SIZE],
     stack_top: usize,
+    call_frame: CallFrame,
     call_stack: Vec<CallFrame>,
-    called: Vec<ClosureHandle>,
+    loaded: Vec<ClosureHandle>,
     globals: InstanceHandle,
     init_string: StringHandle,
     heap: Heap,
     natives: Natives,
     collector: Collector,
-    ip: isize,
 }
 
 impl VM {
@@ -54,14 +54,14 @@ impl VM {
         let mut s = Self {
             values: [Value::NIL; STACK_SIZE],
             stack_top: 0,
+            call_frame: CallFrame::placeholder(),
             call_stack: Vec::new(),
-            called: Vec::new(),
+            loaded: Vec::new(),
             globals,
             init_string,
             heap,
             natives: Natives::new(),
             collector: Collector::new(),
-            ip: 0,
         };
         s.define_native("clock", clock_native);
         s
@@ -100,7 +100,7 @@ impl VM {
         {
             println!("collect frames");
         }
-        for closure in &self.called {
+        for closure in &self.loaded {
             closure.trace(&mut self.collector);
         }
         #[cfg(feature = "log_gc")]
@@ -155,11 +155,12 @@ impl VM {
         self.values[self.stack_top - 1 - distance]
     }
 
-    fn init(&mut self, fh: FunctionHandle) -> Result<ClosureHandle, String> {
+    fn init(&mut self, fh: FunctionHandle) {
         let closure = self.heap.closures.new_closure(fh, 0);
         // what is this for?
         self.push(Value::from(closure));
-        Ok(closure)
+        self.call_frame = CallFrame::new(self.stack_top - 1, closure, &self.heap);
+        self.loaded.push(closure);
     }
 
     fn check(&self, closure: ClosureHandle, arity: u8) -> Result<(), String> {
@@ -171,7 +172,7 @@ impl VM {
         Ok(())
     }
 
-    fn call_value(&mut self, callee: Value, arity: u8) -> Result<Option<ClosureHandle>, String> {
+    fn call_value(&mut self, callee: Value, arity: u8) -> Result<(), String> {
         match callee.kind() {
             Some(CLASS) => {
                 let class = ClassHandle::try_from(callee)?;
@@ -179,7 +180,7 @@ impl VM {
                 let instance = self.heap.instances.new_instance(class);
                 self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
                 if let Some(init) = self.heap.classes.get_method(class, self.init_string) {
-                    return Ok(Some(init));
+                    return self.push_frame(init, arity);
                 } else if arity > 0 {
                     // after garbage collection, classes get method init string is empty... why!?
                     return err!(
@@ -188,7 +189,7 @@ impl VM {
                         arity
                     );
                 } else {
-                    return Ok(None);
+                    return Ok(());
                 }
             }
             Some(BOUND_METHOD) => {
@@ -196,7 +197,7 @@ impl VM {
                 let bound_method = BoundMethodHandle::try_from(callee)?;
                 let (receiver, method) = self.heap.bound_methods.unpack(bound_method);
                 self.values[self.stack_top - arity as usize - 1] = Value::from(receiver);
-                return Ok(Some(method));
+                return self.push_frame(method, arity);
             }
             Some(NATIVE) => {
                 let result = self
@@ -204,9 +205,9 @@ impl VM {
                     .call(NativeHandle::try_from(callee)?, self.tail(arity as usize)?)?;
                 self.stack_top -= arity as usize + 1;
                 self.push(result);
-                return Ok(None);
+                return Ok(());
             }
-            Some(CLOSURE) => return Ok(Some(ClosureHandle::try_from(callee)?)),
+            Some(CLOSURE) => return self.push_frame(ClosureHandle::try_from(callee)?, arity),
             _ => err!(
                 "Can only call functions and classes, not '{}'",
                 callee.to_string(&self.heap)
@@ -219,37 +220,35 @@ impl VM {
         class: ClassHandle,
         name: StringHandle,
     ) -> Result<ClosureHandle, String> {
-        match self.heap.classes.get_method(class, name) {
-            None => err!("Undefined property '{}'", self.heap.strings.get(name)),
-            Some(method) => Ok(method),
-        }
+        self.heap
+            .classes
+            .get_method(class, name)
+            .ok_or_else(|| format!("Undefined property '{}'", self.heap.strings.get(name)))
     }
 
-    fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<Option<ClosureHandle>, String> {
+    fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<(), String> {
         let handle = InstanceHandle::try_from(self.peek(arity as usize))?;
         if let Some(property) = self.heap.instances.get_property(handle, name) {
             self.values[self.stack_top - arity as usize - 1] = property;
             self.call_value(property, arity)
         } else {
-            Ok(Some(self.invoke_from_class(
-                self.heap.instances.get_class(handle),
-                name,
-            )?))
+            let ch = self.invoke_from_class(self.heap.instances.get_class(handle), name)?;
+            self.push_frame(ch, arity)
         }
     }
 
     fn bind_method(&mut self, class: ClassHandle, name: StringHandle) -> Result<(), String> {
-        match self.heap.classes.get_method(class, name) {
-            None => err!("Undefined property '{}'.", self.heap.strings.get(name)),
-            Some(method) => {
-                let instance = Handle::try_from(self.peek(0))?;
-                self.collect_garbage_if_needed();
-                let bm = self.heap.bound_methods.bind(instance, method);
-                self.pop();
-                self.push(Value::from(bm));
-                Ok(())
-            }
-        }
+        let method = self
+            .heap
+            .classes
+            .get_method(class, name)
+            .ok_or_else(|| format!("Undefined property '{}'.", self.heap.strings.get(name)))?;
+        let instance = Handle::try_from(self.peek(0))?;
+        self.collect_garbage_if_needed();
+        let bm = self.heap.bound_methods.bind(instance, method);
+        self.pop();
+        self.push(Value::from(bm));
+        Ok(())
     }
 
     fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
@@ -264,21 +263,29 @@ impl VM {
         self.heap.instances.set_property(self.globals, key, value)
     }
 
-    fn load(&mut self, ch: ClosureHandle, arity: u8) -> Result<CallFrame, String> {
-        self.called.push(ch);
+    fn push_frame(&mut self, ch: ClosureHandle, arity: u8) -> Result<(), String> {
         self.check(ch, arity)?;
-        Ok(CallFrame::new(
-            self.stack_top - arity as usize - 1,
-            ch,
-            &self.heap,
-        ))
+        self.call_stack.push(mem::replace(
+            &mut self.call_frame,
+            CallFrame::new(self.stack_top - arity as usize - 1, ch, &self.heap),
+        ));
+        self.loaded.push(ch);
+        Ok(())
     }
 
-    fn run(&mut self, mut call_frame: CallFrame) -> Result<(), String> {
+    fn pop_frame(&mut self) -> bool {
+        if let Some(frame) = self.call_stack.pop() {
+            self.loaded.pop();
+            self.call_frame = frame;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn run(&mut self) -> Result<(), String> {
         loop {
-            // use this ip instead of the call frame one?
-            self.ip = call_frame.ip;
-            let instruction = Op::from(call_frame.read_byte(&self.heap));
+            let instruction = Op::from(self.call_frame.read_byte(&self.heap));
             #[cfg(feature = "trace")]
             {
                 print!("stack: ");
@@ -302,14 +309,11 @@ impl VM {
                     }
                 }
                 Op::Call => {
-                    let arity = call_frame.read_byte(&self.heap);
-                    if let Some(cf) = self.call_value(self.peek(arity as usize), arity)? {
-                        self.call_stack.push(call_frame);
-                        call_frame = self.load(cf, arity)?;
-                    }
+                    let arity = self.call_frame.read_byte(&self.heap);
+                    self.call_value(self.peek(arity as usize), arity)?;
                 }
                 Op::Class => {
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     self.collect_garbage_if_needed();
                     let new_class = self.heap.classes.new_class(name);
                     self.push(Value::from(new_class));
@@ -321,30 +325,30 @@ impl VM {
                     self.pop();
                 }
                 Op::Closure => {
-                    let function = Handle::try_from(call_frame.read_constant(&self.heap))?;
+                    let function = Handle::try_from(self.call_frame.read_constant(&self.heap))?;
                     // garbage collection risks?
                     self.collect_garbage_if_needed();
                     let count = self.heap.functions.upvalue_count(function);
                     let closure = self.heap.closures.new_closure(function, count);
                     self.push(Value::from(closure));
                     for i in 0..count {
-                        let is_local = call_frame.read_byte(&self.heap);
-                        let index = call_frame.read_byte(&self.heap) as usize;
+                        let is_local = self.call_frame.read_byte(&self.heap);
+                        let index = self.call_frame.read_byte(&self.heap) as usize;
                         let uh = if is_local > 0 {
-                            let location = call_frame.slot + index;
+                            let location = self.call_frame.sp + index;
                             self.capture_upvalue(location)
                         } else {
-                            call_frame.get_upvalue(&self.heap, i)
+                            self.call_frame.get_upvalue(&self.heap, i)
                         };
                         self.heap.closures.upvalues_mut(closure)[i] = uh;
                     }
                 }
                 Op::Constant => {
-                    let value = call_frame.read_constant(&self.heap);
+                    let value = self.call_frame.read_constant(&self.heap);
                     self.push(value)
                 }
                 Op::DefineGlobal => {
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     self.set_global(name, self.peek(0));
                     self.pop();
                 }
@@ -356,7 +360,7 @@ impl VM {
                 }
                 Op::False => self.push(Value::FALSE),
                 Op::GetGlobal => {
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(self.globals, name) {
                         self.push(value);
                     } else {
@@ -364,12 +368,12 @@ impl VM {
                     }
                 }
                 Op::GetLocal => {
-                    let index = call_frame.slot + call_frame.read_byte(&self.heap) as usize;
+                    let index = self.call_frame.sp + self.call_frame.read_byte(&self.heap) as usize;
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
                     let handle = Handle::try_from(self.peek(0))?;
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
                         self.values[self.stack_top - 1] = value;
@@ -378,12 +382,12 @@ impl VM {
                     }
                 }
                 Op::GetSuper => {
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     let super_class = Handle::try_from(self.pop())?;
                     self.bind_method(super_class, name)?;
                 }
                 Op::GetUpvalue => {
-                    let handle = call_frame.read_upvalue(&self.heap);
+                    let handle = self.call_frame.read_upvalue(&self.heap);
                     self.push(self.heap.upvalues.get(handle, &self.values));
                 }
                 Op::Greater => {
@@ -397,25 +401,22 @@ impl VM {
                     self.pop();
                 }
                 Op::Invoke => {
-                    let name = call_frame.read_string(&self.heap)?;
-                    let arity = call_frame.read_byte(&self.heap);
-                    if let Some(cf) = self.invoke(name, arity)? {
-                        self.call_stack.push(call_frame);
-                        call_frame = self.load(cf, arity)?;
-                    }
+                    let name = self.call_frame.read_string(&self.heap)?;
+                    let arity = self.call_frame.read_byte(&self.heap);
+                    self.invoke(name, arity)?;
                 }
-                Op::Jump => call_frame.jump_forward(&self.heap),
+                Op::Jump => self.call_frame.jump_forward(&self.heap),
                 Op::JumpIfFalse => {
                     if self.peek(0).is_falsey() {
-                        call_frame.jump_forward(&self.heap);
+                        self.call_frame.jump_forward(&self.heap);
                     } else {
-                        call_frame.skip();
+                        self.call_frame.skip();
                     }
                 }
                 Op::Less => binary_op!(self, a, b, a < b),
-                Op::Loop => call_frame.jump_back(&self.heap),
+                Op::Loop => self.call_frame.jump_back(&self.heap),
                 Op::Method => {
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     self.define_method(name)?
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
@@ -434,12 +435,11 @@ impl VM {
                 Op::Print => println!("{}", self.pop().to_string(&self.heap)),
                 Op::Return => {
                     let result = self.pop();
-                    let location = call_frame.slot;
+                    let location = self.call_frame.sp;
                     self.heap
                         .upvalues
                         .close_upvalues(location as u16, &self.values);
-                    if let Some(frame) = self.call_stack.pop() {
-                        call_frame = frame;
+                    if self.pop_frame() {
                         self.stack_top = location;
                         self.push(result);
                         continue;
@@ -447,7 +447,7 @@ impl VM {
                     return Ok(());
                 }
                 Op::SetGlobal => {
-                    let name = call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_string(&self.heap)?;
                     // the booleans are killing me
                     if self.set_global(name, self.peek(0)) {
                         self.heap.instances.delete_property(self.globals, name);
@@ -455,31 +455,32 @@ impl VM {
                     }
                 }
                 Op::SetLocal => {
-                    let index = call_frame.read_byte(&self.heap) as usize;
-                    self.values[call_frame.slot + index] = self.peek(0);
+                    let index = self.call_frame.read_byte(&self.heap) as usize;
+                    self.values[self.call_frame.sp + index] = self.peek(0);
                 }
                 Op::SetProperty => {
                     let b = self.pop();
                     let a = Handle::try_from(self.pop())?;
-                    self.heap
-                        .instances
-                        .set_property(a, call_frame.read_string(&self.heap)?, b);
+                    self.heap.instances.set_property(
+                        a,
+                        self.call_frame.read_string(&self.heap)?,
+                        b,
+                    );
                     self.push(b);
                 }
                 Op::SetUpvalue => {
-                    let upvalue = call_frame.read_upvalue(&self.heap);
+                    let upvalue = self.call_frame.read_upvalue(&self.heap);
                     self.heap
                         .upvalues
                         .set(upvalue, self.peek(0), &mut self.values);
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
-                    let name = call_frame.read_string(&self.heap)?;
-                    let arity = call_frame.read_byte(&self.heap);
+                    let name = self.call_frame.read_string(&self.heap)?;
+                    let arity = self.call_frame.read_byte(&self.heap);
                     let super_class = Handle::try_from(self.pop())?;
                     let cf = self.invoke_from_class(super_class, name)?;
-                    self.call_stack.push(call_frame);
-                    call_frame = self.load(cf, arity)?;
+                    self.push_frame(cf, arity)?;
                 }
                 Op::True => self.push(Value::TRUE),
             }
@@ -497,6 +498,8 @@ impl VM {
     fn reset_stack(&mut self) {
         self.stack_top = 0;
         self.heap.upvalues.reset_stack();
+        self.call_stack.clear();
+        self.loaded.clear();
     }
 
     pub fn interpret(&mut self, source: &str) -> Result<(), String> {
@@ -506,14 +509,13 @@ impl VM {
             use crate::debug::Disassembler;
             Disassembler::disassemble(&self.heap);
         }
-        let ch = self.init(fh)?;
-        let cf = self.load(ch, 0)?;
-        if let Err(msg) = self.run(cf) {
+        self.init(fh);
+        if let Err(msg) = self.run() {
             eprintln!("Error: {}", msg);
             // one missing frame...
-            CallFrame::print(self.ip, *self.called.last().unwrap(), &self.heap);
-            for i in (0..self.called.len()).rev() {
-                CallFrame::print(self.call_stack[i].ip, self.called[i], &self.heap);
+            CallFrame::print(self.call_frame.ip, self.loaded.pop().unwrap(), &self.heap);
+            for i in (0..self.loaded.len()).rev() {
+                CallFrame::print(self.call_stack[i].ip, self.loaded[i], &self.heap);
             }
             self.reset_stack();
             err!("Runtime error!")

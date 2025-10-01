@@ -57,7 +57,7 @@ impl Chunk {
         let i1 = if frame + 1 == l {
             self.frames.len()
         } else {
-            self.frames[frame + 2].lp
+            self.frames[frame + 1].lp
         };
         for i in i0..i1 {
             run_length += self.run_lengths[i] as usize;

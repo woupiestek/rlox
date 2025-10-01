@@ -1,21 +1,26 @@
 # Rlox
 
+## 2025-01-10
+
+### todo
+
+- compaction for functions?
+
 ## 2025-09-30
 
 ### todo
 
-- restore stack traces
-- line numbers
+- ~~restore stack traces~~
+- ~~line numbers~~
 - ~~fix the placeholder call frame in the vm?~~
 - compaction for functions?
 
 ### run the call frame
 
-Running the call frame...
-Would that work?
-Change the place that date is stored.
+Running the call frame... Would that work? Change the place that date is stored.
 
-Steps: 
+Steps:
+
 - run always called from call or init, so integrate those.
 - then do the loop with the data in the local frame.
 
@@ -23,27 +28,29 @@ Universal function idea.
 
 What might the effect be?
 
-On the positive side, keeping callframe on the stack etc. could be more efficient.
-On the negative, recursive calls may not be optimised as much.
+On the positive side, keeping callframe on the stack etc. could be more
+efficient. On the negative, recursive calls may not be optimised as much.
 
 ### conclusions:
 
 - For stack traces, it is necessary to keep closures and instruction pointers
 - From these the call frames can always be restored
-- For performance, there either is no difference, or it is slightly worse than before.
+- For performance, there either is no difference, or it is slightly worse than
+  before.
 
-Plan: 
+Plan:
+
 - Keep a called vec and ip vec
 - Keep the arg to run, but don't do recursive calls.
 
 ### boxes
 
-Idea for language 2: instead of objects, access to the heap is controlled with garbage collected boxes.
-So basically there are alegebraic types, probabaly parametric and general as well.
-To have something that gets passed by reference, though, you need to box it.
+Idea for language 2: instead of objects, access to the heap is controlled with
+garbage collected boxes. So basically there are alegebraic types, probabaly
+parametric and general as well. To have something that gets passed by reference,
+though, you need to box it.
 
 Perhaps an extra limitation is that there need ot be classes of boxes, but idk.
-
 
 ## 2025-09-29
 

@@ -7,21 +7,27 @@ pub struct CallFrame {
     pub ip: isize, // changing
     cp: usize,     // stored in closure
     up: usize,     // stored in closure
-    pub slot: usize, // unique
-                   //    pub closure: ClosureHandle, // closure
+    pub sp: usize, // unique
 }
 
 impl CallFrame {
-    pub fn new(slot: usize, closure: ClosureHandle, heap: &Heap) -> Self {
+    pub fn placeholder() -> Self {
+        Self {
+            ip: -1,
+            cp: 0,
+            up: 0,
+            sp: 0,
+        }
+    }
+
+    pub fn new(sp: usize, closure: ClosureHandle, heap: &Heap) -> Self {
         let function = heap.closures.get_function(closure);
         let &ChunkFrame { ip, lp: _, cp } = heap.functions.get_frame(function);
-        let up = heap.closures.up(closure);
         Self {
-            // stick to putting the pointer next to the code to read
-            ip: ip as isize - 1,
             cp,
-            up,
-            slot,
+            ip: ip as isize - 1,
+            sp,
+            up: heap.closures.up(closure),
         }
     }
 
