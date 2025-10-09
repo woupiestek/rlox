@@ -1,6 +1,18 @@
 # Rlox
 
-## 2025-01-10
+## 2025-01-02
+
+### the big hashmap
+
+Combine objects and fields names into keys of a single huge hashmap. Keep a
+second structure of field names by object for the garbage collector.
+
+When you write to the object, you first do a lookup. If not found, add the pair
+to the list of occupied slots.
+
+You would not have all parts of the object close together.
+
+## 2025-10-01
 
 ### todo
 

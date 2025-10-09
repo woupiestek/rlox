@@ -10,15 +10,39 @@ pub struct Disassembler<'hp> {
     fh: FunctionHandle,
     ip: usize,
     cp: usize,
+    v_table: [Option<for<'a> fn(&'a mut Disassembler<'hp>) -> ()>; 37],
 }
 
 impl<'hp> Disassembler<'hp> {
     pub fn disassemble(heap: &'hp Heap) {
+        let mut v_table: [Option<for<'a> fn(&'a mut Disassembler<'hp>) -> ()>; 37] = [None; 37];
+        v_table[Op::Call as usize] = Some(Self::byte);
+        v_table[Op::Class as usize] = Some(Self::constant);
+        v_table[Op::Closure as usize] = Some(Self::constant);
+        v_table[Op::Constant as usize] = Some(Self::constant);
+        v_table[Op::DefineGlobal as usize] = Some(Self::constant);
+        v_table[Op::GetGlobal as usize] = Some(Self::constant);
+        v_table[Op::GetLocal as usize] = Some(Self::byte);
+        v_table[Op::GetProperty as usize] = Some(Self::constant);
+        v_table[Op::GetSuper as usize] = Some(Self::constant);
+        v_table[Op::GetUpvalue as usize] = Some(Self::byte);
+        v_table[Op::Invoke as usize] = Some(Self::invoke);
+        v_table[Op::Jump as usize] = Some(Self::jump_forward);
+        v_table[Op::JumpIfFalse as usize] = Some(Self::jump_forward);
+        v_table[Op::Loop as usize] = Some(Self::jump_back);
+        v_table[Op::Method as usize] = Some(Self::constant);
+        v_table[Op::SetGlobal as usize] = Some(Self::constant);
+        v_table[Op::SetLocal as usize] = Some(Self::byte);
+        v_table[Op::SetProperty as usize] = Some(Self::constant);
+        v_table[Op::SetUpvalue as usize] = Some(Self::byte);
+        v_table[Op::SuperInvoke as usize] = Some(Self::invoke);
+
         Self {
             heap,
             fh: FunctionHandle::MAIN,
             ip: 0,
             cp: 0,
+            v_table,
         }
         .run();
     }
@@ -68,24 +92,8 @@ impl<'hp> Disassembler<'hp> {
                     op_code
                 }
             };
-            match op_code {
-                Op::Call | Op::GetLocal | Op::GetUpvalue | Op::SetLocal | Op::SetUpvalue => {
-                    self.byte()
-                }
-                Op::Class
-                | Op::Closure
-                | Op::Constant
-                | Op::DefineGlobal
-                | Op::GetGlobal
-                | Op::GetProperty
-                | Op::GetSuper
-                | Op::Method
-                | Op::SetGlobal
-                | Op::SetProperty => self.constant(),
-                Op::Invoke | Op::SuperInvoke => self.invoke(),
-                Op::Jump | Op::JumpIfFalse => self.jump_forward(),
-                Op::Loop => self.jump_back(),
-                _ => (),
+            if let Some(f) = self.v_table[op_code as usize] {
+                f(self);
             }
             println!(";")
         }

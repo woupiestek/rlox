@@ -141,6 +141,10 @@ impl VM {
         self.pop();
     }
 
+    fn set(&mut self, index: u8, value: Value) {
+        self.values[self.stack_top - 1 - index as usize] = value
+    }
+
     fn push(&mut self, value: Value) {
         self.values[self.stack_top] = value;
         self.stack_top += 1;
@@ -151,8 +155,8 @@ impl VM {
         self.values[self.stack_top]
     }
 
-    fn peek(&self, distance: usize) -> Value {
-        self.values[self.stack_top - 1 - distance]
+    fn get(&self, distance: u8) -> Value {
+        self.values[self.stack_top - 1 - distance as usize]
     }
 
     fn init(&mut self, fh: FunctionHandle) {
@@ -178,7 +182,7 @@ impl VM {
                 let class = ClassHandle::try_from(callee)?;
                 self.collect_garbage_if_needed();
                 let instance = self.heap.instances.new_instance(class);
-                self.values[self.stack_top - arity as usize - 1] = Value::from(instance);
+                self.set(arity, Value::from(instance));
                 if let Some(init) = self.heap.classes.get_method(class, self.init_string) {
                     return self.push_frame(init, arity);
                 } else if arity > 0 {
@@ -196,7 +200,7 @@ impl VM {
                 // more flexibility by passing the stack around
                 let bound_method = BoundMethodHandle::try_from(callee)?;
                 let (receiver, method) = self.heap.bound_methods.unpack(bound_method);
-                self.values[self.stack_top - arity as usize - 1] = Value::from(receiver);
+                self.set(arity, Value::from(receiver));
                 return self.push_frame(method, arity);
             }
             Some(NATIVE) => {
@@ -227,9 +231,9 @@ impl VM {
     }
 
     fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<(), String> {
-        let handle = InstanceHandle::try_from(self.peek(arity as usize))?;
+        let handle = InstanceHandle::try_from(self.get(arity))?;
         if let Some(property) = self.heap.instances.get_property(handle, name) {
-            self.values[self.stack_top - arity as usize - 1] = property;
+            self.set(arity, property);
             self.call_value(property, arity)
         } else {
             let ch = self.invoke_from_class(self.heap.instances.get_class(handle), name)?;
@@ -243,7 +247,7 @@ impl VM {
             .classes
             .get_method(class, name)
             .ok_or_else(|| format!("Undefined property '{}'.", self.heap.strings.get(name)))?;
-        let instance = Handle::try_from(self.peek(0))?;
+        let instance = Handle::try_from(self.get(0))?;
         self.collect_garbage_if_needed();
         let bm = self.heap.bound_methods.bind(instance, method);
         self.pop();
@@ -252,8 +256,8 @@ impl VM {
     }
 
     fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
-        let class = Handle::try_from(self.peek(1))?;
-        let method = Handle::try_from(self.peek(0))?;
+        let class = Handle::try_from(self.get(1))?;
+        let method = Handle::try_from(self.get(0))?;
         self.heap.classes.set_method(class, name, method);
         self.pop();
         Ok(())
@@ -298,11 +302,11 @@ impl VM {
             }
             match instruction {
                 Op::Add => {
-                    if self.peek(0).is_number() {
+                    if self.get(0).is_number() {
                         binary_op!(self, x, y, x + y);
                     } else {
-                        let a = StringHandle::try_from(self.peek(1))?;
-                        let b = StringHandle::try_from(self.peek(0))?;
+                        let a = StringHandle::try_from(self.get(1))?;
+                        let b = StringHandle::try_from(self.get(0))?;
                         let c = self.heap.strings.concat(a, b);
                         self.stack_top -= 2;
                         self.push(Value::from(c));
@@ -310,7 +314,7 @@ impl VM {
                 }
                 Op::Call => {
                     let arity = self.call_frame.read_byte(&self.heap);
-                    self.call_value(self.peek(arity as usize), arity)?;
+                    self.call_value(self.get(arity), arity)?;
                 }
                 Op::Class => {
                     let name = self.call_frame.read_string(&self.heap)?;
@@ -349,7 +353,7 @@ impl VM {
                 }
                 Op::DefineGlobal => {
                     let name = self.call_frame.read_string(&self.heap)?;
-                    self.set_global(name, self.peek(0));
+                    self.set_global(name, self.get(0));
                     self.pop();
                 }
                 Op::Divide => binary_op!(self, a, b, a / b),
@@ -372,11 +376,11 @@ impl VM {
                     self.push(self.values[index])
                 }
                 Op::GetProperty => {
-                    let handle = Handle::try_from(self.peek(0))?;
+                    let handle = Handle::try_from(self.get(0))?;
                     let name = self.call_frame.read_string(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
-                        self.values[self.stack_top - 1] = value;
+                        self.set(0, value);
                     } else {
                         self.bind_method(self.heap.instances.get_class(handle), name)?;
                     }
@@ -394,8 +398,8 @@ impl VM {
                     binary_op!(self, a, b, a > b)
                 }
                 Op::Inherit => {
-                    let super_class = Handle::try_from(self.peek(1))?;
-                    let sub_class = Handle::try_from(self.peek(0))?;
+                    let super_class = Handle::try_from(self.get(1))?;
+                    let sub_class = Handle::try_from(self.get(0))?;
                     self.heap.classes.clone_methods(super_class, sub_class);
                     // to check: only pop one?
                     self.pop();
@@ -407,7 +411,7 @@ impl VM {
                 }
                 Op::Jump => self.call_frame.jump_forward(&self.heap),
                 Op::JumpIfFalse => {
-                    if self.peek(0).is_falsey() {
+                    if self.get(0).is_falsey() {
                         self.call_frame.jump_forward(&self.heap);
                     } else {
                         self.call_frame.skip();
@@ -421,8 +425,8 @@ impl VM {
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
                 Op::Negative => {
-                    let a = f64::try_from(self.peek(0))?;
-                    self.values[self.stack_top - 1] = Value::from(-a);
+                    let a = f64::try_from(self.get(0))?;
+                    self.set(0, Value::from(-a));
                 }
                 Op::Nil => self.push(Value::NIL),
                 Op::Not => {
@@ -449,14 +453,14 @@ impl VM {
                 Op::SetGlobal => {
                     let name = self.call_frame.read_string(&self.heap)?;
                     // the booleans are killing me
-                    if self.set_global(name, self.peek(0)) {
+                    if self.set_global(name, self.get(0)) {
                         self.heap.instances.delete_property(self.globals, name);
                         return err!("Undefined variable '{}'.", self.heap.strings.get(name));
                     }
                 }
                 Op::SetLocal => {
                     let index = self.call_frame.read_byte(&self.heap) as usize;
-                    self.values[self.call_frame.sp + index] = self.peek(0);
+                    self.values[self.call_frame.sp + index] = self.get(0);
                 }
                 Op::SetProperty => {
                     let b = self.pop();
@@ -472,7 +476,7 @@ impl VM {
                     let upvalue = self.call_frame.read_upvalue(&self.heap);
                     self.heap
                         .upvalues
-                        .set(upvalue, self.peek(0), &mut self.values);
+                        .set(upvalue, self.get(0), &mut self.values);
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
