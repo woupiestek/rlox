@@ -185,9 +185,10 @@ impl Pool<UPVALUE> for Upvalues {
         // that is optimistic...
         self.values.capacity() * Self::ENTRY_SIZE
     }
-    fn trace(&mut self, handle: Handle<UPVALUE>, collector: &mut Collector) {
-        if self.handles.mark(handle.0) {
-            self.values[handle.index()].trace(collector)
+    fn trace(&mut self, collector: &mut Collector) {
+        let marked = self.handles.mark_all(&mut collector.handles[UPVALUE]);
+        for &i in &marked {
+            self.values[i as usize].trace(collector)
         }
     }
 

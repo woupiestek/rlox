@@ -9,46 +9,60 @@ pub type BoundMethodHandle = Handle<BOUND_METHOD>;
 
 pub struct BoundMethods {
     handles: Handles,
-    pairs: Vec<(InstanceHandle, ClosureHandle)>,
+    instances: Vec<InstanceHandle>,
+    closures: Vec<ClosureHandle>,
 }
 
 impl BoundMethods {
     pub fn new() -> Self {
         Self {
             handles: Handles::new(),
-            pairs: Vec::new(),
+            instances: Vec::new(),
+            closures: Vec::new(),
         }
     }
 
     pub fn bind(&mut self, instance: InstanceHandle, method: ClosureHandle) -> BoundMethodHandle {
         let i = self.handles.next();
-        while self.pairs.len() <= i as usize {
+        while self.instances.len() <= i as usize {
             // pushing fake handles just in case
-            self.pairs.push((Handle(0), Handle(0)));
+            self.instances.push(Handle(0));
         }
-        self.pairs[i as usize] = (instance, method);
+        self.instances[i as usize] = instance;
+        while self.closures.len() <= i as usize {
+            // pushing fake handles just in case
+            self.closures.push(Handle(0));
+        }
+        self.closures[i as usize] = method;
         BoundMethodHandle::from(i)
     }
 
     pub fn unpack(&self, handle: BoundMethodHandle) -> (InstanceHandle, ClosureHandle) {
-        self.pairs[handle.index()]
+        (
+            self.instances[handle.index()],
+            self.closures[handle.index()],
+        )
     }
 
     pub fn to_string(&self, handle: BoundMethodHandle, heap: &Heap) -> String {
-        heap.functions
-            .to_string(heap.closures.get_function(self.unpack(handle).1), heap)
+        heap.functions.to_string(
+            heap.closures.get_function(self.closures[handle.index()]),
+            heap,
+        )
     }
 }
 
 impl Pool<BOUND_METHOD> for BoundMethods {
     fn byte_count(&self) -> usize {
-        48 + 8 * (self.pairs.capacity())
+        48 + 8 * self.instances.capacity()
     }
-    fn trace(&mut self, handle: Handle<BOUND_METHOD>, collector: &mut Collector) {
-        if self.handles.mark(handle.0) {
-            let (i, c) = self.unpack(handle);
-            i.trace(collector);
-            c.trace(collector);
+    fn trace(&mut self, collector: &mut Collector) {
+        let marked: Vec<u32> = self.handles.mark_all(&mut collector.handles[BOUND_METHOD]);
+        for &h in &marked {
+            self.instances[h as usize].trace(collector)
+        }
+        for &h in &marked {
+            self.closures[h as usize].trace(collector)
         }
     }
 

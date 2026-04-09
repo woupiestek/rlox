@@ -8,7 +8,7 @@ use crate::{
     common::STACK_SIZE,
     compiler::compile,
     functions::FunctionHandle,
-    heap::{Collector, Handle, Heap, Pool, Traceable, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
+    heap::{Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
     instances::InstanceHandle,
     natives::{NativeHandle, Natives},
     op::Op,
@@ -123,9 +123,7 @@ impl VM {
         {
             println!("collect main function");
         }
-        self.heap
-            .functions
-            .trace(FunctionHandle::MAIN, &mut self.collector);
+        FunctionHandle::MAIN.trace(&mut self.collector);
     }
 
     fn define_native(

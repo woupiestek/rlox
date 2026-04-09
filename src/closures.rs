@@ -113,18 +113,26 @@ impl Pool<CLOSURE> for Closures {
             + self.functions.capacity() * 9
             + self.upvalues.len() * 4
     }
-    fn trace(&mut self, handle: Handle<CLOSURE>, collector: &mut Collector) {
-        if handle.0 & Self::TOP_BIT == 0 {
-            collector.push(FUNCTION, handle.0);
-            return;
+    fn trace(&mut self, collector: &mut Collector) {
+        let mut marked = Vec::new();
+        while let Some(handle) = collector.handles[CLOSURE].pop() {
+            if handle & Self::TOP_BIT == 0 {
+                collector.push(FUNCTION, handle);
+                continue;
+            }
+            let handle = handle ^ Self::TOP_BIT;
+            if self.handles.mark(handle) {
+                marked.push(handle);
+            }
         }
-
-        let index = (handle.0 ^ Self::TOP_BIT) as usize;
-        self.functions[index].trace(collector);
-        let from = self.offsets[index] as usize;
-        let to = from + self.upvalue_counts[index] as usize;
-        for j in from..to {
-            self.upvalues[j].trace(collector);
+        for &index in &marked {
+            self.functions[index as usize].trace(collector);
+            let index = index as usize;
+            let from = self.offsets[index] as usize;
+            let to = from + self.upvalue_counts[index] as usize;
+            for j in from..to {
+                self.upvalues[j].trace(collector);
+            }
         }
     }
 
@@ -164,10 +172,18 @@ mod tests {
     pub fn tracing() {
         let mut closures = Closures::new();
         let closure = closures.new_closure(Handle::from(2), 2);
+        assert_eq!(closure.0, Closures::TOP_BIT);
         closures.upvalues[closures.up(closure) + 1] = Handle::from(135);
 
         let mut collector = Collector::new();
-        closures.trace(closure, &mut collector);
+
+        // remove marks, like in a real mark and sweep
+        closures.reset();
+
+        // add handle to collector
+        closure.trace(&mut collector);
+        closures.trace(&mut collector);
+        // how!?
         assert_eq!(collector.handles[FUNCTION], vec![2]);
         assert_eq!(collector.handles[UPVALUE], vec![0, 135]);
     }

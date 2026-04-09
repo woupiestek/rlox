@@ -166,7 +166,7 @@ impl Pool<STRING> for Strings {
         false
     }
 
-    fn trace(&mut self, _handle: Handle<STRING>, _collector: &mut Collector) {}
+    fn trace(&mut self, _collector: &mut Collector) {}
 
     fn reset(&mut self) {
         self.keys.clear();

@@ -143,8 +143,8 @@ impl Functions {
         &self.chunk.frames[self.frames[fh.index()]]
     }
 
-    pub fn constants(&self, fh: FunctionHandle) -> Range<usize> {
-        let frame = self.frames[fh.index()];
+    fn constants(&self, index: usize) -> Range<usize> {
+        let frame = self.frames[index];
         let from = self.chunk.frames[frame].cp;
         let len = self.chunk.frames.len();
         let to = if frame + 1 == len {
@@ -182,15 +182,18 @@ impl Pool<FUNCTION> for Functions {
         self.names.capacity() * 96
     }
 
-    fn trace(&mut self, handle: Handle<FUNCTION>, collector: &mut Collector) {
-        if !self.handles.mark(handle.0) {
-            return;
+    fn trace(&mut self, collector: &mut Collector) {
+        let marked = self.handles.mark_all(&mut collector.handles[FUNCTION]);
+        for &i in &marked {
+            let name = self.names[i as usize];
+            if name != StringHandle::EMPTY {
+                name.trace(collector);
+            }
         }
-        if self.names[handle.index()] != StringHandle::EMPTY {
-            self.names[handle.index()].trace(collector);
-        }
-        for constant in self.constants(handle) {
-            self.chunk.constants[constant].trace(collector)
+        for &i in &marked {
+            for constant in self.constants(i as usize) {
+                self.chunk.constants[constant].trace(collector)
+            }
         }
     }
 

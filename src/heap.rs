@@ -115,16 +115,14 @@ where
     // fn count(&self) -> usize;
     fn reset(&mut self);
     fn sweep(&mut self);
-    fn trace(&mut self, handle: Handle<KIND>, collector: &mut Collector);
+    fn trace(&mut self, collector: &mut Collector);
 
     // indicate that the collector has no more elements of a kind
     fn mark(&mut self, collector: &mut Collector) -> bool {
         if collector.handles[KIND].is_empty() {
             return true;
         }
-        while let Some(i) = collector.handles[KIND].pop() {
-            self.trace(Handle::from(i), collector);
-        }
+        self.trace(collector);
         false
     }
 }

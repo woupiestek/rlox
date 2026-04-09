@@ -60,6 +60,16 @@ impl Handles {
         }
     }
 
+    pub fn mark_all(&mut self, hs: &mut Vec<u32>) -> Vec<u32> {
+        let mut marked: Vec<u32> = Vec::new();
+        while let Some(h) = hs.pop() {
+            if self.mark(h) {
+                marked.push(h)
+            }
+        }
+        marked
+    }
+
     // look for a free spot
     // start in the 'current bucket'
     // move up by one every time

@@ -259,6 +259,16 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
             false
         }
     }
+
+    pub fn mark_and_trace(&mut self, collector: &mut Collector) -> Vec<u32> {
+        let marked = self.handles.mark_all(&mut collector.handles[KIND]);
+        for &i in &marked {
+            if let Some(hash_map) = &self.active[i as usize] {
+                hash_map.trace(collector);
+            }
+        }
+        marked
+    }
 }
 
 impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A, KIND> {
@@ -269,13 +279,8 @@ impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A
             + self.hash_map_byte_count
     }
 
-    fn trace(&mut self, handle: Handle<KIND>, collector: &mut Collector) {
-        if !self.handles.mark(handle.0) {
-            return;
-        }
-        if let Some(hash_map) = &self.active[handle.index()] {
-            hash_map.trace(collector);
-        }
+    fn trace(&mut self, collector: &mut Collector) {
+        self.mark_and_trace(collector);
     }
 
     fn reset(&mut self) {

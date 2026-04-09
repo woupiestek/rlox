@@ -64,9 +64,11 @@ impl Pool<INSTANCE> for Instances {
             + mem::size_of::<Vec<ClassHandle>>()
     }
 
-    fn trace(&mut self, handle: Handle<INSTANCE>, collector: &mut Collector) {
-        self.properties.trace(handle, collector);
-        self.classes[handle.index()].trace(collector);
+    fn trace(&mut self, collector: &mut Collector) {
+        let marked = self.properties.mark_and_trace(collector);
+        for &i in &marked {
+            self.classes[i as usize].trace(collector);
+        }
     }
 
     fn reset(&mut self) {

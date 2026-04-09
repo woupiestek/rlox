@@ -62,9 +62,11 @@ impl Pool<CLASS> for Classes {
         self.methods.byte_count() + self.names.capacity() * 4 + mem::size_of::<Vec<StringHandle>>()
     }
 
-    fn trace(&mut self, handle: Handle<CLASS>, collector: &mut Collector) {
-        self.methods.trace(handle, collector);
-        self.names[handle.index()].trace(collector);
+    fn trace(&mut self, collector: &mut Collector) {
+        let marked = self.methods.mark_and_trace(collector);
+        for &i in &marked {
+            self.names[i as usize].trace(collector);
+        }
     }
 
     fn reset(&mut self) {

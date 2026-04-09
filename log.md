@@ -1,6 +1,19 @@
 # Rlox
 
-## 2025-01-02
+## 2026-04-09
+
+### the GC loop
+
+The pool trait uses a loop for tracing, going handle by handle, i.e. row by row.
+I want it to go column by column now...
+
+That seems to be possible. Some head scratching moments, possibly due to bugs.
+All is basically vindicated: we can do mark and sweep with the alternative set up,
+it may even be more performant.
+
+Everything still works. Sadly, no great speed up.
+
+## 2026-01-02
 
 ### the big hashmap
 
