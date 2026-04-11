@@ -1,52 +1,41 @@
 use crate::{
     closures::ClosureHandle,
-    handles::Handles,
-    heap::{Collector, Handle, Heap, Pool, Traceable, BOUND_METHOD},
+    handles::HandleSet,
+    heap::{Collector, Handle, HandleColumn, Heap, Pool, BOUND_METHOD, CLOSURE, INSTANCE},
     instances::InstanceHandle,
 };
 
 pub type BoundMethodHandle = Handle<BOUND_METHOD>;
 
 pub struct BoundMethods {
-    handles: Handles,
-    instances: Vec<InstanceHandle>,
-    closures: Vec<ClosureHandle>,
+    handles: HandleSet,
+    instances: HandleColumn<INSTANCE>,
+    closures: HandleColumn<CLOSURE>,
 }
 
 impl BoundMethods {
     pub fn new() -> Self {
         Self {
-            handles: Handles::new(),
-            instances: Vec::new(),
-            closures: Vec::new(),
+            handles: HandleSet::new(),
+            instances: HandleColumn::new(),
+            closures: HandleColumn::new(),
         }
     }
 
     pub fn bind(&mut self, instance: InstanceHandle, method: ClosureHandle) -> BoundMethodHandle {
         let i = self.handles.next();
-        while self.instances.len() <= i as usize {
-            // pushing fake handles just in case
-            self.instances.push(Handle(0));
-        }
-        self.instances[i as usize] = instance;
-        while self.closures.len() <= i as usize {
-            // pushing fake handles just in case
-            self.closures.push(Handle(0));
-        }
-        self.closures[i as usize] = method;
+        self.instances.set(i, instance);
+        self.closures.set(i, method);
         BoundMethodHandle::from(i)
     }
 
     pub fn unpack(&self, handle: BoundMethodHandle) -> (InstanceHandle, ClosureHandle) {
-        (
-            self.instances[handle.index()],
-            self.closures[handle.index()],
-        )
+        (self.instances.get(handle.0), self.closures.get(handle.0))
     }
 
     pub fn to_string(&self, handle: BoundMethodHandle, heap: &Heap) -> String {
         heap.functions.to_string(
-            heap.closures.get_function(self.closures[handle.index()]),
+            heap.closures.get_function(self.closures.get(handle.0)),
             heap,
         )
     }
@@ -54,16 +43,16 @@ impl BoundMethods {
 
 impl Pool<BOUND_METHOD> for BoundMethods {
     fn byte_count(&self) -> usize {
-        48 + 8 * self.instances.capacity()
+        self.handles.byte_count() + self.instances.byte_count() + self.closures.byte_count()
     }
-    fn trace(&mut self, collector: &mut Collector) {
-        let marked: Vec<u32> = self.handles.mark_all(&mut collector.handles[BOUND_METHOD]);
-        for &h in &marked {
-            self.instances[h as usize].trace(collector)
-        }
-        for &h in &marked {
-            self.closures[h as usize].trace(collector)
-        }
+
+    fn mark(&mut self, handle: u32) -> bool {
+        self.handles.mark(handle)
+    }
+
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
+        self.instances.trace_all(marked, collector);
+        self.closures.trace_all(marked, collector);
     }
 
     fn reset(&mut self) {

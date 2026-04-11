@@ -6,7 +6,7 @@ use std::mem;
 // a virtual set of handles for objects
 // represented by a bitset
 // subdivided in buckets of 8, since that is the size of a byte.
-pub struct Handles {
+pub struct HandleSet {
     count: usize,
     index: usize,
     marked: Box<[u8]>,
@@ -14,7 +14,7 @@ pub struct Handles {
 
 const THREE_BIT_MASK: u32 = 7;
 
-impl Handles {
+impl HandleSet {
     // start at 64 bit
     pub fn new() -> Self {
         Self {
@@ -58,16 +58,6 @@ impl Handles {
         } else {
             false
         }
-    }
-
-    pub fn mark_all(&mut self, hs: &mut Vec<u32>) -> Vec<u32> {
-        let mut marked: Vec<u32> = Vec::new();
-        while let Some(h) = hs.pop() {
-            if self.mark(h) {
-                marked.push(h)
-            }
-        }
-        marked
     }
 
     // look for a free spot

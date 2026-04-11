@@ -2,7 +2,7 @@ use std::mem;
 
 use crate::{
     functions::FunctionHandle,
-    handles::Handles,
+    handles::HandleSet,
     heap::{Collector, Handle, Pool, Traceable, CLOSURE, FUNCTION},
     upvalues::UpvalueHandle,
 };
@@ -10,8 +10,9 @@ use crate::{
 pub type ClosureHandle = Handle<CLOSURE>;
 
 pub struct Closures {
+    // todo: complicated case
     functions: Vec<FunctionHandle>,
-    handles: Handles,
+    handles: HandleSet,
     offsets: Vec<u32>,
     upvalue_counts: Vec<u8>,
     pub upvalues: Box<[UpvalueHandle]>,
@@ -22,7 +23,7 @@ impl Closures {
     pub fn new() -> Self {
         Self {
             functions: Vec::new(),
-            handles: Handles::new(),
+            handles: HandleSet::new(),
             offsets: Vec::new(),
             upvalue_counts: Vec::new(),
             upvalues: vec![Handle(0); 8].into_boxed_slice(),
@@ -113,19 +114,17 @@ impl Pool<CLOSURE> for Closures {
             + self.functions.capacity() * 9
             + self.upvalues.len() * 4
     }
-    fn trace(&mut self, collector: &mut Collector) {
-        let mut marked = Vec::new();
-        while let Some(handle) = collector.handles[CLOSURE].pop() {
+    fn mark(&mut self, handle: u32) -> bool {
+        // cannot tell if functions are already marked.
+        handle & Self::TOP_BIT == 0 || self.handles.mark(handle ^ Self::TOP_BIT)
+    }
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
+        for &handle in marked {
             if handle & Self::TOP_BIT == 0 {
                 collector.push(FUNCTION, handle);
                 continue;
             }
-            let handle = handle ^ Self::TOP_BIT;
-            if self.handles.mark(handle) {
-                marked.push(handle);
-            }
-        }
-        for &index in &marked {
+            let index = handle ^ Self::TOP_BIT;
             self.functions[index as usize].trace(collector);
             let index = index as usize;
             let from = self.offsets[index] as usize;
@@ -135,7 +134,6 @@ impl Pool<CLOSURE> for Closures {
             }
         }
     }
-
     fn reset(&mut self) {
         self.handles.clear();
     }
@@ -179,11 +177,7 @@ mod tests {
 
         // remove marks, like in a real mark and sweep
         closures.reset();
-
-        // add handle to collector
-        closure.trace(&mut collector);
-        closures.trace(&mut collector);
-        // how!?
+        closures.trace_all(&vec![Closures::TOP_BIT], &mut collector);
         assert_eq!(collector.handles[FUNCTION], vec![2]);
         assert_eq!(collector.handles[UPVALUE], vec![0, 135]);
     }

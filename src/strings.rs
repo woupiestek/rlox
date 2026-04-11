@@ -1,7 +1,7 @@
 use std::{mem, u32};
 
 use crate::{
-    handles::Handles,
+    handles::HandleSet,
     heap::{Collector, Handle, Pool, STRING},
 };
 
@@ -52,7 +52,7 @@ impl Buffer {
 
 pub struct Strings {
     handle_set: Box<[StringHandle]>,
-    keys: Handles,
+    keys: HandleSet,
     mask: usize,
     buffer: Buffer,
     offsets: Vec<u32>,
@@ -63,7 +63,7 @@ impl Strings {
     pub fn new() -> Self {
         Self {
             handle_set: vec![StringHandle::EMPTY; 8].into_boxed_slice(),
-            keys: Handles::new(),
+            keys: HandleSet::new(),
             mask: 7, // self.handle_set.len() - 1
             buffer: Buffer::with_capacity(0),
             offsets: Vec::new(),
@@ -153,20 +153,16 @@ impl Pool<STRING> for Strings {
             + self.keys.byte_count()
     }
 
-    fn mark(&mut self, collector: &mut Collector) -> bool {
-        if collector.handles[STRING].is_empty() {
-            return true;
+    fn mark(&mut self, key: u32) -> bool {
+        // let's just be honest
+        if key >= Self::OFFSET {
+            self.keys.mark(key - Self::OFFSET)
+        } else {
+            false
         }
-        while let Some(key) = collector.handles[STRING].pop() {
-            if key < Self::OFFSET {
-                continue;
-            }
-            self.keys.mark(key - Self::OFFSET);
-        }
-        false
     }
 
-    fn trace(&mut self, _collector: &mut Collector) {}
+    fn trace_all(&mut self, _marked: &Vec<u32>, _collector: &mut Collector) {}
 
     fn reset(&mut self) {
         self.keys.clear();

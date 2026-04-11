@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::{
     bound_methods::BoundMethods, classes::Classes, closures::Closures, functions::Functions,
     instances::Instances, strings::Strings, upvalues::Upvalues,
@@ -23,6 +25,7 @@ pub const NATIVE: usize = 7;
 impl Collector {
     pub fn new() -> Self {
         Self {
+            // grey set?
             handles: Default::default(),
         }
     }
@@ -67,16 +70,17 @@ impl Collector {
                 count
             );
         }
+        let mut marked = Vec::new();
         loop {
             // short cirquiting can make this behave unpredictably
             let mut done = true;
-            done = heap.bound_methods.mark(self) && done;
-            done = heap.classes.mark(self) && done;
-            done = heap.closures.mark(self) && done;
-            done = heap.functions.mark(self) && done;
-            done = heap.instances.mark(self) && done;
-            done = heap.strings.mark(self) && done; // somehow do the conversion key -> handle here
-            done = heap.upvalues.mark(self) && done;
+            done = heap.bound_methods.mark_all(&mut marked, self) && done;
+            done = heap.classes.mark_all(&mut marked, self) && done;
+            done = heap.closures.mark_all(&mut marked, self) && done;
+            done = heap.functions.mark_all(&mut marked, self) && done;
+            done = heap.instances.mark_all(&mut marked, self) && done;
+            done = heap.strings.mark_all(&mut marked, self) && done; // somehow do the conversion key -> handle here
+            done = heap.upvalues.mark_all(&mut marked, self) && done;
             if done {
                 break;
             }
@@ -115,14 +119,21 @@ where
     // fn count(&self) -> usize;
     fn reset(&mut self);
     fn sweep(&mut self);
-    fn trace(&mut self, collector: &mut Collector);
+    fn mark(&mut self, handle: u32) -> bool;
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector);
 
     // indicate that the collector has no more elements of a kind
-    fn mark(&mut self, collector: &mut Collector) -> bool {
+    fn mark_all(&mut self, marked: &mut Vec<u32>, collector: &mut Collector) -> bool {
         if collector.handles[KIND].is_empty() {
             return true;
         }
-        self.trace(collector);
+        marked.clear();
+        while let Some(handle) = collector.handles[KIND].pop() {
+            if self.mark(handle) {
+                marked.push(handle);
+            }
+        }
+        self.trace_all(marked, collector);
         false
     }
 }
@@ -153,6 +164,41 @@ impl<const KIND: usize> Default for Handle<KIND> {
 impl<const KIND: usize> Traceable for Handle<KIND> {
     fn trace(&self, collector: &mut Collector) {
         collector.push(KIND, self.0);
+    }
+}
+
+// a mapping from a KIND to another, but...
+// it could be more useful with a generic type
+pub struct HandleColumn<const KIND: usize> {
+    pub vec: Vec<u32>,
+}
+
+impl<const KIND: usize> HandleColumn<KIND> {
+    pub fn new() -> Self {
+        Self { vec: Vec::new() }
+    }
+    pub fn set(&mut self, index: u32, value: Handle<KIND>) {
+        let index = index as usize;
+        if self.vec.len() <= index {
+            let new_len = if self.vec.len() == 0 {
+                8
+            } else {
+                2 * self.vec.len()
+            };
+            self.vec.resize(new_len, 0);
+        }
+        self.vec[index] = value.0;
+    }
+    pub fn get(&self, index: u32) -> Handle<KIND> {
+        Handle(self.vec[index as usize])
+    }
+    pub fn byte_count(&self) -> usize {
+        mem::size_of::<HandleColumn<KIND>>() + self.vec.capacity() * 4
+    }
+    pub fn trace_all(&self, marked: &Vec<u32>, collector: &mut Collector) {
+        for &i in marked {
+            collector.handles[KIND].push(self.vec[i as usize])
+        }
     }
 }
 

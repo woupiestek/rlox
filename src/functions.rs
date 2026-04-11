@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::{
-    handles::Handles,
+    handles::HandleSet,
     heap::{Collector, Handle, Heap, Pool, Traceable, FUNCTION},
     strings::StringHandle,
     values::Value,
@@ -91,12 +91,13 @@ impl FunctionHandle {
 }
 
 pub struct Functions {
+    // todo: another complicated case, or...
     names: Vec<StringHandle>, // run time data structure
     arities: Vec<u8>,
     upvalue_counts: Vec<u8>,
     frames: Vec<usize>,
     pub chunk: Chunk,
-    handles: Handles,
+    handles: HandleSet,
 }
 
 impl Functions {
@@ -109,7 +110,7 @@ impl Functions {
             // indirection to allow compactification...
             frames: Vec::new(),
             chunk: Chunk::new(),
-            handles: Handles::new(),
+            handles: HandleSet::new(),
         }
     }
 
@@ -182,15 +183,18 @@ impl Pool<FUNCTION> for Functions {
         self.names.capacity() * 96
     }
 
-    fn trace(&mut self, collector: &mut Collector) {
-        let marked = self.handles.mark_all(&mut collector.handles[FUNCTION]);
-        for &i in &marked {
+    fn mark(&mut self, handle: u32) -> bool {
+        self.handles.mark(handle)
+    }
+
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
+        for &i in marked {
             let name = self.names[i as usize];
             if name != StringHandle::EMPTY {
                 name.trace(collector);
             }
         }
-        for &i in &marked {
+        for &i in marked {
             for constant in self.constants(i as usize) {
                 self.chunk.constants[constant].trace(collector)
             }

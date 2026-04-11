@@ -1,9 +1,7 @@
-use std::mem;
-
 use crate::{
     classes::ClassHandle,
     hash_maps::HashMaps,
-    heap::{Collector, Handle, Heap, Pool, Traceable, INSTANCE},
+    heap::{Collector, Handle, HandleColumn, Heap, Pool, CLASS, INSTANCE},
     strings::StringHandle,
     values::Value,
 };
@@ -11,29 +9,27 @@ use crate::{
 pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
-    classes: Vec<ClassHandle>,
+    // wrapper for Vec<u32> with shared functionality?
+    classes: HandleColumn<CLASS>,
     properties: HashMaps<Value, INSTANCE>,
 }
 
 impl Instances {
     pub fn new() -> Self {
         Self {
-            classes: Vec::new(),
+            classes: HandleColumn::new(),
             properties: HashMaps::new(),
         }
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
         let handle = self.properties.new_hash_map();
-        while self.classes.len() <= handle.index() {
-            self.classes.push(Handle(0));
-        }
-        self.classes[handle.index()] = class;
+        self.classes.set(handle.0, class);
         handle
     }
 
     pub fn get_class<'s>(&self, ih: InstanceHandle) -> ClassHandle {
-        self.classes[ih.index()]
+        self.classes.get(ih.0)
     }
 
     pub fn to_string(&self, ih: InstanceHandle, heap: &Heap) -> String {
@@ -47,7 +43,6 @@ impl Instances {
         self.properties.get(ih, key)
     }
 
-    //
     pub fn set_property(&mut self, ih: InstanceHandle, key: StringHandle, value: Value) -> bool {
         self.properties.put(ih, key, value)
     }
@@ -59,16 +54,16 @@ impl Instances {
 
 impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
-        self.properties.byte_count()
-            + self.classes.capacity() * 4
-            + mem::size_of::<Vec<ClassHandle>>()
+        self.properties.byte_count() + self.classes.byte_count()
     }
 
-    fn trace(&mut self, collector: &mut Collector) {
-        let marked = self.properties.mark_and_trace(collector);
-        for &i in &marked {
-            self.classes[i as usize].trace(collector);
-        }
+    fn mark(&mut self, handle: u32) -> bool {
+        self.properties.mark(handle)
+    }
+
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
+        self.properties.trace_all(marked, collector);
+        self.classes.trace_all(marked, collector);
     }
 
     fn reset(&mut self) {

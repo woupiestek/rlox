@@ -1,7 +1,7 @@
 use std::mem;
 
 use crate::{
-    handles::Handles,
+    handles::HandleSet,
     heap::{Collector, Handle, Pool, Traceable},
     strings::StringHandle,
 };
@@ -123,7 +123,7 @@ impl<A: Copy + Default + Traceable> Traceable for HashMap<A> {
 }
 
 pub struct HashMaps<A: Copy + Default + Traceable, const KIND: usize> {
-    handles: Handles,
+    handles: HandleSet,
     active: Vec<Option<HashMap<A>>>,
     stash: Vec<Vec<HashMap<A>>>,
     hash_map_byte_count: usize,
@@ -132,7 +132,7 @@ pub struct HashMaps<A: Copy + Default + Traceable, const KIND: usize> {
 impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
     pub fn new() -> Self {
         Self {
-            handles: Handles::new(),
+            handles: HandleSet::new(),
             active: Vec::new(),
             stash: Vec::new(),
             hash_map_byte_count: 0,
@@ -259,16 +259,6 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
             false
         }
     }
-
-    pub fn mark_and_trace(&mut self, collector: &mut Collector) -> Vec<u32> {
-        let marked = self.handles.mark_all(&mut collector.handles[KIND]);
-        for &i in &marked {
-            if let Some(hash_map) = &self.active[i as usize] {
-                hash_map.trace(collector);
-            }
-        }
-        marked
-    }
 }
 
 impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A, KIND> {
@@ -279,8 +269,16 @@ impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A
             + self.hash_map_byte_count
     }
 
-    fn trace(&mut self, collector: &mut Collector) {
-        self.mark_and_trace(collector);
+    fn mark(&mut self, handle: u32) -> bool {
+        self.handles.mark(handle)
+    }
+
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
+        for &i in marked {
+            if let Some(hash_map) = &self.active[i as usize] {
+                hash_map.trace(collector);
+            }
+        }
     }
 
     fn reset(&mut self) {

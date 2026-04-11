@@ -2,7 +2,7 @@ use std::{mem, ops::RangeInclusive};
 
 use crate::{
     common::STACK_SIZE,
-    handles::Handles,
+    handles::HandleSet,
     heap::{Collector, Handle, Pool, Traceable, UPVALUE},
     values::Value,
 };
@@ -19,8 +19,9 @@ pub const HEAP_POWER: usize = 5;
  * For simple linear searches.
  */
 pub struct Upvalues {
-    handles: Handles,
+    handles: HandleSet,
     locations: Vec<u16>,
+    // special case...
     open_heap: Vec<UpvalueHandle>,
     values: Vec<Value>,
 }
@@ -28,7 +29,7 @@ pub struct Upvalues {
 impl Upvalues {
     pub fn new() -> Self {
         Self {
-            handles: Handles::new(),
+            handles: HandleSet::new(),
             locations: Vec::new(),
             open_heap: Vec::new(),
             values: Vec::new(),
@@ -185,9 +186,13 @@ impl Pool<UPVALUE> for Upvalues {
         // that is optimistic...
         self.values.capacity() * Self::ENTRY_SIZE
     }
-    fn trace(&mut self, collector: &mut Collector) {
-        let marked = self.handles.mark_all(&mut collector.handles[UPVALUE]);
-        for &i in &marked {
+
+    fn mark(&mut self, handle: u32) -> bool {
+        self.handles.mark(handle)
+    }
+
+    fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
+        for &i in marked {
             self.values[i as usize].trace(collector)
         }
     }
