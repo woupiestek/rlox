@@ -1,21 +1,22 @@
 use crate::{
     closures::ClosureHandle,
+    handles::Column,
     hash_maps::HashMaps,
-    heap::{Collector, Handle, HandleColumn, Pool, CLASS, STRING},
+    heap::{Collector, Handle, Pool, CLASS},
     strings::{StringHandle, Strings},
 };
 
 pub type ClassHandle = Handle<CLASS>;
 
 pub struct Classes {
-    names: HandleColumn<STRING>,
+    names: Column<StringHandle>,
     methods: HashMaps<ClosureHandle, CLASS>,
 }
 
 impl Classes {
     pub fn new() -> Self {
         Self {
-            names: HandleColumn::new(),
+            names: Column::new(),
             methods: HashMaps::new(),
         }
     }

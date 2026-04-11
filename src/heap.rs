@@ -1,5 +1,3 @@
-use std::mem;
-
 use crate::{
     bound_methods::BoundMethods, classes::Classes, closures::Closures, functions::Functions,
     instances::Instances, strings::Strings, upvalues::Upvalues,
@@ -164,41 +162,6 @@ impl<const KIND: usize> Default for Handle<KIND> {
 impl<const KIND: usize> Traceable for Handle<KIND> {
     fn trace(&self, collector: &mut Collector) {
         collector.push(KIND, self.0);
-    }
-}
-
-// a mapping from a KIND to another, but...
-// it could be more useful with a generic type
-pub struct HandleColumn<const KIND: usize> {
-    pub vec: Vec<u32>,
-}
-
-impl<const KIND: usize> HandleColumn<KIND> {
-    pub fn new() -> Self {
-        Self { vec: Vec::new() }
-    }
-    pub fn set(&mut self, index: u32, value: Handle<KIND>) {
-        let index = index as usize;
-        if self.vec.len() <= index {
-            let new_len = if self.vec.len() == 0 {
-                8
-            } else {
-                2 * self.vec.len()
-            };
-            self.vec.resize(new_len, 0);
-        }
-        self.vec[index] = value.0;
-    }
-    pub fn get(&self, index: u32) -> Handle<KIND> {
-        Handle(self.vec[index as usize])
-    }
-    pub fn byte_count(&self) -> usize {
-        mem::size_of::<HandleColumn<KIND>>() + self.vec.capacity() * 4
-    }
-    pub fn trace_all(&self, marked: &Vec<u32>, collector: &mut Collector) {
-        for &i in marked {
-            collector.handles[KIND].push(self.vec[i as usize])
-        }
     }
 }
 

@@ -52,7 +52,6 @@ impl<'hp> Disassembler<'hp> {
     }
 
     fn read_constant(&self) -> Value {
-        // fuck!
         self.chunk()
             .read_constant(self.cp + self.chunk().read_byte(self.ip) as usize)
     }

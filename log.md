@@ -1,5 +1,111 @@
 # Rlox
 
+## 2026-04-11
+
+### ideas for a new language and machine
+
+1. Create objects by using a counter, nothing else.
+2. Properties can be resolved at compile time, as their names are static, so
+   have a global vec of properties, each containing a hashmap that map objects
+   handles to values.
+3. Not necesarily classes... maybe use prototypical inheritance instead.
+4. The hash maybe uses the bit reversal scattering. Special fields, like
+   prototypes, receive special indices.
+
+Is searching for a fieldname better than searching for an object handle? The
+idea is, that these global weak maps of values are easier and faster to garbage
+collect.
+
+### in rlox
+
+The bytecode would be adjusted to refer to global tables of properties and
+methods.
+
+- Each property maps instance handles to values
+- Each method maps class handles to values Whether each property is stored with
+  a handle for the method name or for the object shouldn't matter too much,
+  right?
+
+### considerations
+
+The chunks have a constant table, and the byte code does not contain direct
+links to structure in memory. In other words, when loading a chunk, global
+structures can be linked to the constnt indices directly. Lox requires that the
+global structures are linked before any values is assigned, but that should be
+no issue: just generate the maps on the spot:
+
+- For each property name a hash map from object handles to values.
+- For each method name, a hash map from class handles to closures.
+- For each global name, an upvalue, or something similar. Alternatively, keep
+  the globals object with the unnamed, empty class.
+
+Some concerns:
+
+- Not being able to list all of the properties of an object, without scanning
+  all properties was found not te be an issue for garbage collection. What about
+  inheritance?
+- Bytecode references a constant table that is free to contain all kinds of
+  constants, even if the opcode clearly expects something more specific.
+
+In fact, 4 kinds of constant are stored: identifiers, numbers, strings, and
+functions. Identifiers are for global variables, properties, class names and
+method names. Could all of those be globals?
+
+- Different name spaces: global variables and class names may have the same name
+  space, but that is different from properties and methods, and those don't
+  share the same space either.
+- Different values: global variables have values. Properties have maps to
+  values. Methods have maps to closures. Note: if classes names and global
+  variables are the same, and global variables are just member of a virtual
+  global object, There is no issue with them anymore. The name space can then be
+  encoded into the identifier.
+
+In fact, there could be a 'Constant' data type, similar to 'Value', but with
+different embeddings. Literal strings, numbers, and functions, are encoded the
+same way as values, for ease of copying over. Identifiers have their own
+encoding however, which includes indicators for what is identified, to avoid
+name space collisions. Think of this as appending a letter in front of each
+string, to indicate what it represents: a literal string, a global variable,
+class name, property, or method. When loading the chunk, the identifiers must be
+linked to global structures in the VM, so that might be a reason to separate
+constants and global identifiers anyway.
+
+I think rlox could benefit from a proper symbol type anyway: Normal strings
+could have a simpler repository, without the hashing, but supporting string
+addition. Symbols are used for identifiers, but because of the limited set of
+symbols that can occur in them, their hashing will be simpler. They cannot be
+added together.
+
+### Faster GC?
+
+Rather than passing a list of object handles in and checking whether a poperty
+contains them, use a bit set of marked handles to jugde the object that have the
+property. It depends on which set is typically smaller. IDk what happened, what
+is the issue now?
+
+It feel like I missed something...
+
+So the recent refactor demonstrates that if the list of properties for a class
+is known, there is no slow down in garbage collection. However, this rlox
+refactor idea removes that list. Now the collector needs to go throuw all
+properties to be sure that the object is not in there.
+
+Different strategies:
+
+- loop through the properties instead? The grey set would be a bit set, and
+  instead of doing a look up for each object in each property, the properties
+  are traversed once to check all the
+- maintain a list of properties per object or class. The property would have to
+  indicate that it had no entry for the object, when set, and the object would
+  have a list of properties somewhere to inspect for garbage collection. Getting
+  the value still requires a look up though...
+
+The fact that there is no look up, just direct indexing, is another factor that
+makes GC fast, but that requires a language that fixes the properties per class.
+Revenge of the name spaces: see how having a class_name*property_name could
+help? Not for lox, though, since the class of the object is not known at compile
+time.
+
 ## 2026-04-09
 
 ### the GC loop
@@ -8,8 +114,8 @@ The pool trait uses a loop for tracing, going handle by handle, i.e. row by row.
 I want it to go column by column now...
 
 That seems to be possible. Some head scratching moments, possibly due to bugs.
-All is basically vindicated: we can do mark and sweep with the alternative set up,
-it may even be more performant.
+All is basically vindicated: we can do mark and sweep with the alternative set
+up, it may even be more performant.
 
 Everything still works. Sadly, no great speed up.
 

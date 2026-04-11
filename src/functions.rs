@@ -1,7 +1,7 @@
-use std::ops::Range;
+use std::{mem, ops::Range};
 
 use crate::{
-    handles::HandleSet,
+    handles::{Column, HandleSet},
     heap::{Collector, Handle, Heap, Pool, Traceable, FUNCTION},
     strings::StringHandle,
     values::Value,
@@ -92,10 +92,10 @@ impl FunctionHandle {
 
 pub struct Functions {
     // todo: another complicated case, or...
-    names: Vec<StringHandle>, // run time data structure
-    arities: Vec<u8>,
-    upvalue_counts: Vec<u8>,
-    frames: Vec<usize>,
+    names: Column<StringHandle>, // run time data structure
+    arities: Column<u8>,
+    upvalue_counts: Column<u8>,
+    frames: Column<usize>,
     pub chunk: Chunk,
     handles: HandleSet,
 }
@@ -104,11 +104,11 @@ impl Functions {
     // it might help to specify some sizes up front, but these 5 arrays don't all need the same
     pub fn new() -> Self {
         Self {
-            names: Vec::new(), // run time data structure
-            arities: Vec::new(),
-            upvalue_counts: Vec::new(),
+            names: Column::new(), // run time data structure
+            arities: Column::new(),
+            upvalue_counts: Column::new(),
             // indirection to allow compactification...
-            frames: Vec::new(),
+            frames: Column::new(),
             chunk: Chunk::new(),
             handles: HandleSet::new(),
         }
@@ -123,29 +123,27 @@ impl Functions {
         frame: usize,
     ) -> FunctionHandle {
         let i = self.handles.next();
-        while i as usize >= self.arities.len() {
-            self.arities.push(arity);
-            self.frames.push(frame);
-            self.names.push(name.unwrap_or(StringHandle::EMPTY));
-            self.upvalue_counts.push(upvalue_count);
-        }
+        self.arities.set(i, arity);
+        self.frames.set(i, frame);
+        self.names.set(i, name.unwrap_or(StringHandle::EMPTY));
+        self.upvalue_counts.set(i, upvalue_count);
         FunctionHandle::from(i)
     }
 
     pub fn arity(&self, fh: FunctionHandle) -> u8 {
-        self.arities[fh.index()]
+        self.arities.get(fh.0)
     }
 
     pub fn upvalue_count(&self, fh: FunctionHandle) -> usize {
-        self.upvalue_counts[fh.index()] as usize
+        self.upvalue_counts.get(fh.0) as usize
     }
 
     pub fn get_frame(&self, fh: FunctionHandle) -> &ChunkFrame {
-        &self.chunk.frames[self.frames[fh.index()]]
+        &self.chunk.frames[self.frames.get(fh.0)]
     }
 
-    fn constants(&self, index: usize) -> Range<usize> {
-        let frame = self.frames[index];
+    fn constants(&self, index: u32) -> Range<usize> {
+        let frame = self.frames.get(index);
         let from = self.chunk.frames[frame].cp;
         let len = self.chunk.frames.len();
         let to = if frame + 1 == len {
@@ -162,16 +160,15 @@ impl Functions {
     }
 
     pub fn to_string(&self, fh: FunctionHandle, heap: &Heap) -> String {
-        let i = fh.0 as usize;
-        let name = self.names[i];
+        let name = self.names.get(fh.0);
         if name == StringHandle::EMPTY {
             format!("<script>")
         } else {
             format!(
                 "<fn {} ({}/{})>",
                 heap.strings.get(name),
-                self.arities[i],
-                self.upvalue_counts[i]
+                self.arities.get(fh.0),
+                self.upvalue_counts.get(fh.0)
             )
         }
     }
@@ -180,7 +177,12 @@ impl Functions {
 impl Pool<FUNCTION> for Functions {
     fn byte_count(&self) -> usize {
         // replace with more realistic number
-        self.names.capacity() * 96
+        self.names.byte_count()
+            + self.arities.byte_count()
+            + self.frames.byte_count()
+            + self.handles.byte_count()
+            + self.upvalue_counts.byte_count()
+            + mem::size_of::<Self>()
     }
 
     fn mark(&mut self, handle: u32) -> bool {
@@ -189,13 +191,13 @@ impl Pool<FUNCTION> for Functions {
 
     fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
         for &i in marked {
-            let name = self.names[i as usize];
+            let name = self.names.get(i);
             if name != StringHandle::EMPTY {
                 name.trace(collector);
             }
         }
         for &i in marked {
-            for constant in self.constants(i as usize) {
+            for constant in self.constants(i) {
                 self.chunk.constants[constant].trace(collector)
             }
         }

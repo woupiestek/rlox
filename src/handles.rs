@@ -3,6 +3,8 @@
 
 use std::mem;
 
+use crate::heap::{Collector, Handle};
+
 // a virtual set of handles for objects
 // represented by a bitset
 // subdivided in buckets of 8, since that is the size of a byte.
@@ -86,5 +88,41 @@ impl HandleSet {
 
     pub fn byte_count(&self) -> usize {
         mem::size_of::<Self>() + self.marked.len()
+    }
+}
+
+// a mapping from a KIND to another, but...
+// it could be more useful with a generic type
+pub struct Column<T>
+where
+    T: Clone + Default,
+{
+    pub values: Vec<T>,
+}
+
+impl<T: Clone + Default> Column<T> {
+    pub fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+    pub fn set(&mut self, index: u32, value: T) {
+        let index = index as usize;
+        if self.values.len() <= index {
+            self.values.resize(index + 1, Default::default());
+        }
+        self.values[index] = value;
+    }
+    pub fn get(&self, index: u32) -> T {
+        self.values[index as usize].clone()
+    }
+    pub fn byte_count(&self) -> usize {
+        mem::size_of::<Self>() + self.values.capacity() * mem::size_of::<T>()
+    }
+}
+
+impl<const KIND: usize> Column<Handle<KIND>> {
+    pub fn trace_all(&self, marked: &Vec<u32>, collector: &mut Collector) {
+        for &i in marked {
+            collector.handles[KIND].push(self.values[i as usize].0)
+        }
     }
 }

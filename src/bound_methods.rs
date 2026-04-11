@@ -1,7 +1,7 @@
 use crate::{
     closures::ClosureHandle,
-    handles::HandleSet,
-    heap::{Collector, Handle, HandleColumn, Heap, Pool, BOUND_METHOD, CLOSURE, INSTANCE},
+    handles::{Column, HandleSet},
+    heap::{Collector, Handle, Heap, Pool, BOUND_METHOD, CLOSURE, INSTANCE},
     instances::InstanceHandle,
 };
 
@@ -9,16 +9,16 @@ pub type BoundMethodHandle = Handle<BOUND_METHOD>;
 
 pub struct BoundMethods {
     handles: HandleSet,
-    instances: HandleColumn<INSTANCE>,
-    closures: HandleColumn<CLOSURE>,
+    instances: Column<Handle<INSTANCE>>,
+    closures: Column<Handle<CLOSURE>>,
 }
 
 impl BoundMethods {
     pub fn new() -> Self {
         Self {
             handles: HandleSet::new(),
-            instances: HandleColumn::new(),
-            closures: HandleColumn::new(),
+            instances: Column::new(),
+            closures: Column::new(),
         }
     }
 

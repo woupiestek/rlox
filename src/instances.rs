@@ -1,7 +1,8 @@
 use crate::{
     classes::ClassHandle,
+    handles::Column,
     hash_maps::HashMaps,
-    heap::{Collector, Handle, HandleColumn, Heap, Pool, CLASS, INSTANCE},
+    heap::{Collector, Handle, Heap, Pool, INSTANCE},
     strings::StringHandle,
     values::Value,
 };
@@ -9,15 +10,14 @@ use crate::{
 pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
-    // wrapper for Vec<u32> with shared functionality?
-    classes: HandleColumn<CLASS>,
+    classes: Column<ClassHandle>,
     properties: HashMaps<Value, INSTANCE>,
 }
 
 impl Instances {
     pub fn new() -> Self {
         Self {
-            classes: HandleColumn::new(),
+            classes: Column::new(),
             properties: HashMaps::new(),
         }
     }
