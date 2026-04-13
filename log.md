@@ -1,5 +1,45 @@
 # Rlox
 
+## 2026-04-13
+
+After using WinGet to update everything, cargo lost the linker, or the linker
+lost dependencies... The trick was to install 'windows sdk', not (just) Visual
+Studio BuildTools.
+
+## 2026-04-12
+
+How to profit from the static names of properties and methods? It feel like
+somthing is captures from teh gloabl environment, just like with global
+variables. What is that benefit?
+
+- on deref, there is only an object handle to work with. Looking up the object
+  in a hashmap may not have great cost, but it probably does not have much
+  benefit either.
+- on gc, it is definitely a downside that properties are checked
+- on inheritance, the same problem comes up as gc: the need to iterate through
+  valid keys.
+
+So what could work?
+
+- Give each object a class and an index, maybe. The class might still need look
+  up, but the value should be there under the index.
+- Only do methods. That properties are in the way doesn't help, but once that
+  check is done, the method would not require another hash table lookup, but
+  just be at the index connected to the class of the object.
+
+### alternative hash maps
+
+Use vecs for keys and values, and use the hashmap for the indices. That is:
+don't store any values inside the hashmap. It might safe space especially for
+smaller hashmaps: use u8 or u16 indices for them. This also avoids generic
+types: the mapping from hash to index does not care about key or value types. No
+need for the keys or values to allow empty cases.
+
+### to do?
+
+- Symbols
+- New hashmaps
+
 ## 2026-04-11
 
 ### ideas for a new language and machine

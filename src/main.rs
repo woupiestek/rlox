@@ -22,6 +22,7 @@ mod natives;
 mod op;
 mod scanner;
 mod strings;
+mod symbols;
 mod upvalues;
 mod values;
 mod vm;

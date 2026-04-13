@@ -1,8 +1,13 @@
 // run time data structures
 
-use crate::heap::{
-    Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE, NATIVE,
-    STRING,
+use std::ops::Not;
+
+use crate::{
+    heap::{
+        Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE,
+        STRING, SYMBOL,
+    },
+    natives::NativeHandle,
 };
 
 // nan box?
@@ -61,12 +66,36 @@ impl<const KIND: usize> TryFrom<Value> for Handle<KIND> {
     type Error = String;
 }
 
+const NATIVE: u64 = QNAN | 0x100;
+
+impl TryFrom<Value> for NativeHandle {
+    type Error = String;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        if value.is_native_function() {
+            Ok(Self(value.0 as u8))
+        } else {
+            err!("value is not a native function")
+        }
+    }
+}
+
+impl From<NativeHandle> for Value {
+    fn from(value: NativeHandle) -> Self {
+        Self(value.0 as u64 | NATIVE)
+    }
+}
+
 const QNAN: u64 = 0x7ffc_0000_0000_0000;
 // 0x7ffc, 0x7ffd, 0x7ffe, 0x7fff, 0xfffc, 0xfffd, 0xfffe, 0xffff
 
 impl Value {
     pub fn is_number(&self) -> bool {
         self.0 & QNAN != QNAN
+    }
+
+    pub fn is_native_function(&self) -> bool {
+        self.0 & 0xffu64.not() == NATIVE
     }
 
     // nil, true, false
@@ -93,15 +122,19 @@ impl Value {
             _ => (),
         }
 
-        if self.0 & QNAN != QNAN {
+        if self.is_number() {
             return format!("{}", f64::from_bits(self.0));
+        }
+
+        if self.is_native_function() {
+            return format!("<native function>");
         }
 
         if 0x8000_0000_0000_0000 & self.0 == 0x8000_0000_0000_0000 {
             let index = (self.0 & 0xffff_ffff) as u32;
             match ((self.0 >> 32) & 0x000f) as usize {
                 BOUND_METHOD => return heap.bound_methods.to_string(Handle::from(index), heap),
-                CLASS => return heap.classes.to_string(Handle::from(index), &heap.strings),
+                CLASS => return heap.classes.to_string(Handle::from(index), &heap.symbols),
                 CLOSURE => {
                     return heap
                         .functions
@@ -110,7 +143,7 @@ impl Value {
                 INSTANCE => return heap.instances.to_string(Handle::from(index), heap),
                 FUNCTION => return heap.functions.to_string(Handle::from(index), heap),
                 STRING => return heap.strings.get(Handle::from(index)).to_string(),
-                NATIVE => return format!("<native function>"),
+                SYMBOL => return heap.symbols.get(Handle::from(index)).to_string(),
                 _ => (),
             }
         }

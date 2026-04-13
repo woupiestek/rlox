@@ -1,5 +1,5 @@
 use crate::{
-    closures::ClosureHandle, functions::ChunkFrame, heap::Heap, strings::StringHandle,
+    closures::ClosureHandle, functions::ChunkFrame, heap::Heap, symbols::SymbolHandle,
     upvalues::UpvalueHandle, values::Value,
 };
 
@@ -46,8 +46,8 @@ impl CallFrame {
             .read_constant(self.cp + self.read_byte(heap) as usize)
     }
 
-    pub fn read_string(&mut self, heap: &Heap) -> Result<StringHandle, String> {
-        StringHandle::try_from(self.read_constant(heap))
+    pub fn read_symbol(&mut self, heap: &Heap) -> Result<SymbolHandle, String> {
+        SymbolHandle::try_from(self.read_constant(heap))
     }
 
     pub fn get_upvalue(&self, heap: &Heap, index: usize) -> UpvalueHandle {

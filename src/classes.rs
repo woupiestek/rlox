@@ -3,13 +3,13 @@ use crate::{
     handles::Column,
     hash_maps::HashMaps,
     heap::{Collector, Handle, Pool, CLASS},
-    strings::{StringHandle, Strings},
+    symbols::{SymbolHandle, Symbols},
 };
 
 pub type ClassHandle = Handle<CLASS>;
 
 pub struct Classes {
-    names: Column<StringHandle>,
+    names: Column<SymbolHandle>,
     methods: HashMaps<ClosureHandle, CLASS>,
 }
 
@@ -21,28 +21,28 @@ impl Classes {
         }
     }
 
-    pub fn new_class(&mut self, name: StringHandle) -> ClassHandle {
+    pub fn new_class(&mut self, name: SymbolHandle) -> ClassHandle {
         let ch = self.methods.new_hash_map();
         self.names.set(ch.0, name);
         ch
     }
 
-    pub fn get_name<'s>(&self, ch: ClassHandle, strings: &'s Strings) -> &'s str {
-        strings.get(self.names.get(ch.0))
+    pub fn get_name<'s>(&self, ch: ClassHandle, symbols: &'s Symbols) -> &'s str {
+        symbols.get(self.names.get(ch.0))
     }
 
-    pub fn to_string(&self, ch: ClassHandle, strings: &Strings) -> String {
-        format!("<class {}>", self.get_name(ch, strings))
+    pub fn to_string(&self, ch: ClassHandle, symbols: &Symbols) -> String {
+        format!("<class {}>", self.get_name(ch, symbols))
     }
 
-    pub fn get_method(&self, ch: ClassHandle, name: StringHandle) -> Option<ClosureHandle> {
+    pub fn get_method(&self, ch: ClassHandle, name: SymbolHandle) -> Option<ClosureHandle> {
         self.methods.get(ch, name)
     }
 
     pub fn set_method(
         &mut self,
         ch: ClassHandle,
-        name: StringHandle,
+        name: SymbolHandle,
         method: ClosureHandle,
     ) -> bool {
         self.methods.put(ch, name, method)

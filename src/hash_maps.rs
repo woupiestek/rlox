@@ -3,7 +3,7 @@ use std::mem;
 use crate::{
     handles::HandleSet,
     heap::{Collector, Handle, Pool, Traceable},
-    strings::StringHandle,
+    symbols::SymbolHandle,
 };
 
 /*
@@ -16,25 +16,25 @@ const KNUTH_PHI: u32 = 2654435761;
 
 struct HashMap<A: Copy + Default + Traceable> {
     count: usize,
-    keys: Box<[StringHandle]>,
+    keys: Box<[SymbolHandle]>,
     values: Box<[A]>,
 }
 
 impl<A: Copy + Default + Traceable> HashMap<A> {
-    fn find(&self, key: StringHandle) -> usize {
+    fn find(&self, key: SymbolHandle) -> usize {
         let mask = self.keys.len() - 1;
         let mut index = (key.0.wrapping_mul(KNUTH_PHI) >> (mask as u32).leading_zeros()) as usize;
         let mut tombstone = usize::MAX;
         loop {
             match self.keys[index] {
-                StringHandle::EMPTY => {
+                SymbolHandle::EMPTY => {
                     return if tombstone < usize::MAX {
                         tombstone
                     } else {
                         index
                     };
                 }
-                StringHandle::TOMBSTONE => {
+                SymbolHandle::TOMBSTONE => {
                     tombstone = index;
                 }
                 other => {
@@ -54,12 +54,12 @@ impl<A: Copy + Default + Traceable> HashMap<A> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             count: 0,
-            keys: vec![StringHandle::EMPTY; capacity].into_boxed_slice(),
+            keys: vec![SymbolHandle::EMPTY; capacity].into_boxed_slice(),
             values: vec![A::default(); capacity].into_boxed_slice(),
         }
     }
 
-    pub fn get(&self, key: StringHandle) -> Option<A> {
+    pub fn get(&self, key: SymbolHandle) -> Option<A> {
         let index = self.find(key);
         if self.keys[index] == key {
             Some(self.values[index])
@@ -71,7 +71,7 @@ impl<A: Copy + Default + Traceable> HashMap<A> {
     // true means a new key was added
     // false means it was not
     // there is no indication of what happened to the value.
-    fn put_unchecked(&mut self, key: StringHandle, value: A) -> bool {
+    fn put_unchecked(&mut self, key: SymbolHandle, value: A) -> bool {
         let index = self.find(key);
         self.values[index] = value;
         if self.keys[index] == key {
@@ -82,18 +82,18 @@ impl<A: Copy + Default + Traceable> HashMap<A> {
         true
     }
 
-    pub fn put(&mut self, key: StringHandle, value: A) -> bool {
+    pub fn put(&mut self, key: SymbolHandle, value: A) -> bool {
         assert!(!self.is_full());
         self.put_unchecked(key, value)
     }
 
-    pub fn delete(&mut self, key: StringHandle) -> bool {
+    pub fn delete(&mut self, key: SymbolHandle) -> bool {
         if !key.is_valid() {
             return false;
         }
         let index = self.find(key);
         if self.keys[index] == key {
-            self.keys[index] = StringHandle::TOMBSTONE;
+            self.keys[index] = SymbolHandle::TOMBSTONE;
             self.values[index] = A::default();
             return true;
         }
@@ -102,7 +102,7 @@ impl<A: Copy + Default + Traceable> HashMap<A> {
 
     pub fn clear(&mut self) {
         self.count = 0;
-        self.keys.fill(StringHandle::EMPTY);
+        self.keys.fill(SymbolHandle::EMPTY);
         self.values.fill(A::default());
     }
 
@@ -147,7 +147,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         Handle(next)
     }
 
-    pub fn get(&self, handle: Handle<KIND>, key: StringHandle) -> Option<A> {
+    pub fn get(&self, handle: Handle<KIND>, key: SymbolHandle) -> Option<A> {
         if let Some(hash_map) = &self.active[handle.index()] {
             hash_map.get(key)
         } else {
@@ -209,7 +209,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         self.active[handle.index()].as_mut().unwrap()
     }
 
-    pub fn put(&mut self, handle: Handle<KIND>, key: StringHandle, value: A) -> bool {
+    pub fn put(&mut self, handle: Handle<KIND>, key: SymbolHandle, value: A) -> bool {
         let capacity = if let Some(hash_map) = &mut self.active[handle.index()] {
             if !hash_map.is_full() {
                 return hash_map.put(key, value);
@@ -252,7 +252,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         }
     }
 
-    pub fn delete(&mut self, handle: Handle<KIND>, key: StringHandle) -> bool {
+    pub fn delete(&mut self, handle: Handle<KIND>, key: SymbolHandle) -> bool {
         if let Some(hash_map) = &mut self.active[handle.index()] {
             hash_map.delete(key)
         } else {

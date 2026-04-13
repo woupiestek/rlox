@@ -1,6 +1,6 @@
 use crate::{
     bound_methods::BoundMethods, classes::Classes, closures::Closures, functions::Functions,
-    instances::Instances, strings::Strings, upvalues::Upvalues,
+    instances::Instances, strings::Strings, symbols::Symbols, upvalues::Upvalues,
 };
 
 pub trait Traceable {
@@ -8,17 +8,17 @@ pub trait Traceable {
 }
 
 pub struct Collector {
-    pub handles: [Vec<u32>; 7],
+    pub handles: [Vec<u32>; 8],
 }
 
 pub const BOUND_METHOD: usize = 0;
-pub const INSTANCE: usize = 1;
-pub const CLASS: usize = 2;
-pub const CLOSURE: usize = 3;
-pub const UPVALUE: usize = 4;
-pub const FUNCTION: usize = 5;
-pub const STRING: usize = 6;
-pub const NATIVE: usize = 7;
+pub const CLASS: usize = 1;
+pub const CLOSURE: usize = 2;
+pub const FUNCTION: usize = 3;
+pub const INSTANCE: usize = 4;
+pub const STRING: usize = 5;
+pub const SYMBOL: usize = 6;
+pub const UPVALUE: usize = 7;
 
 impl Collector {
     pub fn new() -> Self {
@@ -77,8 +77,10 @@ impl Collector {
             done = heap.closures.mark_all(&mut marked, self) && done;
             done = heap.functions.mark_all(&mut marked, self) && done;
             done = heap.instances.mark_all(&mut marked, self) && done;
-            done = heap.strings.mark_all(&mut marked, self) && done; // somehow do the conversion key -> handle here
+            done = heap.strings.mark_all(&mut marked, self) && done;
+            done = heap.symbols.mark_all(&mut marked, self) && done;
             done = heap.upvalues.mark_all(&mut marked, self) && done;
+
             if done {
                 break;
             }
@@ -94,12 +96,13 @@ impl Collector {
         {
             println!("Start sweeping.");
         }
-        heap.strings.sweep();
         heap.bound_methods.sweep();
         heap.classes.sweep();
         heap.closures.sweep();
         heap.functions.sweep();
         heap.instances.sweep();
+        heap.strings.sweep();
+        heap.symbols.sweep();
         heap.upvalues.sweep();
         #[cfg(feature = "log_gc")]
         {
@@ -172,6 +175,7 @@ pub struct Heap {
     pub functions: Functions,
     pub instances: Instances,
     pub strings: Strings,
+    pub symbols: Symbols,
     pub upvalues: Upvalues,
     next_gc: usize,
 }
@@ -185,6 +189,7 @@ impl Heap {
             functions: Functions::new(),
             instances: Instances::new(),
             strings: Strings::new(),
+            symbols: Symbols::new(),
             upvalues: Upvalues::new(),
             next_gc: 1 << 20,
         }
@@ -197,6 +202,7 @@ impl Heap {
         self.functions.reset();
         self.instances.reset();
         self.strings.reset();
+        self.symbols.reset();
         self.upvalues.reset();
     }
 
@@ -212,6 +218,7 @@ impl Heap {
     fn byte_count(&self) -> usize {
         self.upvalues.byte_count()
             + self.strings.byte_count()
+            + self.symbols.byte_count()
             + self.closures.byte_count()
             + self.classes.byte_count()
             + self.instances.byte_count()

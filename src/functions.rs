@@ -3,7 +3,7 @@ use std::{mem, ops::Range};
 use crate::{
     handles::{Column, HandleSet},
     heap::{Collector, Handle, Heap, Pool, Traceable, FUNCTION},
-    strings::StringHandle,
+    symbols::SymbolHandle,
     values::Value,
 };
 
@@ -91,8 +91,7 @@ impl FunctionHandle {
 }
 
 pub struct Functions {
-    // todo: another complicated case, or...
-    names: Column<StringHandle>, // run time data structure
+    names: Column<SymbolHandle>,
     arities: Column<u8>,
     upvalue_counts: Column<u8>,
     frames: Column<usize>,
@@ -104,7 +103,7 @@ impl Functions {
     // it might help to specify some sizes up front, but these 5 arrays don't all need the same
     pub fn new() -> Self {
         Self {
-            names: Column::new(), // run time data structure
+            names: Column::new(),
             arities: Column::new(),
             upvalue_counts: Column::new(),
             // indirection to allow compactification...
@@ -117,7 +116,7 @@ impl Functions {
     // repo pattern
     pub fn new_function(
         &mut self,
-        name: Option<StringHandle>,
+        name: Option<SymbolHandle>,
         arity: u8,
         upvalue_count: u8,
         frame: usize,
@@ -125,7 +124,7 @@ impl Functions {
         let i = self.handles.next();
         self.arities.set(i, arity);
         self.frames.set(i, frame);
-        self.names.set(i, name.unwrap_or(StringHandle::EMPTY));
+        self.names.set(i, name.unwrap_or(SymbolHandle::EMPTY));
         self.upvalue_counts.set(i, upvalue_count);
         FunctionHandle::from(i)
     }
@@ -161,12 +160,12 @@ impl Functions {
 
     pub fn to_string(&self, fh: FunctionHandle, heap: &Heap) -> String {
         let name = self.names.get(fh.0);
-        if name == StringHandle::EMPTY {
+        if name == SymbolHandle::EMPTY {
             format!("<script>")
         } else {
             format!(
                 "<fn {} ({}/{})>",
-                heap.strings.get(name),
+                heap.symbols.get(name),
                 self.arities.get(fh.0),
                 self.upvalue_counts.get(fh.0)
             )
@@ -192,7 +191,7 @@ impl Pool<FUNCTION> for Functions {
     fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
         for &i in marked {
             let name = self.names.get(i);
-            if name != StringHandle::EMPTY {
+            if name != SymbolHandle::EMPTY {
                 name.trace(collector);
             }
         }

@@ -8,11 +8,12 @@ use crate::{
     common::STACK_SIZE,
     compiler::compile,
     functions::FunctionHandle,
-    heap::{Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE, NATIVE},
+    heap::{Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE},
     instances::InstanceHandle,
     natives::{NativeHandle, Natives},
     op::Op,
     strings::StringHandle,
+    symbols::SymbolHandle,
     upvalues::UpvalueHandle,
     values::Value,
 };
@@ -39,7 +40,7 @@ pub struct VM {
     call_stack: Vec<CallFrame>,
     loaded: Vec<ClosureHandle>,
     globals: InstanceHandle,
-    init_string: StringHandle,
+    init_string: SymbolHandle,
     heap: Heap,
     natives: Natives,
     collector: Collector,
@@ -48,8 +49,8 @@ pub struct VM {
 impl VM {
     pub fn new() -> Self {
         let mut heap = Heap::new();
-        let init_string = heap.strings.put("init");
-        let global_class = heap.classes.new_class(StringHandle::EMPTY);
+        let init_string = heap.symbols.put("init");
+        let global_class = heap.classes.new_class(SymbolHandle::EMPTY);
         let globals = heap.instances.new_instance(global_class);
         let mut s = Self {
             values: [Value::NIL; STACK_SIZE],
@@ -131,7 +132,7 @@ impl VM {
         name: &str,
         native_fn: fn(args: &[Value]) -> Result<Value, String>,
     ) {
-        let key = self.heap.strings.put(name);
+        let key = self.heap.symbols.put(name);
         // are the protections still needed?
         self.push(Value::from(key));
         let value = Value::from(self.natives.store(native_fn));
@@ -201,34 +202,35 @@ impl VM {
                 self.set(arity, Value::from(receiver));
                 return self.push_frame(method, arity);
             }
-            Some(NATIVE) => {
-                let result = self
-                    .natives
-                    .call(NativeHandle::try_from(callee)?, self.tail(arity as usize)?)?;
-                self.stack_top -= arity as usize + 1;
-                self.push(result);
-                return Ok(());
-            }
             Some(CLOSURE) => return self.push_frame(ClosureHandle::try_from(callee)?, arity),
-            _ => err!(
-                "Can only call functions and classes, not '{}'",
-                callee.to_string(&self.heap)
-            ),
+            _ => (),
         }
+        if callee.is_native_function() {
+            let result = self
+                .natives
+                .call(NativeHandle::try_from(callee)?, self.tail(arity as usize)?)?;
+            self.stack_top -= arity as usize + 1;
+            self.push(result);
+            return Ok(());
+        }
+        err!(
+            "Can only call functions and classes, not '{}'",
+            callee.to_string(&self.heap)
+        )
     }
 
     fn invoke_from_class(
         &mut self,
         class: ClassHandle,
-        name: StringHandle,
+        name: SymbolHandle,
     ) -> Result<ClosureHandle, String> {
         self.heap
             .classes
             .get_method(class, name)
-            .ok_or_else(|| format!("Undefined property '{}'", self.heap.strings.get(name)))
+            .ok_or_else(|| format!("Undefined property '{}'", self.heap.symbols.get(name)))
     }
 
-    fn invoke(&mut self, name: StringHandle, arity: u8) -> Result<(), String> {
+    fn invoke(&mut self, name: SymbolHandle, arity: u8) -> Result<(), String> {
         let handle = InstanceHandle::try_from(self.get(arity))?;
         if let Some(property) = self.heap.instances.get_property(handle, name) {
             self.set(arity, property);
@@ -239,12 +241,12 @@ impl VM {
         }
     }
 
-    fn bind_method(&mut self, class: ClassHandle, name: StringHandle) -> Result<(), String> {
+    fn bind_method(&mut self, class: ClassHandle, name: SymbolHandle) -> Result<(), String> {
         let method = self
             .heap
             .classes
             .get_method(class, name)
-            .ok_or_else(|| format!("Undefined property '{}'.", self.heap.strings.get(name)))?;
+            .ok_or_else(|| format!("Undefined property '{}'.", self.heap.symbols.get(name)))?;
         let instance = Handle::try_from(self.get(0))?;
         self.collect_garbage_if_needed();
         let bm = self.heap.bound_methods.bind(instance, method);
@@ -253,7 +255,7 @@ impl VM {
         Ok(())
     }
 
-    fn define_method(&mut self, name: StringHandle) -> Result<(), String> {
+    fn define_method(&mut self, name: SymbolHandle) -> Result<(), String> {
         let class = Handle::try_from(self.get(1))?;
         let method = Handle::try_from(self.get(0))?;
         self.heap.classes.set_method(class, name, method);
@@ -261,7 +263,7 @@ impl VM {
         Ok(())
     }
 
-    fn set_global(&mut self, key: StringHandle, value: Value) -> bool {
+    fn set_global(&mut self, key: SymbolHandle, value: Value) -> bool {
         self.heap.instances.set_property(self.globals, key, value)
     }
 
@@ -315,7 +317,7 @@ impl VM {
                     self.call_value(self.get(arity), arity)?;
                 }
                 Op::Class => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     self.collect_garbage_if_needed();
                     let new_class = self.heap.classes.new_class(name);
                     self.push(Value::from(new_class));
@@ -350,7 +352,7 @@ impl VM {
                     self.push(value)
                 }
                 Op::DefineGlobal => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     self.set_global(name, self.get(0));
                     self.pop();
                 }
@@ -362,11 +364,11 @@ impl VM {
                 }
                 Op::False => self.push(Value::FALSE),
                 Op::GetGlobal => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(self.globals, name) {
                         self.push(value);
                     } else {
-                        return err!("Undefined variable '{}'.", self.heap.strings.get(name),);
+                        return err!("Undefined variable '{}'.", self.heap.symbols.get(name));
                     }
                 }
                 Op::GetLocal => {
@@ -375,7 +377,7 @@ impl VM {
                 }
                 Op::GetProperty => {
                     let handle = Handle::try_from(self.get(0))?;
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     if let Some(value) = self.heap.instances.get_property(handle, name) {
                         // replace instance
                         self.set(0, value);
@@ -384,7 +386,7 @@ impl VM {
                     }
                 }
                 Op::GetSuper => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     let super_class = Handle::try_from(self.pop())?;
                     self.bind_method(super_class, name)?;
                 }
@@ -403,7 +405,7 @@ impl VM {
                     self.pop();
                 }
                 Op::Invoke => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     let arity = self.call_frame.read_byte(&self.heap);
                     self.invoke(name, arity)?;
                 }
@@ -418,7 +420,7 @@ impl VM {
                 Op::Less => binary_op!(self, a, b, a < b),
                 Op::Loop => self.call_frame.jump_back(&self.heap),
                 Op::Method => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     self.define_method(name)?
                 }
                 Op::Multiply => binary_op!(self, a, b, a * b),
@@ -449,11 +451,11 @@ impl VM {
                     return Ok(());
                 }
                 Op::SetGlobal => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     // the booleans are killing me
                     if self.set_global(name, self.get(0)) {
                         self.heap.instances.delete_property(self.globals, name);
-                        return err!("Undefined variable '{}'.", self.heap.strings.get(name));
+                        return err!("Undefined variable '{}'.", self.heap.symbols.get(name));
                     }
                 }
                 Op::SetLocal => {
@@ -465,7 +467,7 @@ impl VM {
                     let a = Handle::try_from(self.pop())?;
                     self.heap.instances.set_property(
                         a,
-                        self.call_frame.read_string(&self.heap)?,
+                        self.call_frame.read_symbol(&self.heap)?,
                         b,
                     );
                     self.push(b);
@@ -478,7 +480,7 @@ impl VM {
                 }
                 Op::Subtract => binary_op!(self, a, b, a - b),
                 Op::SuperInvoke => {
-                    let name = self.call_frame.read_string(&self.heap)?;
+                    let name = self.call_frame.read_symbol(&self.heap)?;
                     let arity = self.call_frame.read_byte(&self.heap);
                     let super_class = Handle::try_from(self.pop())?;
                     let cf = self.invoke_from_class(super_class, name)?;

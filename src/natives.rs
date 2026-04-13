@@ -1,11 +1,9 @@
-use crate::{
-    heap::{Handle, NATIVE},
-    values::Value,
-};
+use crate::values::Value;
 
 pub struct Natives(Vec<fn(args: &[Value]) -> Result<Value, String>>);
 
-pub type NativeHandle = Handle<NATIVE>; // More than enough for now...
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeHandle(pub u8); // More than enough for now...
 
 // All natives are collected on shut down.
 impl Natives {
@@ -17,11 +15,11 @@ impl Natives {
     pub fn store(&mut self, f: fn(args: &[Value]) -> Result<Value, String>) -> NativeHandle {
         let index = self.0.len();
         self.0.push(f);
-        NativeHandle::from(index as u32)
+        NativeHandle(index as u8)
     }
 
     pub fn call(&self, handle: NativeHandle, args: &[Value]) -> Result<Value, String> {
-        self.0[handle.index()](args)
+        self.0[handle.0 as usize](args)
     }
 }
 

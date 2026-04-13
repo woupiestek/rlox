@@ -6,7 +6,7 @@ use crate::{
     heap::Heap,
     op::Op,
     scanner::{Scanner, TokenType, Tokens},
-    strings::StringHandle,
+    symbols::SymbolHandle,
     values::Value,
 };
 
@@ -207,7 +207,7 @@ impl Scope {
 struct Locals {
     captured: BitArray,
     initialized: BitArray,
-    names: Vec<StringHandle>,
+    names: Vec<SymbolHandle>,
 }
 
 impl Locals {
@@ -225,7 +225,7 @@ impl Locals {
         self.names.truncate(index);
     }
 
-    fn find(&self, name: StringHandle) -> Option<usize> {
+    fn find(&self, name: SymbolHandle) -> Option<usize> {
         for i in (0..self.names.len()).rev() {
             if self.names[i] == name {
                 return Some(i);
@@ -234,7 +234,7 @@ impl Locals {
         None
     }
 
-    fn resolve(&self, name: StringHandle) -> Result<Option<usize>, String> {
+    fn resolve(&self, name: SymbolHandle) -> Result<Option<usize>, String> {
         if let Some(i) = self.find(name) {
             if !self.initialized.has(i) {
                 err!("Can't read local variable in its own initializer.")
@@ -246,7 +246,7 @@ impl Locals {
         }
     }
 
-    fn add(&mut self, name: StringHandle) {
+    fn add(&mut self, name: SymbolHandle) {
         self.names.push(name);
     }
 
@@ -259,7 +259,7 @@ impl Locals {
         true
     }
 
-    fn declare(&mut self, name: StringHandle, scope: &Scope) -> Result<(), String> {
+    fn declare(&mut self, name: SymbolHandle, scope: &Scope) -> Result<(), String> {
         if scope.is_global() {
             // global scope, nothing to declare
             return Ok(());
@@ -325,15 +325,15 @@ struct Compiler<'src, 'hp> {
     buffer: CompileBuffer,
     source: Source<'src>,
     heap: &'hp mut Heap,
-    this_name: StringHandle,
-    super_name: StringHandle,
+    this_name: SymbolHandle,
+    super_name: SymbolHandle,
     locals: Locals,
 }
 
 impl<'src, 'hp> Compiler<'src, 'hp> {
     fn new(function_type: FunctionType, source: Source<'src>, heap: &'hp mut Heap) -> Self {
-        let this_name = heap.strings.put("this");
-        let super_name = heap.strings.put("super");
+        let this_name = heap.symbols.put("this");
+        let super_name = heap.symbols.put("super");
         let mut locals = Locals::new();
         locals.add(this_name);
         locals.initialized.add(0);
@@ -565,7 +565,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
     }
 
     // emit code for variable access
-    fn variable(&mut self, name: StringHandle, can_assign: bool) -> Result<(), String> {
+    fn variable(&mut self, name: SymbolHandle, can_assign: bool) -> Result<(), String> {
         let is_assignment = can_assign && self.source.match_type(TokenType::Equal);
         if is_assignment {
             self.expression()?;
@@ -653,9 +653,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         }
     }
 
-    fn store_identifier(&mut self) -> Result<StringHandle, String> {
+    fn store_identifier(&mut self) -> Result<SymbolHandle, String> {
         let str = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
-        Ok(self.heap.strings.put(str))
+        Ok(self.heap.symbols.put(str))
     }
 
     fn parse_prefix(&mut self, can_assign: bool) -> Result<(), String> {
@@ -719,9 +719,9 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         &mut self,
         scope: &Scope,
         error_msg: &str,
-    ) -> Result<Option<StringHandle>, String> {
+    ) -> Result<Option<SymbolHandle>, String> {
         self.source.consume(TokenType::Identifier, error_msg)?;
-        let name: StringHandle = self.store_identifier()?;
+        let name: SymbolHandle = self.store_identifier()?;
         self.locals.declare(name, scope)?;
         Ok(if !scope.is_global() {
             None
@@ -773,7 +773,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn define_variable(
         &mut self,
-        index: Option<StringHandle>,
+        index: Option<SymbolHandle>,
         scope: &Scope,
     ) -> Result<(), String> {
         Ok(if let Some(name) = index {
@@ -785,7 +785,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
 
     fn function(&mut self, function_type: FunctionType) -> Result<(), String> {
         let name = Scanner::get_identifier_name(self.source.source, self.source.previous_offset())?;
-        let name = self.heap.strings.put(name);
+        let name = self.heap.symbols.put(name);
         self.buffer.open_frame();
         let offset = self.locals.names.len();
         self.tail.push(mem::replace(
@@ -834,7 +834,7 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         } else {
             FunctionType::Method
         };
-        let loxtr = self.heap.strings.put(name);
+        let loxtr = self.heap.symbols.put(name);
         self.function(function_type)?;
         self.emit_constant_op(Op::Method, Value::from(loxtr))?;
         Ok(())

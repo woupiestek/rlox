@@ -3,7 +3,7 @@ use crate::{
     handles::Column,
     hash_maps::HashMaps,
     heap::{Collector, Handle, Heap, Pool, INSTANCE},
-    strings::StringHandle,
+    symbols::SymbolHandle,
     values::Value,
 };
 
@@ -35,19 +35,19 @@ impl Instances {
     pub fn to_string(&self, ih: InstanceHandle, heap: &Heap) -> String {
         format!(
             "<{} instance>",
-            heap.classes.get_name(self.get_class(ih), &heap.strings)
+            heap.classes.get_name(self.get_class(ih), &heap.symbols)
         )
     }
 
-    pub fn get_property(&self, ih: InstanceHandle, key: StringHandle) -> Option<Value> {
+    pub fn get_property(&self, ih: InstanceHandle, key: SymbolHandle) -> Option<Value> {
         self.properties.get(ih, key)
     }
 
-    pub fn set_property(&mut self, ih: InstanceHandle, key: StringHandle, value: Value) -> bool {
+    pub fn set_property(&mut self, ih: InstanceHandle, key: SymbolHandle, value: Value) -> bool {
         self.properties.put(ih, key, value)
     }
 
-    pub fn delete_property(&mut self, ih: InstanceHandle, key: StringHandle) -> bool {
+    pub fn delete_property(&mut self, ih: InstanceHandle, key: SymbolHandle) -> bool {
         self.properties.delete(ih, key)
     }
 }
