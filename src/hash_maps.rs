@@ -15,109 +15,118 @@ use crate::{
 const KNUTH_PHI: u32 = 2654435761;
 
 struct HashMap<A: Copy + Default + Traceable> {
-    count: usize,
-    keys: Box<[SymbolHandle]>,
-    values: Box<[A]>,
+    indices: Box<[u16]>, // limits classes and objects to 65536 members, which seems reasonable.
+    keys: Vec<SymbolHandle>, // maybe 65536 is enough identifiers for any program, altough it could be surpassed by generated code and lots of libraries.
+    values: Vec<A>,
 }
 
 impl<A: Copy + Default + Traceable> HashMap<A> {
-    fn find(&self, key: SymbolHandle) -> usize {
-        let mask = self.keys.len() - 1;
-        let mut index = (key.0.wrapping_mul(KNUTH_PHI) >> (mask as u32).leading_zeros()) as usize;
+    // note: no sacrifical symbols needed anymore.
+    const EMPTY: u16 = u16::MAX;
+    const TOMBSTONE: u16 = u16::MAX - 1;
+
+    // different needs...
+    // what should this actually do?
+    fn find(&self, key: SymbolHandle) -> (bool, usize) {
+        let mask = self.indices.len() - 1;
+        let mut hash = (key.0.wrapping_mul(KNUTH_PHI) >> (mask as u32).leading_zeros()) as usize;
         let mut tombstone = usize::MAX;
         loop {
-            match self.keys[index] {
-                SymbolHandle::EMPTY => {
-                    return if tombstone < usize::MAX {
-                        tombstone
-                    } else {
-                        index
-                    };
+            match self.indices[hash] {
+                Self::EMPTY => {
+                    return (
+                        false,
+                        if tombstone < usize::MAX {
+                            tombstone
+                        } else {
+                            hash
+                        },
+                    );
                 }
-                SymbolHandle::TOMBSTONE => {
-                    tombstone = index;
+                Self::TOMBSTONE => {
+                    tombstone = hash;
                 }
                 other => {
-                    if other == key {
-                        return index;
+                    if self.keys[other as usize] == key {
+                        return (true, hash);
                     }
                 }
             }
-            index = (index + 1) & mask;
+            hash = (hash + 1) & mask;
         }
     }
 
     fn is_full(&self) -> bool {
-        4 * self.count > 3 * self.keys.len()
+        4 * self.keys.len() > 3 * self.indices.len()
     }
 
+    // based on the previous reuse idea.
+    // do we keep working this way?
     pub fn with_capacity(capacity: usize) -> Self {
+        assert!(capacity == 0 || capacity.is_power_of_two());
         Self {
-            count: 0,
-            keys: vec![SymbolHandle::EMPTY; capacity].into_boxed_slice(),
-            values: vec![A::default(); capacity].into_boxed_slice(),
+            indices: vec![Self::EMPTY; capacity].into_boxed_slice(),
+            keys: Vec::with_capacity(capacity * 3 / 4),
+            values: Vec::with_capacity(capacity * 3 / 4),
         }
     }
 
     pub fn get(&self, key: SymbolHandle) -> Option<A> {
-        let index = self.find(key);
-        if self.keys[index] == key {
-            Some(self.values[index])
+        let (matched, hash) = self.find(key);
+        if matched {
+            Some(self.values[self.indices[hash] as usize])
         } else {
             None
         }
     }
 
-    // true means a new key was added
-    // false means it was not
-    // there is no indication of what happened to the value.
+    // is this return value actually used?
     fn put_unchecked(&mut self, key: SymbolHandle, value: A) -> bool {
-        let index = self.find(key);
-        self.values[index] = value;
-        if self.keys[index] == key {
+        let (matched, hash) = self.find(key);
+        if matched {
+            self.values[self.indices[hash] as usize] = value;
             return false;
         }
-        self.keys[index] = key;
-        self.count += 1;
-        true
+        self.indices[hash] = self.keys.len() as u16;
+        self.keys.push(key);
+        self.values.push(value);
+        return true;
     }
 
     pub fn put(&mut self, key: SymbolHandle, value: A) -> bool {
+        // maybe grow? how?
         assert!(!self.is_full());
         self.put_unchecked(key, value)
     }
 
     pub fn delete(&mut self, key: SymbolHandle) -> bool {
-        if !key.is_valid() {
-            return false;
-        }
-        let index = self.find(key);
-        if self.keys[index] == key {
-            self.keys[index] = SymbolHandle::TOMBSTONE;
-            self.values[index] = A::default();
+        let (matched, hash) = self.find(key);
+        if matched {
+            self.indices[hash] = Self::TOMBSTONE;
             return true;
         }
         false
     }
 
     pub fn clear(&mut self) {
-        self.count = 0;
-        self.keys.fill(SymbolHandle::EMPTY);
-        self.values.fill(A::default());
+        self.indices.fill(Self::EMPTY);
+        self.keys.clear();
+        self.values.clear();
     }
 
     fn capacity(&self) -> usize {
-        self.keys.len()
+        self.indices.len()
     }
 }
 
 impl<A: Copy + Default + Traceable> Traceable for HashMap<A> {
     fn trace(&self, collector: &mut Collector) {
-        for i in 0..self.keys.len() {
-            if self.keys[i].is_valid() {
-                self.keys[i].trace(collector);
-                self.values[i].trace(collector);
+        for &i in &self.indices {
+            if i >= Self::TOMBSTONE {
+                continue;
             }
+            self.keys[i as usize].trace(collector);
+            self.values[i as usize].trace(collector);
         }
     }
 }
@@ -167,8 +176,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
                 return hash_map;
             }
         }
-        self.hash_map_byte_count +=
-            mem::size_of::<HashMap<A>>() + (4 + mem::size_of::<A>()) * capacity;
+        self.hash_map_byte_count += mem::size_of::<HashMap<A>>() + (4 + mem::size_of::<A>()) * capacity;
         return HashMap::with_capacity(capacity);
     }
 
@@ -214,7 +222,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
             if !hash_map.is_full() {
                 return hash_map.put(key, value);
             }
-            hash_map.keys.len() * 2
+            hash_map.indices.len() * 2
         } else {
             8
         };
@@ -224,7 +232,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
 
     pub fn count(&self, handle: Handle<KIND>) -> usize {
         if let Some(hash_map) = &self.active[handle.index()] {
-            hash_map.count
+            hash_map.keys.len()
         } else {
             0
         }

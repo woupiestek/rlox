@@ -1,10 +1,42 @@
 # Rlox
 
+## 2026-04-15
+
+### Those new hash maps
+
+I've created some complicated structure to manage memory there. Maybe kind of
+sad to move way again. The new idea might be good though. Essentially
+indirection: key-value pair objects, of which the handles are put in a hash map
+to be easy to find from the key alone. This is like an index in a database, and
+basically an inverse of the key-value array. Now the complex structure may still
+be of use to manage the data in the hashmaps, but the keys and values live in
+the parent classes. Each object and class then selectively inverts the key
+column, saying, for example: for object x and property y, the key values pair is
+z.
+
+Using u16 instead of u32 for handles forces duplicate code while limiting the
+number of elements an object can have, but it saves much space. It reminds me of
+the solution where up to 256 objects would share one hashmap for their elements.
+
+I think that complicate structure actually made rlox slower.
+
+### for methods in classes
+
+Methods already have names. Can we use that? Probably, though the name is part
+of the function, a couple of layers deep. I.e. to compare names, you need
+Closures to get a function handle, then Functions to get the name.
+
 ## 2026-04-13
 
 After using WinGet to update everything, cargo lost the linker, or the linker
 lost dependencies... The trick was to install 'windows sdk', not (just) Visual
 Studio BuildTools.
+
+### those new hashmaps
+
+Basic structure: and array of keys and an equally long array of values. However,
+when a new element is added, it always goes to the end. There is an additional
+array of indices, to look up the index of a key.
 
 ## 2026-04-12
 
@@ -717,7 +749,7 @@ naturally forces a heap rebalancing.
 
 The orginal clox kept hash codes for all strings for lookup in hash tables. I
 achieved a speed up by using the hash codes as string handles. No more lookup of
-the full hash code needed, just mange the handle itself. This mainly requires a
+the full hash code needed, just manage the handle itself. This mainly requires a
 uniform distrisbution of hash codes, that remains uniform modulo powers of two,
 it does not have to relate to the string and indeed, the handles are adjusted to
 avoid collisions.

@@ -7,14 +7,6 @@ use crate::{
 
 pub type StringHandle = Handle<STRING>;
 
-impl StringHandle {
-    pub const EMPTY: Self = Self(0);
-    pub const TOMBSTONE: Self = Self(1);
-    pub fn is_valid(&self) -> bool {
-        self != &StringHandle::EMPTY && self != &StringHandle::TOMBSTONE
-    }
-}
-
 struct Buffer {
     string: String,
     tos: Vec<u32>,
@@ -51,9 +43,7 @@ impl Buffer {
 }
 
 pub struct Strings {
-    handle_set: Box<[StringHandle]>,
     keys: HandleSet,
-    mask: usize,
     buffer: Buffer,
     offsets: Vec<u32>,
 }
@@ -62,37 +52,9 @@ impl Strings {
     const OFFSET: u32 = 16;
     pub fn new() -> Self {
         Self {
-            handle_set: vec![StringHandle::EMPTY; 8].into_boxed_slice(),
             keys: HandleSet::new(),
-            mask: 7, // self.handle_set.len() - 1
             buffer: Buffer::with_capacity(0),
             offsets: Vec::new(),
-        }
-    }
-
-    fn hash(&self, str: &str) -> usize {
-        let mut hash = 2166136261u32;
-        for &byte in str.as_bytes() {
-            hash ^= byte as u32;
-            hash = hash.wrapping_mul(16777619u32);
-        }
-        hash as usize & self.mask
-    }
-
-    fn find(&self, string: &str) -> (bool, usize) {
-        assert!(self.buffer.len() * 4 < self.handle_set.len() * 3);
-        let mut index = self.hash(string);
-        loop {
-            match self.handle_set[index] {
-                StringHandle::EMPTY => return (false, index),
-                handle => {
-                    if self.get(handle) == string {
-                        return (true, index);
-                    }
-                }
-            }
-            index += 1;
-            index &= self.mask;
         }
     }
 
@@ -100,40 +62,13 @@ impl Strings {
         self.buffer.get((handle.0 - Self::OFFSET) as usize)
     }
 
-    fn grow(&mut self) {
-        let capacity = if self.handle_set.len() == 0 {
-            8
-        } else {
-            self.handle_set.len() * 2
-        };
-        self.handle_set = vec![StringHandle::EMPTY; capacity].into_boxed_slice();
-        self.mask = capacity - 1;
-        for i in 0..self.buffer.len() {
-            if self.keys.is_marked(i as u32) {
-                let str = self.buffer.get(i);
-                let (_, index) = self.find(str);
-                self.handle_set[index] = Handle(i as u32 + Self::OFFSET)
-            }
-        }
-    }
-
     pub fn put(&mut self, string: &str) -> StringHandle {
-        if (self.keys.count() + 1) * 4 > self.handle_set.len() * 3 {
-            self.grow();
-        }
-
-        let (found, index) = self.find(string);
-        if found {
-            return self.handle_set[index];
-        }
-
         let key = self.keys.next() as usize;
         while self.offsets.len() <= key as usize {
             self.offsets.push(u32::MAX);
         }
         self.offsets[key] = self.buffer.add(string) as u32;
         let handle = Handle(key as u32 + Self::OFFSET);
-        self.handle_set[index] = handle;
         handle
     }
 
@@ -148,7 +83,6 @@ impl Strings {
 impl Pool<STRING> for Strings {
     fn byte_count(&self) -> usize {
         mem::size_of::<Strings>()
-            + self.handle_set.len() * 4
             + self.buffer.byte_count()
             + self.keys.byte_count()
     }

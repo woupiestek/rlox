@@ -107,7 +107,8 @@ impl<T: Clone + Default> Column<T> {
     pub fn set(&mut self, index: u32, value: T) {
         let index = index as usize;
         if self.values.len() <= index {
-            self.values.resize(index + 1, Default::default());
+            self.values
+                .resize((index + 1).next_power_of_two(), Default::default());
         }
         self.values[index] = value;
     }
