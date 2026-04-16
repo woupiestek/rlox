@@ -1,29 +1,28 @@
 use std::{mem, u32};
 
 use crate::{
-    handles::HandleSet,
+    handles::{Column, HandleSet},
     heap::{Collector, Handle, Pool, SYMBOL},
 };
 
 pub type SymbolHandle = Handle<SYMBOL>;
 
 impl SymbolHandle {
-    pub const EMPTY: Self = Self(0);
-    pub const TOMBSTONE: Self = Self(1);
+    pub const EMPTY: Self = Self(u32::MAX);
     pub fn is_valid(&self) -> bool {
-        self != &SymbolHandle::EMPTY && self != &SymbolHandle::TOMBSTONE
+        self != &SymbolHandle::EMPTY
     }
 }
 
 struct Buffer {
-    symbol: String,
+    data: String,
     tos: Vec<u32>,
 }
 
 impl Buffer {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            symbol: String::with_capacity(capacity),
+            data: String::with_capacity(capacity),
             tos: Vec::new(),
         }
     }
@@ -35,18 +34,18 @@ impl Buffer {
     fn get(&self, index: usize) -> &str {
         let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
         let to = self.tos[index] as usize;
-        &self.symbol[from..to]
+        &self.data[from..to]
     }
 
     fn add(&mut self, str: &str) -> usize {
-        self.symbol.push_str(str);
+        self.data.push_str(str);
         let index = self.tos.len();
-        self.tos.push(self.symbol.len() as u32);
+        self.tos.push(self.data.len() as u32);
         index
     }
 
     fn byte_count(&self) -> usize {
-        mem::size_of::<Self>() + self.symbol.capacity() + self.tos.capacity() * 4
+        mem::size_of::<Self>() + self.data.capacity() + self.tos.capacity() * 4
     }
 }
 
@@ -55,18 +54,17 @@ pub struct Symbols {
     keys: HandleSet,
     mask: usize,
     buffer: Buffer,
-    offsets: Vec<u32>,
+    offsets: Column<u32>,
 }
 
 impl Symbols {
-    const OFFSET: u32 = 16;
     pub fn new() -> Self {
         Self {
             handle_set: vec![SymbolHandle::EMPTY; 8].into_boxed_slice(),
             keys: HandleSet::new(),
             mask: 7, // self.handle_set.len() - 1
             buffer: Buffer::with_capacity(0),
-            offsets: Vec::new(),
+            offsets: Column::new(),
         }
     }
 
@@ -97,7 +95,7 @@ impl Symbols {
     }
 
     pub fn get(&self, handle: SymbolHandle) -> &str {
-        self.buffer.get((handle.0 - Self::OFFSET) as usize)
+        self.buffer.get(handle.0 as usize)
     }
 
     fn grow(&mut self) {
@@ -112,7 +110,7 @@ impl Symbols {
             if self.keys.is_marked(i as u32) {
                 let str = self.buffer.get(i);
                 let (_, index) = self.find(str);
-                self.handle_set[index] = Handle(i as u32 + Self::OFFSET)
+                self.handle_set[index] = Handle(i as u32);
             }
         }
     }
@@ -127,12 +125,9 @@ impl Symbols {
             return self.handle_set[index];
         }
 
-        let key = self.keys.next() as usize;
-        while self.offsets.len() <= key as usize {
-            self.offsets.push(u32::MAX);
-        }
-        self.offsets[key] = self.buffer.add(symbol) as u32;
-        let handle = Handle(key as u32 + Self::OFFSET);
+        let key = self.keys.next();
+        self.offsets.set(key, self.buffer.add(symbol) as u32);
+        let handle = Handle(key);
         self.handle_set[index] = handle;
         handle
     }
@@ -142,14 +137,14 @@ impl Pool<SYMBOL> for Symbols {
     fn byte_count(&self) -> usize {
         mem::size_of::<Symbols>()
             + self.handle_set.len() * 4
+            + self.offsets.byte_count()
             + self.buffer.byte_count()
             + self.keys.byte_count()
     }
 
     fn mark(&mut self, key: u32) -> bool {
-        // let's just be honest
-        if key >= Self::OFFSET {
-            self.keys.mark(key - Self::OFFSET)
+        if key < u32::MAX {
+            self.keys.mark(key)
         } else {
             false
         }
@@ -166,13 +161,16 @@ impl Pool<SYMBOL> for Symbols {
             // don't compactify yet
             return;
         }
-        let capacity = self.buffer.symbol.capacity();
+        let capacity = self.buffer.data.capacity();
         let buffer = mem::replace(&mut self.buffer, Buffer::with_capacity(capacity));
-        for i in 0..self.offsets.len() {
+        for i in 0..self.offsets.values.len() {
             if self.keys.is_marked(i as u32) {
-                self.offsets[i] = self.buffer.add(buffer.get(self.offsets[i] as usize)) as u32;
-            } else {
-                self.offsets[i] = u32::MAX;
+                self.offsets.set(
+                    i as u32,
+                    self.buffer
+                        .add(buffer.get(self.offsets.get(i as u32) as usize))
+                        as u32,
+                );
             }
         }
     }

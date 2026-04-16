@@ -82,9 +82,7 @@ impl Strings {
 
 impl Pool<STRING> for Strings {
     fn byte_count(&self) -> usize {
-        mem::size_of::<Strings>()
-            + self.buffer.byte_count()
-            + self.keys.byte_count()
+        mem::size_of::<Strings>() + self.buffer.byte_count() + self.keys.byte_count()
     }
 
     fn mark(&mut self, key: u32) -> bool {

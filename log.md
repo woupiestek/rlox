@@ -1,5 +1,128 @@
 # Rlox
 
+## 2026-04-16
+
+Keep key value pairs in a global list, and just have structures to keep track of
+those belonging to a specific object. Issue: if the hash is based on the key
+alone, that is what will be found in the hashmap every time...
+
+Awkward solution: every propertie is an array and every object caries the
+offsets into these arrays.
+
+### idee fixe
+
+What about this two stepper: Global properties and methods, But each just maps
+handles to indices into the array of values inside the class/object. i.e. the
+classes and object themselves are simple arrays, and the property records the
+offset of each property
+
+- Tracing seems really simple now. How to clear the properties of an object
+  before recycling handles, though?
+- As does inheritance
+- Class and objects handles likely have overlapping values, so how to deal with
+  that?
+
+Design:
+
+- Instances and classes would basically be vecs, though instances also have a
+  class and classes have names. Control over allocations remains vital, but at
+  least we are getting somewhere.
+- There are global structure to link names to properties. Instead of containing
+  values, they have indices into the object. Because of dynamism,
+
+Properties set on 'this' in the methods of a class will be shared between all
+objects of the class, and won't conflict with the methods of the class. Well,
+maybe they can, but this is predicatble. There is a case, though for attaching
+those properties to the class instead of the object.
+
+So the property has these layers:
+
+- values that are set incidentally
+- values that are set on all members of the class
+- methods on the class The advantage of class properties is that the range of
+  classes is likely small, which makes the lookup faster. The incidental layer
+  is small under the assumption that setting properties that are not in the
+  contructor is unusual.
+
+When setting a property, optimisatically assume it is a class property. If not,
+go up to the incidental layer and record the property there.
+
+When getting a property, first check the incidental layer, then the class layer.
+This idea is to replace a big lookup with may smaller ones:
+
+0. at compile time, a note is made of property access on 'this': classes will
+   keep these as a fixed layout for objects of the class.
+1. at chunk loading, the symbols among the constants are attached to the global
+   structure, so the step from constant byte to global property becomes one
+   array access. If symbols are set apart from constants, this can be tight.
+2. for getters and setters, find has to look through two arrays, one that that
+   gives indices per object and one that gives them per class. Both should be
+   modest in size.
+3. this index goes directly into an array of values in the object or an array of
+   method of the class.
+
+A, but now note that instead of storing properties in object, they could be in
+the classes. No, no, that would introduce a new mapping from object to their
+indices within the class.
+
+Okay, this idea of recording class properties and using those for optimisation
+is probably more important! The objects can still be the same hash sets, but
+those are only used for the unexpected properties.
+
+For questions of recycling handles... When object are cleaned up, only
+incidental properties have to be deleted, the mapping from class to index is
+still valid.
+
+Much indirection to avoid jumping around hashsets, but what else to try?
+
+### reverse
+
+The object could store indices into the properties, and the same for classes.
+but what if the growing number of objects forces the properties to grow? each
+lookup might be a little faster, but when more space is needed, each object
+would get a location object. And it would still be a combination of properties
+and indices...
+
+### and back
+
+This is right:
+
+- at compile time the name of each property and method is known
+- each class, moreover, fixes a list of methods, an a list of properties in its
+  declaration
+- at runtime only the object and the class are known, but based on the class
+  there is a layout for where things in the object or class can be found.
+- special cases for properties on objects that aren't accessed within methods:
+  each object has its own singleton class, to track the layout of such extra
+  properties
+
+Compare the strategy for strings: just have a big array of value where objects
+are allocated. Maybe do the copy over to the next generation thing, assuming
+infant mortality. A, but how does this help with those special cases?
+
+### ad hoc classes
+
+Another idea: when a property is set that does not belong to the class, or
+overrides a method, generate an ad hoc extension of the class. Yes, copy
+everything over, then deal with the object as before... So when it comes to
+allocation, the object needs to move immediately as every new property is set.
+The weird thing is: no need for a different method table.
+
+At least that is a way to deal with these cases.
+
+What are the requirements?
+
+- assume the normal case of using classes for object layout.
+- mutate a property outside of the layout: create a new class ad hoc.
+- don't make room for growth. The VM reallocates the object to match its new
+  layout.
+
+Shared method tables still help a bit: Instead of copying the method handles,
+just copy the offset into a buffer of methods for all active classes.
+
+Maybe some of the allocation ideas could be tried on closures, with their fixed
+arrays of upvalues. generation collection just for them...
+
 ## 2026-04-15
 
 ### Those new hash maps

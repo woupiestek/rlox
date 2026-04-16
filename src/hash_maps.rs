@@ -176,7 +176,8 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
                 return hash_map;
             }
         }
-        self.hash_map_byte_count += mem::size_of::<HashMap<A>>() + (4 + mem::size_of::<A>()) * capacity;
+        self.hash_map_byte_count +=
+            mem::size_of::<HashMap<A>>() + (4 + mem::size_of::<A>()) * capacity;
         return HashMap::with_capacity(capacity);
     }
 
