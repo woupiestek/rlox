@@ -10,13 +10,12 @@ use crate::{
 pub type ClosureHandle = Handle<CLOSURE>;
 
 pub struct Closures {
-    // todo: complicated case
-    handles: HandleSet,
     functions: Column<FunctionHandle>,
-    offsets: Column<u32>,
-    upvalue_counts: Column<u8>,
-    pub upvalues: Box<[UpvalueHandle]>,
+    handles: HandleSet,
     next: usize,
+    offsets: Column<u32>,
+    pub upvalues: Box<[UpvalueHandle]>,
+    upvalue_counts: Column<u8>,
 }
 
 impl Closures {
@@ -24,10 +23,10 @@ impl Closures {
         Self {
             functions: Column::new(),
             handles: HandleSet::new(),
+            next: 0,
             offsets: Column::new(),
             upvalue_counts: Column::new(),
             upvalues: vec![Handle(0); 8].into_boxed_slice(),
-            next: 0,
         }
     }
 
@@ -49,14 +48,8 @@ impl Closures {
         self.offsets.get(ch.0 ^ Self::TOP_BIT) as usize
     }
 
-    pub fn upvalues_ref(&mut self, ch: ClosureHandle) -> &[UpvalueHandle] {
-        let j = self.up(ch);
-        &self.upvalues[j..]
-    }
-
-    pub fn upvalues_mut(&mut self, ch: ClosureHandle) -> &mut [UpvalueHandle] {
-        let j = self.up(ch);
-        &mut self.upvalues[j..]
+    pub fn set_upvalue(&mut self, ch: ClosureHandle, index: usize, uh: UpvalueHandle) {
+        self.upvalues[self.up(ch) + index] = uh;
     }
 
     fn grow(&mut self) {

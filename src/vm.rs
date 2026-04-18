@@ -344,7 +344,7 @@ impl VM {
                         } else {
                             self.call_frame.get_upvalue(&self.heap, i)
                         };
-                        self.heap.closures.upvalues_mut(closure)[i] = uh;
+                        self.heap.closures.set_upvalue(closure, i, uh);
                     }
                 }
                 Op::Constant => {

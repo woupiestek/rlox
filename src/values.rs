@@ -1,7 +1,4 @@
 // run time data structures
-
-use std::ops::Not;
-
 use crate::{
     heap::{
         Collector, Handle, Heap, Traceable, BOUND_METHOD, CLASS, CLOSURE, FUNCTION, INSTANCE,
@@ -10,7 +7,6 @@ use crate::{
     natives::NativeHandle,
 };
 
-// nan box?
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Value(u64);
 
@@ -95,7 +91,7 @@ impl Value {
     }
 
     pub fn is_native_function(&self) -> bool {
-        self.0 & 0xffu64.not() == NATIVE
+        self.0 & 0xffff_ffff_ffff_ff00u64 == NATIVE
     }
 
     // nil, true, false

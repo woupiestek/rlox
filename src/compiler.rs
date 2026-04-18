@@ -539,7 +539,6 @@ impl<'src, 'hp> Compiler<'src, 'hp> {
         self.emit_constant_op(Op::Constant, Value::from(value))
     }
 
-    // most likely cause, but how!?
     fn capture_upvalue(&mut self, index: usize) -> Result<u8, String> {
         assert!(self.head.offset > index);
         self.locals.captured.add(index);

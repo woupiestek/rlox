@@ -1,5 +1,121 @@
 # Rlox
 
+## 2026-04-18
+
+### method and property names as local variables or upvalues...
+
+Just a matter of more uniform hanlding. Actually record a list of these globals
+for each function. Do the lookup once, when the function is loaded, adding any
+missing globals as needed then.
+
+Lot's if indirection but:
+
+- imagine all data for object stored in a large array. The object itself has a
+  class and an offset into this array.
+- the properties record a maping from classes to offsets as well, so to find the
+  value, add the two offsets.
+- when to move objects? hmm... what if we separate this again? so an object has
+  a layout, which is just a list of names. how is this shared between objects of
+  a class?
+
+### shared lookup and branching
+
+Each class has a layout, which describes the positions of fields in each object.
+This is basically a hashset of names. For each name it can say if it is a method
+or a field, and the offset of the values, possibly all encoded in u16 or u8?
+
+Layouts have a capacity. Up to this capacity, adding new keys is no issue.
+Beyond that, A new class will have to be allocated, and the object will have to
+move to accomodate more elements at the same time. Note: singleton class!
+
+- The trouble is that the bigger layout requires that objects take more space.
+- Maybe the opposite should happen: the old object stay tied to their old class
+  and layout, New objects get more capacity from the start of their lifetimes.
+
+How does this work, again?
+
+- It requires a reassignment of the contructor, to contruct larger objects from
+  now on.
+- The old objects stick to the old layout.
+- The class is a global variable, so assigning a modified value to it should be
+  no issue.
+- And layouts don't have to attach to classes directly. If it is easier, just
+  give objects separate layouts.
+- Remains the case that objects must move when the capacity threshold is
+  crossed.
+
+### layout
+
+So this layout is a hash map from names to offsets into the object. A layout can
+grow to some capacity, but for anything beyond, a new layout must be created.
+
+This assumption is that every object has a layout, that it gets from its class
+during construction. When the object runs out of space to store new fields, it
+also needs a new layout. The class is updated with the new layout, so the next
+time an object is created, it will immediately get the same amount if space...
+
+Other options?
+
+1. And object has a class, a layout, and an index. All data is stored inside the
+   layout.
+2. Layouts are just ids, there is a global lookup from names and layouts to
+   arrays with values.
+
+This creates the possibility of strongly typed layouts: basically, the type of
+each column is recorded, and then the column is compressed. Caveat: null must
+still be the default for every object. Note: the analyses wanted at compile time
+is done dynamically. This has the downside that the stack still has to work with
+values, but the heap can store the date efficiently...
+
+When classes are extended, initially provide the same layout.
+
+### ternary set
+
+For compressing a partial boolean mapping, i.e. three values. It should be
+possible to put 5 ternary values inside one byte. Is this realy worth doing? How
+would it work anyway?
+
+- 1*1 case of all nulls: 0000_0000
+- 5*2 cases of one bool: 0000_001x-0000_101x
+- 10*4 cases of two bools: 0001_00xx-0011_01xx
+- 10*8 cases of three bools: 0100_0xxx-1000_1xxx
+- 5*16 cases of four bools: 1001_xxxx-1101_xxxx
+- 1*32 cases all bools: 111x_xxxx.
+
+A total of 32 distributions of nulls.
+
+Use binary search for the subtype, set up a table once with the distribution of
+the booleans. the remaining issue is the fast computation of divs and mods from
+the index.
+
+Alternative:
+
+- 1*1 case of all nulls: 0000_0000
+- 5*2 cases of one bool: 1000_000x-1000_100x
+- 10*4 cases of two bools: 0000_01xx-0010_10xx
+- 10*8 cases of three bools: 1001_0xxx-1101_1xxx
+- 5*16 cases of four bools: 1001_xxxx-0111_xxxx
+- 1*32 cases all bools: 111x_xxxx.
+
+### applying to upvalues
+
+Even without the strong types... The idea: for each upvalue count in use, a
+structure that has that number of elements.
+
+## 2026-04-17
+
+### collections
+
+The next language could have some operators for loops that allow each
+instruction to be applied to whole arrays of data. Just another mode of running
+functions. Local variables are entire arrays, perhaps even allocated on the
+stack.
+
+Instead of writing algorithm to work with arrays, write simple functions and
+make them work on collections by a smarter vm.
+
+The language would limit the access to memory anyway.
+
 ## 2026-04-16
 
 Keep key value pairs in a global list, and just have structures to keep track of
