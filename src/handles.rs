@@ -113,7 +113,12 @@ impl<T: Clone + Default> Column<T> {
         self.values[index] = value;
     }
     pub fn get(&self, index: u32) -> T {
-        self.values[index as usize].clone()
+        let index = index as usize;
+        if index >= self.values.len() {
+            Default::default()
+        } else {
+            self.values[index as usize].clone()
+        }
     }
     pub fn byte_count(&self) -> usize {
         mem::size_of::<Self>() + self.values.capacity() * mem::size_of::<T>()

@@ -5,13 +5,13 @@ use crate::vm::VM;
 #[cfg(feature = "trace")]
 mod debug;
 
-#[macro_use]
-mod common;
 mod bitarray;
 mod bound_methods;
 mod call_frame;
 mod classes;
 mod closures;
+#[macro_use]
+mod common;
 mod compiler;
 mod functions;
 mod handles;
@@ -20,6 +20,7 @@ mod heap;
 mod instances;
 mod natives;
 mod op;
+mod properties;
 mod scanner;
 mod strings;
 mod symbols;

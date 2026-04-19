@@ -12,7 +12,7 @@ pub struct Value(u64);
 
 impl Default for Value {
     fn default() -> Self {
-        Self::NIL
+        Self::UNDEFINED
     }
 }
 
@@ -98,6 +98,8 @@ impl Value {
     pub const NIL: Self = Self(QNAN | 1);
     pub const TRUE: Self = Self(QNAN | 2);
     pub const FALSE: Self = Self(QNAN | 3);
+    // technical helper, should be invisible to end users...
+    pub const UNDEFINED: Self = Self(QNAN | 4);
 
     pub fn is_falsey(&self) -> bool {
         matches!(self, &Value::NIL | &Value::FALSE)
@@ -115,6 +117,7 @@ impl Value {
             &Value::FALSE => return format!("false"),
             &Value::NIL => return format!("nil"),
             &Value::TRUE => return format!("true"),
+            &Value::UNDEFINED => return format!("undefined"),
             _ => (),
         }
 
@@ -130,7 +133,12 @@ impl Value {
             let index = (self.0 & 0xffff_ffff) as u32;
             match ((self.0 >> 32) & 0x000f) as usize {
                 BOUND_METHOD => return heap.bound_methods.to_string(Handle::from(index), heap),
-                CLASS => return heap.classes.to_string(Handle::from(index), &heap.symbols),
+                CLASS => {
+                    return heap
+                        .instances
+                        .classes
+                        .to_string(Handle::from(index), &heap.symbols)
+                }
                 CLOSURE => {
                     return heap
                         .functions

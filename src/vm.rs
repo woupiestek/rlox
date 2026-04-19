@@ -50,7 +50,7 @@ impl VM {
     pub fn new() -> Self {
         let mut heap = Heap::new();
         let init_string = heap.symbols.put("init");
-        let global_class = heap.classes.new_class(SymbolHandle::EMPTY);
+        let global_class = heap.instances.classes.new_class(SymbolHandle::EMPTY);
         let globals = heap.instances.new_instance(global_class);
         let mut s = Self {
             values: [Value::NIL; STACK_SIZE],
@@ -182,7 +182,12 @@ impl VM {
                 self.collect_garbage_if_needed();
                 let instance = self.heap.instances.new_instance(class);
                 self.set(arity, Value::from(instance));
-                if let Some(init) = self.heap.classes.get_method(class, self.init_string) {
+                if let Some(init) = self
+                    .heap
+                    .instances
+                    .classes
+                    .get_method(class, self.init_string)
+                {
                     return self.push_frame(init, arity);
                 } else if arity > 0 {
                     // after garbage collection, classes get method init string is empty... why!?
@@ -225,6 +230,7 @@ impl VM {
         name: SymbolHandle,
     ) -> Result<ClosureHandle, String> {
         self.heap
+            .instances
             .classes
             .get_method(class, name)
             .ok_or_else(|| format!("Undefined property '{}'", self.heap.symbols.get(name)))
@@ -232,18 +238,20 @@ impl VM {
 
     fn invoke(&mut self, name: SymbolHandle, arity: u8) -> Result<(), String> {
         let handle = InstanceHandle::try_from(self.get(arity))?;
-        if let Some(property) = self.heap.instances.get_property(handle, name) {
-            self.set(arity, property);
-            self.call_value(property, arity)
-        } else {
+        let property = self.heap.instances.get_property(handle, name);
+        if property == Value::UNDEFINED {
             let ch = self.invoke_from_class(self.heap.instances.get_class(handle), name)?;
             self.push_frame(ch, arity)
+        } else {
+            self.set(arity, property);
+            self.call_value(property, arity)
         }
     }
 
     fn bind_method(&mut self, class: ClassHandle, name: SymbolHandle) -> Result<(), String> {
         let method = self
             .heap
+            .instances
             .classes
             .get_method(class, name)
             .ok_or_else(|| format!("Undefined property '{}'.", self.heap.symbols.get(name)))?;
@@ -258,7 +266,7 @@ impl VM {
     fn define_method(&mut self, name: SymbolHandle) -> Result<(), String> {
         let class = Handle::try_from(self.get(1))?;
         let method = Handle::try_from(self.get(0))?;
-        self.heap.classes.set_method(class, name, method);
+        self.heap.instances.classes.set_method(class, name, method);
         self.pop();
         Ok(())
     }
@@ -319,7 +327,7 @@ impl VM {
                 Op::Class => {
                     let name = self.call_frame.read_symbol(&self.heap)?;
                     self.collect_garbage_if_needed();
-                    let new_class = self.heap.classes.new_class(name);
+                    let new_class = self.heap.instances.classes.new_class(name);
                     self.push(Value::from(new_class));
                 }
                 Op::CloseUpvalue => {
@@ -365,11 +373,11 @@ impl VM {
                 Op::False => self.push(Value::FALSE),
                 Op::GetGlobal => {
                     let name = self.call_frame.read_symbol(&self.heap)?;
-                    if let Some(value) = self.heap.instances.get_property(self.globals, name) {
-                        self.push(value);
-                    } else {
+                    let value = self.heap.instances.get_property(self.globals, name);
+                    if value == Value::UNDEFINED {
                         return err!("Undefined variable '{}'.", self.heap.symbols.get(name));
                     }
+                    self.push(value);
                 }
                 Op::GetLocal => {
                     let index = self.call_frame.sp + self.call_frame.read_byte(&self.heap) as usize;
@@ -378,11 +386,11 @@ impl VM {
                 Op::GetProperty => {
                     let handle = Handle::try_from(self.get(0))?;
                     let name = self.call_frame.read_symbol(&self.heap)?;
-                    if let Some(value) = self.heap.instances.get_property(handle, name) {
-                        // replace instance
-                        self.set(0, value);
-                    } else {
+                    let value = self.heap.instances.get_property(handle, name);
+                    if value == Value::UNDEFINED {
                         self.bind_method(self.heap.instances.get_class(handle), name)?;
+                    } else {
+                        self.set(0, value);
                     }
                 }
                 Op::GetSuper => {
@@ -400,7 +408,10 @@ impl VM {
                 Op::Inherit => {
                     let super_class = Handle::try_from(self.get(1))?;
                     let sub_class = Handle::try_from(self.get(0))?;
-                    self.heap.classes.clone_methods(super_class, sub_class);
+                    self.heap
+                        .instances
+                        .classes
+                        .clone_methods(super_class, sub_class);
                     // to check: only pop one?
                     self.pop();
                 }

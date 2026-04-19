@@ -6,6 +6,54 @@
 
 Just a hashmaps of columns or something...
 
+Trying benchmarks:
+
+- binary_trees: 2.1793580055236816
+- equality: loop 2.360934019088745 elapsed 2.1279354095458984 equals
+  -0.23299860954284668
+- fib: 1.7048335075378418
+- instatiation: 0.8974220752716064
+- invocation: 0.6915667057037354
+- method_call: 0.37961506843566895
+- properties: 0.8282573223114014
+- string_equality: loop 1.4796886444091797 elapsed 1.4847331047058105 equals
+  0.005044460296630859
+- trees: 3.6922354698181152
+- zoo_batch: 147180000 2453 10.002466201782227
+- zoo: 0.6957736015319824
+
+For comparison with the last time:
+
+- binary_trees: 2.1788599491119385
+- equality: loop 2.139660596847534 elapsed 2.2305803298950195 equals
+  0.09091973304748535
+- fib: 1.6649506092071533
+- instantiation: 0.7938528060913086
+- invocation: 0.5113131999969482
+- method_call: 0.37403106689453125
+- properties: 0.7400572299957275
+- string_equality: loop 1.220015287399292 elapsed 1.355548620223999 equals
+  0.13553333282470703
+- trees: 4.618741989135742
+- zoo_batch: 3147
+- zoo: 0.5276131629943848
+
+Similar numbers, with some in favor of the new set up.
+
+### bug
+
+Got confused and did the one big hashmap for all thing by accident. Now it is
+broken in my attempt to fix that problem.
+
+Getting tired. So struct of arrays for each class is in reach for lox, though
+hard to do bug free.
+
+The quality of the benchmarks is demonstrated.
+
+An index for a vec of symbols is extremely useful.
+There is no reason why lox cannot have static classes, in the sense that classes decide where values are stored
+It is akward that every instance would need an 
+
 ## 2026-04-18
 
 ### method and property names as local variables or upvalues...

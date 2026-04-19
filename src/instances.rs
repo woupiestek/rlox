@@ -1,7 +1,6 @@
 use crate::{
-    classes::ClassHandle,
-    handles::Column,
-    hash_maps::HashMapPool,
+    classes::{ClassHandle, Classes},
+    handles::{Column, HandleSet},
     heap::{Collector, Handle, Heap, Pool, INSTANCE},
     symbols::SymbolHandle,
     values::Value,
@@ -10,67 +9,81 @@ use crate::{
 pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
-    classes: Column<ClassHandle>,
-    properties: HashMapPool<Value, INSTANCE>,
+    handles: HandleSet,
+    class_handles: Column<ClassHandle>,
+    indices: Column<u32>,
+    pub classes: Classes,
 }
 
 impl Instances {
     pub fn new() -> Self {
         Self {
-            classes: Column::new(),
-            properties: HashMapPool::new(),
+            handles: HandleSet::new(),
+            class_handles: Column::new(),
+            indices: Column::new(),
+            classes: Classes::new(),
         }
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
-        let handle = self.properties.maps.new_hash_map();
-        self.classes.set(handle, class);
+        let handle = self.handles.next();
+        self.class_handles.set(handle, class);
+        self.indices
+            .set(handle, self.classes.properties.new_instance());
         Handle(handle)
     }
 
     pub fn get_class<'s>(&self, ih: InstanceHandle) -> ClassHandle {
-        self.classes.get(ih.0)
+        self.class_handles.get(ih.0)
     }
 
     pub fn to_string(&self, ih: InstanceHandle, heap: &Heap) -> String {
         format!(
             "<{} instance>",
-            heap.classes.get_name(self.get_class(ih), &heap.symbols)
+            heap.instances
+                .classes
+                .get_name(self.get_class(ih), &heap.symbols)
         )
     }
 
-    pub fn get_property(&self, ih: InstanceHandle, key: SymbolHandle) -> Option<Value> {
-        self.properties.maps.get(ih.0, key)
+    fn index(&self, ih: InstanceHandle) -> usize {
+        self.indices.get(ih.0) as usize
+    }
+
+    pub fn get_property(&self, ih: InstanceHandle, key: SymbolHandle) -> Value {
+        self.classes.properties.get(self.index(ih), key)
     }
 
     pub fn set_property(&mut self, ih: InstanceHandle, key: SymbolHandle, value: Value) -> bool {
-        self.properties.maps.put(ih.0, key, value)
+        self.classes.properties.set(self.index(ih), key, value)
     }
 
     pub fn delete_property(&mut self, ih: InstanceHandle, key: SymbolHandle) -> bool {
-        self.properties.maps.delete(ih.0, key)
+        self.classes.properties.delete(self.index(ih), key)
     }
 }
 
 impl Pool<INSTANCE> for Instances {
     fn byte_count(&self) -> usize {
-        self.properties.byte_count() + self.classes.byte_count()
+        self.classes.properties.byte_count()
+            + self.class_handles.byte_count()
+            + self.indices.byte_count()
+            + self.handles.byte_count()
     }
 
     fn mark(&mut self, handle: u32) -> bool {
-        self.properties.mark(handle)
+        self.classes.properties.mark(self.indices.get(handle))
     }
 
     fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
-        self.properties.trace_all(marked, collector);
-        self.classes.trace_all(marked, collector);
+        let instances: Vec<u32> = marked.into_iter().map(|&i| self.indices.get(i)).collect();
+        self.classes.properties.trace_all(instances, collector);
+        self.class_handles.trace_all(marked, collector);
     }
 
     fn reset(&mut self) {
-        self.properties.reset();
+        self.classes.properties.reset();
     }
 
-    fn sweep(&mut self) {
-        self.properties.sweep();
-    }
+    fn sweep(&mut self) {}
 }

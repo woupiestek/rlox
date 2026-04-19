@@ -127,15 +127,16 @@ mod tests {
     use super::*;
 
     #[test]
-    pub fn string_equality() {
+    pub fn string_inequality() {
+        // this is for literals strings, so the uniqueness guarantees for symbols do not hold.
         let mut strings = Strings::new();
         let key = strings.put("str");
-        assert_eq!(key, strings.put("str"));
+        assert_ne!(key, strings.put("str"));
         assert_eq!("str", strings.get(key));
 
         let key1 = strings.put("one");
         let key2 = strings.put("two");
-        assert_eq!(key2, strings.put("two"));
+        assert_ne!(key2, strings.put("two"));
         assert_eq!("one", strings.get(key1));
         assert_ne!(key1, key2);
     }

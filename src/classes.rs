@@ -3,6 +3,7 @@ use crate::{
     handles::Column,
     hash_maps::HashMapPool,
     heap::{Collector, Handle, Pool, CLASS},
+    properties::Properties,
     symbols::{SymbolHandle, Symbols},
 };
 
@@ -11,6 +12,7 @@ pub type ClassHandle = Handle<CLASS>;
 pub struct Classes {
     names: Column<SymbolHandle>,
     methods: HashMapPool<ClosureHandle, CLASS>,
+    pub properties: Properties,
 }
 
 impl Classes {
@@ -18,6 +20,7 @@ impl Classes {
         Self {
             names: Column::new(),
             methods: HashMapPool::new(),
+            properties: Properties::new(),
         }
     }
 

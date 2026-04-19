@@ -1,6 +1,6 @@
 use crate::{
-    bound_methods::BoundMethods, classes::Classes, closures::Closures, functions::Functions,
-    instances::Instances, strings::Strings, symbols::Symbols, upvalues::Upvalues,
+    bound_methods::BoundMethods, closures::Closures, functions::Functions, instances::Instances,
+    strings::Strings, symbols::Symbols, upvalues::Upvalues,
 };
 
 pub trait Traceable {
@@ -73,7 +73,7 @@ impl Collector {
             // short cirquiting can make this behave unpredictably
             let mut done = true;
             done = heap.bound_methods.mark_all(&mut marked, self) && done;
-            done = heap.classes.mark_all(&mut marked, self) && done;
+            done = heap.instances.classes.mark_all(&mut marked, self) && done;
             done = heap.closures.mark_all(&mut marked, self) && done;
             done = heap.functions.mark_all(&mut marked, self) && done;
             done = heap.instances.mark_all(&mut marked, self) && done;
@@ -97,7 +97,7 @@ impl Collector {
             println!("Start sweeping.");
         }
         heap.bound_methods.sweep();
-        heap.classes.sweep();
+        heap.instances.classes.sweep();
         heap.closures.sweep();
         heap.functions.sweep();
         heap.instances.sweep();
@@ -170,7 +170,7 @@ impl<const KIND: usize> Traceable for Handle<KIND> {
 
 pub struct Heap {
     pub bound_methods: BoundMethods,
-    pub classes: Classes,
+    // pub classes: Classes,
     pub closures: Closures,
     pub functions: Functions,
     pub instances: Instances,
@@ -184,7 +184,7 @@ impl Heap {
     pub fn new() -> Self {
         Self {
             bound_methods: BoundMethods::new(),
-            classes: Classes::new(),
+            // classes: Classes::new(),
             closures: Closures::new(),
             functions: Functions::new(),
             instances: Instances::new(),
@@ -197,7 +197,7 @@ impl Heap {
 
     pub fn reset(&mut self) {
         self.bound_methods.reset();
-        self.classes.reset();
+        self.instances.classes.reset();
         self.closures.reset();
         self.functions.reset();
         self.instances.reset();
@@ -220,7 +220,7 @@ impl Heap {
             + self.strings.byte_count()
             + self.symbols.byte_count()
             + self.closures.byte_count()
-            + self.classes.byte_count()
+            + self.instances.classes.byte_count()
             + self.instances.byte_count()
             + self.bound_methods.byte_count()
             + self.functions.byte_count()

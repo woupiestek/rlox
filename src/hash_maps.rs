@@ -14,35 +14,23 @@ use crate::{
 
 const KNUTH_PHI: u32 = 2654435761;
 
-struct HashMap<A: Copy + Default> {
+struct HashMap<A: Copy> {
     indices: Box<[u16]>, // limits classes and objects to 65536 members, which seems reasonable.
     keys: Vec<SymbolHandle>, // maybe 65536 is enough identifiers for any program, altough it could be surpassed by generated code and lots of libraries.
     values: Vec<A>,
 }
 
-impl<A: Copy + Default> HashMap<A> {
+impl<A: Copy> HashMap<A> {
     // note: no sacrifical symbols needed anymore.
     const EMPTY: u16 = u16::MAX;
-    const TOMBSTONE: u16 = u16::MAX - 1;
 
     fn find(&self, key: SymbolHandle) -> (bool, usize) {
         let mask = self.indices.len() - 1;
         let mut hash = (key.0.wrapping_mul(KNUTH_PHI) >> (mask as u32).leading_zeros()) as usize;
-        let mut tombstone = usize::MAX;
         loop {
             match self.indices[hash] {
                 Self::EMPTY => {
-                    return (
-                        false,
-                        if tombstone < usize::MAX {
-                            tombstone
-                        } else {
-                            hash
-                        },
-                    );
-                }
-                Self::TOMBSTONE => {
-                    tombstone = hash;
+                    return (false, hash);
                 }
                 other => {
                     if self.keys[other as usize] == key {
@@ -97,15 +85,6 @@ impl<A: Copy + Default> HashMap<A> {
         self.put_unchecked(key, value)
     }
 
-    pub fn delete(&mut self, key: SymbolHandle) -> bool {
-        let (matched, hash) = self.find(key);
-        if matched {
-            self.indices[hash] = Self::TOMBSTONE;
-            return true;
-        }
-        false
-    }
-
     pub fn clear(&mut self) {
         self.indices.fill(Self::EMPTY);
         self.keys.clear();
@@ -117,26 +96,25 @@ impl<A: Copy + Default> HashMap<A> {
     }
 }
 
-impl<A: Copy + Default + Traceable> Traceable for HashMap<A> {
+impl<A: Copy + Traceable> Traceable for HashMap<A> {
     fn trace(&self, collector: &mut Collector) {
-        for &i in &self.indices {
-            if i >= Self::TOMBSTONE {
-                continue;
-            }
-            self.keys[i as usize].trace(collector);
-            self.values[i as usize].trace(collector);
+        for key in &self.keys {
+            key.trace(collector);
+        }
+        for value in &self.values {
+            value.trace(collector);
         }
     }
 }
 
-pub struct HashMaps<A: Copy + Default> {
+pub struct HashMaps<A: Copy> {
     handles: HandleSet,
     active: Vec<Option<HashMap<A>>>,
     stash: Vec<Vec<HashMap<A>>>,
     hash_map_byte_count: usize,
 }
 
-impl<A: Copy + Default> HashMaps<A> {
+impl<A: Copy> HashMaps<A> {
     pub fn new() -> Self {
         Self {
             handles: HandleSet::new(),
@@ -256,21 +234,13 @@ impl<A: Copy + Default> HashMaps<A> {
             }
         }
     }
-
-    pub fn delete(&mut self, handle: u32, key: SymbolHandle) -> bool {
-        if let Some(hash_map) = &mut self.active[handle as usize] {
-            hash_map.delete(key)
-        } else {
-            false
-        }
-    }
 }
 
-pub struct HashMapPool<A: Copy + Default + Traceable, const KIND: usize> {
+pub struct HashMapPool<A: Copy + Traceable, const KIND: usize> {
     pub maps: HashMaps<A>,
 }
 
-impl<A: Copy + Default + Traceable, const KIND: usize> HashMapPool<A, KIND> {
+impl<A: Copy + Traceable, const KIND: usize> HashMapPool<A, KIND> {
     pub fn new() -> Self {
         Self {
             maps: HashMaps::new(),
@@ -278,7 +248,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMapPool<A, KIND> {
     }
 }
 
-impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMapPool<A, KIND> {
+impl<A: Copy + Traceable, const KIND: usize> Pool<KIND> for HashMapPool<A, KIND> {
     fn byte_count(&self) -> usize {
         mem::size_of::<Self>()
             + self.maps.active.capacity() * mem::size_of::<Option<HashMap<A>>>()
