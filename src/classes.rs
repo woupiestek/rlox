@@ -2,16 +2,26 @@ use crate::{
     closures::ClosureHandle,
     handles::Column,
     hash_maps::HashMapPool,
-    heap::{Collector, Handle, Pool, CLASS},
+    heap::{Collector, Handle, Pool, Traceable, CLASS},
     properties::Properties,
     symbols::{SymbolHandle, Symbols},
+    values::Value,
 };
+
+impl Traceable for Vec<Value> {
+    fn trace(&self, collector: &mut Collector) {
+        for value in self {
+            value.trace(collector);
+        }
+    }
+}
 
 pub type ClassHandle = Handle<CLASS>;
 
 pub struct Classes {
     names: Column<SymbolHandle>,
     methods: HashMapPool<ClosureHandle, CLASS>,
+    // fixme: this was a mistake
     pub properties: Properties,
 }
 
@@ -39,7 +49,7 @@ impl Classes {
     }
 
     pub fn get_method(&self, ch: ClassHandle, name: SymbolHandle) -> Option<ClosureHandle> {
-        self.methods.maps.get(ch.0, name)
+        self.methods.maps.get_ref(ch.0, name).copied()
     }
 
     pub fn set_method(

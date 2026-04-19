@@ -50,9 +50,9 @@ hard to do bug free.
 
 The quality of the benchmarks is demonstrated.
 
-An index for a vec of symbols is extremely useful.
-There is no reason why lox cannot have static classes, in the sense that classes decide where values are stored
-It is akward that every instance would need an 
+An index for a vec of symbols is extremely useful. There is no reason why lox
+cannot have static classes, in the sense that classes decide where values are
+stored It is akward that every instance would need an
 
 ## 2026-04-18
 

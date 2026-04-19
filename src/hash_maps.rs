@@ -6,44 +6,31 @@ use crate::{
     symbols::SymbolHandle,
 };
 
-/*
- * Purpose:
- * - reuse of logic at least between globals, classes and instances
- * - never give any memory up, but reuse aggressively instead.
- */
+// all this complexity was needed because of the byte counts.
 
-const KNUTH_PHI: u32 = 2654435761;
-
-struct HashMap<A: Copy> {
+struct HashMap<A> {
     indices: Box<[u16]>, // limits classes and objects to 65536 members, which seems reasonable.
     keys: Vec<SymbolHandle>, // maybe 65536 is enough identifiers for any program, altough it could be surpassed by generated code and lots of libraries.
     values: Vec<A>,
 }
 
-impl<A: Copy> HashMap<A> {
+impl<A> HashMap<A> {
     // note: no sacrifical symbols needed anymore.
     const EMPTY: u16 = u16::MAX;
 
     fn find(&self, key: SymbolHandle) -> (bool, usize) {
         let mask = self.indices.len() - 1;
-        let mut hash = (key.0.wrapping_mul(KNUTH_PHI) >> (mask as u32).leading_zeros()) as usize;
+        let mut hash = (key.0.reverse_bits() >> (mask as u32).leading_zeros()) as usize;
         loop {
-            match self.indices[hash] {
-                Self::EMPTY => {
-                    return (false, hash);
-                }
-                other => {
-                    if self.keys[other as usize] == key {
-                        return (true, hash);
-                    }
-                }
+            if self.indices[hash] == Self::EMPTY {
+                return (false, hash);
+            }
+            let other = self.indices[hash];
+            if self.keys[other as usize] == key {
+                return (true, hash);
             }
             hash = (hash + 1) & mask;
         }
-    }
-
-    fn is_full(&self) -> bool {
-        4 * self.keys.len() > 3 * self.indices.len()
     }
 
     // based on the previous reuse idea.
@@ -57,46 +44,71 @@ impl<A: Copy> HashMap<A> {
         }
     }
 
-    pub fn get(&self, key: SymbolHandle) -> Option<A> {
+    pub fn get_ref(&self, key: SymbolHandle) -> Option<&A> {
         let (matched, hash) = self.find(key);
         if matched {
-            Some(self.values[self.indices[hash] as usize])
+            Some(&self.values[self.indices[hash] as usize])
         } else {
             None
         }
     }
 
-    // is this return value actually used?
-    fn put_unchecked(&mut self, key: SymbolHandle, value: A) -> bool {
+    fn grow(&mut self, lower_bound: usize) -> usize {
+        if lower_bound <= self.indices.len() {
+            return 0;
+        }
+        let new_len = lower_bound.next_power_of_two();
+        let byte_count = (new_len - self.indices.len()) * mem::size_of::<u16>();
+        self.indices = vec![Self::EMPTY; new_len].into_boxed_slice();
+        for i in 0..self.keys.len() {
+            let key = self.keys[i];
+            let (_, hash) = self.find(key);
+            self.indices[hash] = i as u16;
+        }
+        byte_count
+    }
+
+    // has a key been added, and if so, how much more space was allocated?
+    pub fn put(&mut self, key: SymbolHandle, value: A) -> Option<usize> {
         let (matched, hash) = self.find(key);
         if matched {
             self.values[self.indices[hash] as usize] = value;
-            return false;
+            return None;
+        }
+        // vecs are great, but I need to count the bytes...
+        let mut byte_count = 0;
+        if self.keys.capacity() == self.keys.len() {
+            // fair assumption?
+            byte_count +=
+                self.keys.capacity() * (mem::size_of::<SymbolHandle>() + mem::size_of::<A>());
         }
         self.indices[hash] = self.keys.len() as u16;
         self.keys.push(key);
         self.values.push(value);
-        return true;
+        byte_count += self.grow(self.keys.len() * 4 / 3);
+        return Some(byte_count);
     }
 
-    pub fn put(&mut self, key: SymbolHandle, value: A) -> bool {
-        // maybe grow? how?
-        assert!(!self.is_full());
-        self.put_unchecked(key, value)
+    pub fn reserve(&mut self, additional: usize) -> usize {
+        let byte_count_before = self.byte_count();
+        self.keys.reserve(additional);
+        self.values.reserve(additional);
+        self.byte_count() - byte_count_before
     }
 
-    pub fn clear(&mut self) {
-        self.indices.fill(Self::EMPTY);
-        self.keys.clear();
-        self.values.clear();
+    pub fn size(&self) -> usize {
+        self.keys.len()
     }
 
-    fn capacity(&self) -> usize {
-        self.indices.len()
+    pub fn byte_count(&self) -> usize {
+        mem::size_of::<Self>()
+            + self.indices.len() * mem::size_of::<u16>()
+            + self.keys.capacity() * mem::size_of::<SymbolHandle>()
+            + self.values.capacity() * mem::size_of::<A>()
     }
 }
 
-impl<A: Copy + Traceable> Traceable for HashMap<A> {
+impl<A: Traceable> Traceable for HashMap<A> {
     fn trace(&self, collector: &mut Collector) {
         for key in &self.keys {
             key.trace(collector);
@@ -107,140 +119,80 @@ impl<A: Copy + Traceable> Traceable for HashMap<A> {
     }
 }
 
-pub struct HashMaps<A: Copy> {
+pub struct HashMaps<A> {
     handles: HandleSet,
     active: Vec<Option<HashMap<A>>>,
-    stash: Vec<Vec<HashMap<A>>>,
     hash_map_byte_count: usize,
 }
 
-impl<A: Copy> HashMaps<A> {
+impl<A> HashMaps<A> {
     pub fn new() -> Self {
         Self {
             handles: HandleSet::new(),
             active: Vec::new(),
-            stash: Vec::new(),
             hash_map_byte_count: 0,
         }
     }
 
     pub fn new_hash_map(&mut self) -> u32 {
         let next = self.handles.next();
-        while self.active.len() <= next as usize {
-            self.active.push(None);
+        if self.active.len() <= next as usize {
+            let new_len = (next as usize + 1).next_power_of_two();
+            self.active.resize_with(new_len, || None);
         }
         next
     }
 
-    pub fn get(&self, handle: u32, key: SymbolHandle) -> Option<A> {
+    pub fn get_ref(&self, handle: u32, key: SymbolHandle) -> Option<&A> {
         if let Some(hash_map) = &self.active[handle as usize] {
-            hash_map.get(key)
+            hash_map.get_ref(key)
         } else {
             None
         }
     }
 
-    fn rank(capacity: usize) -> usize {
-        capacity.ilog2() as usize - 3
-    }
-
-    fn alloc(&mut self, capacity: usize) -> HashMap<A> {
-        let index = Self::rank(capacity);
-        if index < self.stash.len() {
-            if let Some(mut hash_map) = self.stash[index].pop() {
-                hash_map.clear();
-                return hash_map;
-            }
-        }
-        self.hash_map_byte_count +=
-            mem::size_of::<HashMap<A>>() + (4 + mem::size_of::<A>()) * capacity;
-        return HashMap::with_capacity(capacity);
-    }
-
-    fn stash(&mut self, hash_map: HashMap<A>) {
-        let rank = Self::rank(hash_map.capacity());
-        while self.stash.len() <= rank {
-            self.stash.push(Vec::new());
-        }
-        self.stash[Self::rank(hash_map.capacity())].push(hash_map);
-    }
-
-    fn resize(&mut self, handle: u32, capacity: usize) {
-        if let Some(hash_map) = &self.active[handle as usize] {
-            if hash_map.capacity() >= capacity {
-                return;
-            }
-        }
-        let mut new_map = self.alloc(capacity);
-        let old_map = self.active[handle as usize].take(); //.replace(new_map);
-        if let Some(hash_map) = old_map {
-            for i in 0..hash_map.keys.len() {
-                let k = hash_map.keys[i];
-                let v = hash_map.values[i];
-                new_map.put(k, v);
-            }
-            self.stash(hash_map);
-        }
-        self.active[handle as usize] = Some(new_map);
-    }
-
-    fn hash_map_ref(&mut self, handle: u32) -> &HashMap<A> {
-        self.active[handle as usize].as_ref().unwrap()
-    }
-
-    fn hash_map_mut(&mut self, handle: u32) -> &mut HashMap<A> {
-        self.active[handle as usize].as_mut().unwrap()
-    }
-
     pub fn put(&mut self, handle: u32, key: SymbolHandle, value: A) -> bool {
-        let capacity = if let Some(hash_map) = &mut self.active[handle as usize] {
-            if !hash_map.is_full() {
-                return hash_map.put(key, value);
+        if let Some(hash_map) = &mut self.active[handle as usize] {
+            if let Some(byte_count) = hash_map.put(key, value) {
+                self.hash_map_byte_count += byte_count;
+                true
+            } else {
+                false
             }
-            hash_map.indices.len() * 2
         } else {
-            8
-        };
-        self.resize(handle, capacity);
-        self.hash_map_mut(handle).put(key, value)
-    }
-
-    pub fn count(&self, handle: u32) -> usize {
-        if let Some(hash_map) = &self.active[handle as usize] {
-            hash_map.keys.len()
-        } else {
-            0
-        }
-    }
-
-    pub fn add_all(&mut self, source: u32, target: u32) {
-        if self.active[source as usize].is_none() {
-            return;
-        }
-
-        let count = self.count(source) + self.count(target);
-        let target_capacity = if count > 8 {
-            ((count - 1) * 4 / 3 + 1).next_power_of_two()
-        } else {
-            8
-        };
-
-        self.resize(target, target_capacity);
-        for i in 0..self.hash_map_ref(source).keys.len() {
-            let k = self.hash_map_ref(source).keys[i];
-            if k.is_valid() {
-                let v = self.hash_map_ref(source).values[i];
-                self.hash_map_mut(target).put(k, v);
-            }
+            let mut hash_map = HashMap::with_capacity(8);
+            hash_map.put(key, value);
+            self.hash_map_byte_count += hash_map.byte_count();
+            self.active[handle as usize] = Some(hash_map);
+            true
         }
     }
 }
 
-pub struct HashMapPool<A: Copy + Traceable, const KIND: usize> {
+impl<A: Copy> HashMaps<A> {
+    pub fn add_all(&mut self, source: u32, target: u32) {
+        // figures: cannot borrow self.active twice, even if the borrows are disjoint.
+        let size = if let Some(map) = self.active[source as usize].as_ref() {
+            map.size()
+        } else {
+            return;
+        };
+        self.active[target as usize]
+            .get_or_insert_with(|| HashMap::with_capacity(8))
+            .reserve(size);
+        for i in 0..size {
+            let k = self.active[source as usize].as_ref().unwrap().keys[i];
+            let v = self.active[source as usize].as_ref().unwrap().values[i];
+            self.active[target as usize].as_mut().unwrap().put(k, v);
+        }
+    }
+}
+
+pub struct HashMapPool<A: Traceable, const KIND: usize> {
     pub maps: HashMaps<A>,
 }
 
-impl<A: Copy + Traceable, const KIND: usize> HashMapPool<A, KIND> {
+impl<A: Traceable, const KIND: usize> HashMapPool<A, KIND> {
     pub fn new() -> Self {
         Self {
             maps: HashMaps::new(),
@@ -248,11 +200,10 @@ impl<A: Copy + Traceable, const KIND: usize> HashMapPool<A, KIND> {
     }
 }
 
-impl<A: Copy + Traceable, const KIND: usize> Pool<KIND> for HashMapPool<A, KIND> {
+impl<A: Traceable, const KIND: usize> Pool<KIND> for HashMapPool<A, KIND> {
     fn byte_count(&self) -> usize {
         mem::size_of::<Self>()
             + self.maps.active.capacity() * mem::size_of::<Option<HashMap<A>>>()
-            + self.maps.stash.capacity() * mem::size_of::<Vec<HashMap<A>>>()
             + self.maps.hash_map_byte_count
     }
 
@@ -275,9 +226,7 @@ impl<A: Copy + Traceable, const KIND: usize> Pool<KIND> for HashMapPool<A, KIND>
     fn sweep(&mut self) {
         for i in 0..self.maps.active.len() {
             if !self.maps.handles.is_marked(i as u32) {
-                if let Some(hash_map) = self.maps.active[i].take() {
-                    self.maps.stash(hash_map);
-                }
+                self.maps.active[i] = None;
             }
         }
     }
@@ -295,8 +244,8 @@ mod tests {
         let mut properties = HashMap::<Value>::with_capacity(8);
         let key = Handle(60);
         let key2 = Handle(80);
-        assert!(properties.put(key, Value::TRUE));
-        assert_eq!(Some(Value::TRUE), properties.get(key));
-        assert_eq!(None, properties.get(key2));
+        assert!(properties.put(key, Value::TRUE).is_some());
+        assert_eq!(Some(Value::TRUE), properties.get_ref(key).copied());
+        assert_eq!(None, properties.get_ref(key2).copied());
     }
 }
