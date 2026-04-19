@@ -2,7 +2,7 @@ use std::mem;
 
 use crate::{
     handles::HandleSet,
-    heap::{Collector, Handle, Pool, Traceable},
+    heap::{Collector, Pool, Traceable},
     symbols::SymbolHandle,
 };
 
@@ -14,19 +14,17 @@ use crate::{
 
 const KNUTH_PHI: u32 = 2654435761;
 
-struct HashMap<A: Copy + Default + Traceable> {
+struct HashMap<A: Copy + Default> {
     indices: Box<[u16]>, // limits classes and objects to 65536 members, which seems reasonable.
     keys: Vec<SymbolHandle>, // maybe 65536 is enough identifiers for any program, altough it could be surpassed by generated code and lots of libraries.
     values: Vec<A>,
 }
 
-impl<A: Copy + Default + Traceable> HashMap<A> {
+impl<A: Copy + Default> HashMap<A> {
     // note: no sacrifical symbols needed anymore.
     const EMPTY: u16 = u16::MAX;
     const TOMBSTONE: u16 = u16::MAX - 1;
 
-    // different needs...
-    // what should this actually do?
     fn find(&self, key: SymbolHandle) -> (bool, usize) {
         let mask = self.indices.len() - 1;
         let mut hash = (key.0.wrapping_mul(KNUTH_PHI) >> (mask as u32).leading_zeros()) as usize;
@@ -131,14 +129,14 @@ impl<A: Copy + Default + Traceable> Traceable for HashMap<A> {
     }
 }
 
-pub struct HashMaps<A: Copy + Default + Traceable, const KIND: usize> {
+pub struct HashMaps<A: Copy + Default> {
     handles: HandleSet,
     active: Vec<Option<HashMap<A>>>,
     stash: Vec<Vec<HashMap<A>>>,
     hash_map_byte_count: usize,
 }
 
-impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
+impl<A: Copy + Default> HashMaps<A> {
     pub fn new() -> Self {
         Self {
             handles: HandleSet::new(),
@@ -148,16 +146,16 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         }
     }
 
-    pub fn new_hash_map(&mut self) -> Handle<KIND> {
+    pub fn new_hash_map(&mut self) -> u32 {
         let next = self.handles.next();
         while self.active.len() <= next as usize {
             self.active.push(None);
         }
-        Handle(next)
+        next
     }
 
-    pub fn get(&self, handle: Handle<KIND>, key: SymbolHandle) -> Option<A> {
-        if let Some(hash_map) = &self.active[handle.index()] {
+    pub fn get(&self, handle: u32, key: SymbolHandle) -> Option<A> {
+        if let Some(hash_map) = &self.active[handle as usize] {
             hash_map.get(key)
         } else {
             None
@@ -189,37 +187,35 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         self.stash[Self::rank(hash_map.capacity())].push(hash_map);
     }
 
-    fn resize(&mut self, handle: Handle<KIND>, capacity: usize) {
-        if let Some(hash_map) = &self.active[handle.index()] {
+    fn resize(&mut self, handle: u32, capacity: usize) {
+        if let Some(hash_map) = &self.active[handle as usize] {
             if hash_map.capacity() >= capacity {
                 return;
             }
         }
         let mut new_map = self.alloc(capacity);
-        let old_map = self.active[handle.index()].take(); //.replace(new_map);
+        let old_map = self.active[handle as usize].take(); //.replace(new_map);
         if let Some(hash_map) = old_map {
             for i in 0..hash_map.keys.len() {
                 let k = hash_map.keys[i];
-                if k.is_valid() {
-                    let v = hash_map.values[i];
-                    new_map.put(k, v);
-                }
+                let v = hash_map.values[i];
+                new_map.put(k, v);
             }
             self.stash(hash_map);
         }
-        self.active[handle.index()] = Some(new_map);
+        self.active[handle as usize] = Some(new_map);
     }
 
-    fn hash_map_ref(&mut self, handle: Handle<KIND>) -> &HashMap<A> {
-        self.active[handle.index()].as_ref().unwrap()
+    fn hash_map_ref(&mut self, handle: u32) -> &HashMap<A> {
+        self.active[handle as usize].as_ref().unwrap()
     }
 
-    fn hash_map_mut(&mut self, handle: Handle<KIND>) -> &mut HashMap<A> {
-        self.active[handle.index()].as_mut().unwrap()
+    fn hash_map_mut(&mut self, handle: u32) -> &mut HashMap<A> {
+        self.active[handle as usize].as_mut().unwrap()
     }
 
-    pub fn put(&mut self, handle: Handle<KIND>, key: SymbolHandle, value: A) -> bool {
-        let capacity = if let Some(hash_map) = &mut self.active[handle.index()] {
+    pub fn put(&mut self, handle: u32, key: SymbolHandle, value: A) -> bool {
+        let capacity = if let Some(hash_map) = &mut self.active[handle as usize] {
             if !hash_map.is_full() {
                 return hash_map.put(key, value);
             }
@@ -231,16 +227,16 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         self.hash_map_mut(handle).put(key, value)
     }
 
-    pub fn count(&self, handle: Handle<KIND>) -> usize {
-        if let Some(hash_map) = &self.active[handle.index()] {
+    pub fn count(&self, handle: u32) -> usize {
+        if let Some(hash_map) = &self.active[handle as usize] {
             hash_map.keys.len()
         } else {
             0
         }
     }
 
-    pub fn add_all(&mut self, source: Handle<KIND>, target: Handle<KIND>) {
-        if self.active[source.index()].is_none() {
+    pub fn add_all(&mut self, source: u32, target: u32) {
+        if self.active[source as usize].is_none() {
             return;
         }
 
@@ -261,8 +257,8 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
         }
     }
 
-    pub fn delete(&mut self, handle: Handle<KIND>, key: SymbolHandle) -> bool {
-        if let Some(hash_map) = &mut self.active[handle.index()] {
+    pub fn delete(&mut self, handle: u32, key: SymbolHandle) -> bool {
+        if let Some(hash_map) = &mut self.active[handle as usize] {
             hash_map.delete(key)
         } else {
             false
@@ -270,35 +266,47 @@ impl<A: Copy + Default + Traceable, const KIND: usize> HashMaps<A, KIND> {
     }
 }
 
-impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A, KIND> {
+pub struct HashMapPool<A: Copy + Default + Traceable, const KIND: usize> {
+    pub maps: HashMaps<A>,
+}
+
+impl<A: Copy + Default + Traceable, const KIND: usize> HashMapPool<A, KIND> {
+    pub fn new() -> Self {
+        Self {
+            maps: HashMaps::new(),
+        }
+    }
+}
+
+impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMapPool<A, KIND> {
     fn byte_count(&self) -> usize {
         mem::size_of::<Self>()
-            + self.active.capacity() * mem::size_of::<Option<HashMap<A>>>()
-            + self.stash.capacity() * mem::size_of::<Vec<HashMap<A>>>()
-            + self.hash_map_byte_count
+            + self.maps.active.capacity() * mem::size_of::<Option<HashMap<A>>>()
+            + self.maps.stash.capacity() * mem::size_of::<Vec<HashMap<A>>>()
+            + self.maps.hash_map_byte_count
     }
 
     fn mark(&mut self, handle: u32) -> bool {
-        self.handles.mark(handle)
+        self.maps.handles.mark(handle)
     }
 
     fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
         for &i in marked {
-            if let Some(hash_map) = &self.active[i as usize] {
+            if let Some(hash_map) = &self.maps.active[i as usize] {
                 hash_map.trace(collector);
             }
         }
     }
 
     fn reset(&mut self) {
-        self.handles.clear();
+        self.maps.handles.clear();
     }
 
     fn sweep(&mut self) {
-        for i in 0..self.active.len() {
-            if !self.handles.is_marked(i as u32) {
-                if let Some(hash_map) = self.active[i].take() {
-                    self.stash(hash_map);
+        for i in 0..self.maps.active.len() {
+            if !self.maps.handles.is_marked(i as u32) {
+                if let Some(hash_map) = self.maps.active[i].take() {
+                    self.maps.stash(hash_map);
                 }
             }
         }
@@ -308,7 +316,7 @@ impl<A: Copy + Default + Traceable, const KIND: usize> Pool<KIND> for HashMaps<A
 #[cfg(test)]
 mod tests {
 
-    use crate::values::Value;
+    use crate::{heap::Handle, values::Value};
 
     use super::*;
 

@@ -1,7 +1,7 @@
 use crate::{
     closures::ClosureHandle,
     handles::Column,
-    hash_maps::HashMaps,
+    hash_maps::HashMapPool,
     heap::{Collector, Handle, Pool, CLASS},
     symbols::{SymbolHandle, Symbols},
 };
@@ -10,19 +10,19 @@ pub type ClassHandle = Handle<CLASS>;
 
 pub struct Classes {
     names: Column<SymbolHandle>,
-    methods: HashMaps<ClosureHandle, CLASS>,
+    methods: HashMapPool<ClosureHandle, CLASS>,
 }
 
 impl Classes {
     pub fn new() -> Self {
         Self {
             names: Column::new(),
-            methods: HashMaps::new(),
+            methods: HashMapPool::new(),
         }
     }
 
     pub fn new_class(&mut self, name: SymbolHandle) -> ClassHandle {
-        let ch = self.methods.new_hash_map();
+        let ch = Handle(self.methods.maps.new_hash_map());
         self.names.set(ch.0, name);
         ch
     }
@@ -36,7 +36,7 @@ impl Classes {
     }
 
     pub fn get_method(&self, ch: ClassHandle, name: SymbolHandle) -> Option<ClosureHandle> {
-        self.methods.get(ch, name)
+        self.methods.maps.get(ch.0, name)
     }
 
     pub fn set_method(
@@ -45,11 +45,11 @@ impl Classes {
         name: SymbolHandle,
         method: ClosureHandle,
     ) -> bool {
-        self.methods.put(ch, name, method)
+        self.methods.maps.put(ch.0, name, method)
     }
 
     pub fn clone_methods(&mut self, super_class: ClassHandle, sub_class: ClassHandle) {
-        self.methods.add_all(super_class, sub_class);
+        self.methods.maps.add_all(super_class.0, sub_class.0);
     }
 }
 

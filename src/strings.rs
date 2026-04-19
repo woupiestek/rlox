@@ -1,4 +1,4 @@
-use std::{mem, u32};
+use std::{mem, ops::Range, u32};
 
 use crate::{
     handles::HandleSet,
@@ -24,10 +24,14 @@ impl Buffer {
         self.tos.len()
     }
 
-    fn get(&self, index: usize) -> &str {
+    fn ran(&self, index: usize) -> Range<usize> {
         let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
         let to = self.tos[index] as usize;
-        &self.string[from..to]
+        from..to
+    }
+
+    fn get(&self, index: usize) -> &str {
+        &self.string[self.ran(index)]
     }
 
     fn add(&mut self, str: &str) -> usize {

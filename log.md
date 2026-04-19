@@ -1,5 +1,11 @@
 # Rlox
 
+## 2026-04-19
+
+### properties
+
+Just a hashmaps of columns or something...
+
 ## 2026-04-18
 
 ### method and property names as local variables or upvalues...

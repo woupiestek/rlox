@@ -1,7 +1,7 @@
 use crate::{
     classes::ClassHandle,
     handles::Column,
-    hash_maps::HashMaps,
+    hash_maps::HashMapPool,
     heap::{Collector, Handle, Heap, Pool, INSTANCE},
     symbols::SymbolHandle,
     values::Value,
@@ -11,21 +11,21 @@ pub type InstanceHandle = Handle<INSTANCE>;
 
 pub struct Instances {
     classes: Column<ClassHandle>,
-    properties: HashMaps<Value, INSTANCE>,
+    properties: HashMapPool<Value, INSTANCE>,
 }
 
 impl Instances {
     pub fn new() -> Self {
         Self {
             classes: Column::new(),
-            properties: HashMaps::new(),
+            properties: HashMapPool::new(),
         }
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
-        let handle = self.properties.new_hash_map();
-        self.classes.set(handle.0, class);
-        handle
+        let handle = self.properties.maps.new_hash_map();
+        self.classes.set(handle, class);
+        Handle(handle)
     }
 
     pub fn get_class<'s>(&self, ih: InstanceHandle) -> ClassHandle {
@@ -40,15 +40,15 @@ impl Instances {
     }
 
     pub fn get_property(&self, ih: InstanceHandle, key: SymbolHandle) -> Option<Value> {
-        self.properties.get(ih, key)
+        self.properties.maps.get(ih.0, key)
     }
 
     pub fn set_property(&mut self, ih: InstanceHandle, key: SymbolHandle, value: Value) -> bool {
-        self.properties.put(ih, key, value)
+        self.properties.maps.put(ih.0, key, value)
     }
 
     pub fn delete_property(&mut self, ih: InstanceHandle, key: SymbolHandle) -> bool {
-        self.properties.delete(ih, key)
+        self.properties.maps.delete(ih.0, key)
     }
 }
 
