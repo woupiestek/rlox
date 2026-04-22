@@ -1,5 +1,30 @@
 # Rlox
 
+## 2026-04-22
+
+### fixing the mess...
+
+A lot is possible by separating the hashmap from what it contains.
+
+New set up is not bad.
+
+- binary_trees: 2.1925368309020996
+- equality: loop 2.3074135780334473 elapsed 2.1130943298339844 equals
+  -0.1943192481994629
+- fib: 1.6324880123138428
+- instantiation: 0.9942612648010254
+- invocation: 0.6725471019744873
+- method_call: 0.34665989875793457
+- properties: 0.8438127040863037
+- string_equality: loop 1.3914070129394531 elapsed 1.4112958908081055 equals
+  0.019888877868652344
+- trees: 4.558312177658081
+- zoo_batch: 2692
+- zoo: 0.6192257404327393
+
+Good scores compared to before, despite a relatively lazy fix.
+
+
 ## 2026-04-19
 
 ### properties
@@ -19,7 +44,7 @@ Trying benchmarks:
 - string_equality: loop 1.4796886444091797 elapsed 1.4847331047058105 equals
   0.005044460296630859
 - trees: 3.6922354698181152
-- zoo_batch: 147180000 2453 10.002466201782227
+- zoo_batch: 2453
 - zoo: 0.6957736015319824
 
 For comparison with the last time:

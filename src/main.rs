@@ -20,7 +20,6 @@ mod heap;
 mod instances;
 mod natives;
 mod op;
-mod properties;
 mod scanner;
 mod strings;
 mod symbols;

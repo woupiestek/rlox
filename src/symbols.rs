@@ -2,7 +2,7 @@ use std::{mem, u32};
 
 use crate::{
     handles::{Column, HandleSet},
-    heap::{Collector, Handle, Pool, SYMBOL},
+    heap::{Collector, Handle, Pool, Traceable, SYMBOL},
 };
 
 pub type SymbolHandle = Handle<SYMBOL>;
@@ -50,7 +50,7 @@ impl Buffer {
 }
 
 pub struct Symbols {
-    handle_set: Box<[SymbolHandle]>,
+    indices: Box<[SymbolHandle]>,
     keys: HandleSet,
     mask: usize,
     buffer: Buffer,
@@ -60,7 +60,7 @@ pub struct Symbols {
 impl Symbols {
     pub fn new() -> Self {
         Self {
-            handle_set: vec![SymbolHandle::EMPTY; 8].into_boxed_slice(),
+            indices: vec![SymbolHandle::EMPTY; 8].into_boxed_slice(),
             keys: HandleSet::new(),
             mask: 7, // self.handle_set.len() - 1
             buffer: Buffer::with_capacity(0),
@@ -78,19 +78,19 @@ impl Symbols {
     }
 
     fn find(&self, symbol: &str) -> (bool, usize) {
-        assert!(self.buffer.len() * 4 < self.handle_set.len() * 3);
-        let mut index = self.hash(symbol);
+        assert!(self.buffer.len() * 4 < self.indices.len() * 3);
+        let mut hash = self.hash(symbol);
         loop {
-            match self.handle_set[index] {
-                SymbolHandle::EMPTY => return (false, index),
+            match self.indices[hash] {
+                SymbolHandle::EMPTY => return (false, hash),
                 handle => {
                     if self.get(handle) == symbol {
-                        return (true, index);
+                        return (true, hash);
                     }
                 }
             }
-            index += 1;
-            index &= self.mask;
+            hash += 1;
+            hash &= self.mask;
         }
     }
 
@@ -99,36 +99,36 @@ impl Symbols {
     }
 
     fn grow(&mut self) {
-        let capacity = if self.handle_set.len() == 0 {
+        let capacity = if self.indices.len() == 0 {
             8
         } else {
-            self.handle_set.len() * 2
+            self.indices.len() * 2
         };
-        self.handle_set = vec![SymbolHandle::EMPTY; capacity].into_boxed_slice();
+        self.indices = vec![SymbolHandle::EMPTY; capacity].into_boxed_slice();
         self.mask = capacity - 1;
         for i in 0..self.buffer.len() {
             if self.keys.is_marked(i as u32) {
                 let str = self.buffer.get(i);
                 let (_, index) = self.find(str);
-                self.handle_set[index] = Handle(i as u32);
+                self.indices[index] = Handle(i as u32);
             }
         }
     }
 
     pub fn put(&mut self, symbol: &str) -> SymbolHandle {
-        if (self.keys.count() + 1) * 4 > self.handle_set.len() * 3 {
+        if (self.keys.count() + 1) * 4 > self.indices.len() * 3 {
             self.grow();
         }
 
         let (found, index) = self.find(symbol);
         if found {
-            return self.handle_set[index];
+            return self.indices[index];
         }
 
         let key = self.keys.next();
         self.offsets.set(key, self.buffer.add(symbol) as u32);
         let handle = Handle(key);
-        self.handle_set[index] = handle;
+        self.indices[index] = handle;
         handle
     }
 }
@@ -136,7 +136,7 @@ impl Symbols {
 impl Pool<SYMBOL> for Symbols {
     fn byte_count(&self) -> usize {
         mem::size_of::<Symbols>()
-            + self.handle_set.len() * 4
+            + self.indices.len() * 4
             + self.offsets.byte_count()
             + self.buffer.byte_count()
             + self.keys.byte_count()
@@ -172,6 +172,83 @@ impl Pool<SYMBOL> for Symbols {
                         as u32,
                 );
             }
+        }
+    }
+}
+
+pub struct KeySet {
+    keys: Vec<SymbolHandle>,
+    indices: Box<[u16]>,
+}
+
+impl KeySet {
+    const UNDEFINED: u16 = u16::MAX;
+
+    pub fn new() -> Self {
+        Self {
+            keys: Vec::new(),
+            indices: Box::new([Self::UNDEFINED; 8]),
+        }
+    }
+
+    fn hash(&self, key: SymbolHandle) -> (bool, u16) {
+        let mask = self.indices.len() as u16 - 1;
+        let mut hash = (key.0 as u16).reverse_bits() >> mask.leading_zeros();
+        loop {
+            if self.indices[hash as usize] == Self::UNDEFINED {
+                return (false, hash as u16);
+            }
+            if self.keys[self.indices[hash as usize] as usize] == key {
+                return (true, hash as u16);
+            }
+            hash = (hash + 1) & mask
+        }
+    }
+
+    fn grow(&mut self) {
+        let new_len = ((self.keys.len() * 4 + 2) / 3).next_power_of_two();
+        self.indices = vec![Self::UNDEFINED; new_len].into_boxed_slice();
+        for i in 0..self.keys.len() {
+            let key = self.keys[i];
+            let (_, hash) = self.hash(key);
+            self.indices[hash as usize] = i as u16;
+        }
+    }
+
+    pub fn add(&mut self, key: SymbolHandle) -> usize {
+        let (matched, hash) = self.hash(key);
+        if matched {
+            return self.indices[hash as usize] as usize;
+        }
+        let index = self.keys.len() as u16;
+        self.keys.push(key);
+        // two options
+        if self.indices.len() * 3 > self.keys.len() * 4 {
+            self.indices[hash as usize] = index;
+        } else {
+            self.grow();
+        }
+        index as usize
+    }
+
+    pub fn find(&self, key: SymbolHandle) -> Option<usize> {
+        let (matched, hash) = self.hash(key);
+        if matched {
+            Some(self.indices[hash as usize] as usize)
+        } else {
+            None
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+}
+
+impl Traceable for KeySet {
+    fn trace(&self, collector: &mut Collector) {
+        for &key in &self.keys {
+            key.trace(collector);
         }
     }
 }
