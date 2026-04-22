@@ -24,6 +24,11 @@ New set up is not bad.
 
 Good scores compared to before, despite a relatively lazy fix.
 
+### possible improvements...
+
+Have a repository for arrays, perhaps one of each type of entry. Then build
+everything out of array handles. one way or another. The repos take care of
+growth, perhaps indexation, and bookkeeping the amount of space used.
 
 ## 2026-04-19
 

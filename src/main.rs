@@ -15,7 +15,6 @@ mod common;
 mod compiler;
 mod functions;
 mod handles;
-mod hash_maps;
 mod heap;
 mod instances;
 mod natives;

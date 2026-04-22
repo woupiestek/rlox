@@ -3,7 +3,7 @@ use std::{mem, time};
 use crate::{
     bound_methods::BoundMethodHandle,
     call_frame::CallFrame,
-    classes::ClassHandle,
+    classes::{ClassHandle, Classes},
     closures::ClosureHandle,
     common::STACK_SIZE,
     compiler::compile,
@@ -182,23 +182,24 @@ impl VM {
                 self.collect_garbage_if_needed();
                 let instance = self.heap.instances.new_instance(class);
                 self.set(arity, Value::from(instance));
-                if let Some(init) = self
+                let init = self
                     .heap
                     .instances
                     .classes
-                    .get_method(class, self.init_string)
-                {
-                    return self.push_frame(init, arity);
-                } else if arity > 0 {
-                    // after garbage collection, classes get method init string is empty... why!?
-                    return err!(
-                        "Expected no arguments for {} but got {}.",
-                        callee.to_string(&self.heap),
-                        arity
-                    );
+                    .get_method(class, self.init_string);
+                return if init == Classes::EMPTY_METHOD {
+                    if arity > 0 {
+                        err!(
+                            "Expected no arguments for {} but got {}.",
+                            callee.to_string(&self.heap),
+                            arity
+                        )
+                    } else {
+                        Ok(())
+                    }
                 } else {
-                    return Ok(());
-                }
+                    self.push_frame(init, arity)
+                };
             }
             Some(BOUND_METHOD) => {
                 // more flexibility by passing the stack around
@@ -224,23 +225,24 @@ impl VM {
         )
     }
 
-    fn invoke_from_class(
+    fn get_method(
         &mut self,
         class: ClassHandle,
         name: SymbolHandle,
     ) -> Result<ClosureHandle, String> {
-        self.heap
-            .instances
-            .classes
-            .get_method(class, name)
-            .ok_or_else(|| format!("Undefined property '{}'", self.heap.symbols.get(name)))
+        let closure = self.heap.instances.classes.get_method(class, name);
+        if closure == Classes::EMPTY_METHOD {
+            err!("Undefined property '{}'", self.heap.symbols.get(name))
+        } else {
+            Ok(closure)
+        }
     }
 
     fn invoke(&mut self, name: SymbolHandle, arity: u8) -> Result<(), String> {
         let handle = InstanceHandle::try_from(self.get(arity))?;
         let property = self.heap.instances.get_property(handle, name);
         if property == Value::UNDEFINED {
-            let ch = self.invoke_from_class(self.heap.instances.get_class(handle), name)?;
+            let ch = self.get_method(self.heap.instances.get_class(handle), name)?;
             self.push_frame(ch, arity)
         } else {
             self.set(arity, property);
@@ -249,12 +251,7 @@ impl VM {
     }
 
     fn bind_method(&mut self, class: ClassHandle, name: SymbolHandle) -> Result<(), String> {
-        let method = self
-            .heap
-            .instances
-            .classes
-            .get_method(class, name)
-            .ok_or_else(|| format!("Undefined property '{}'.", self.heap.symbols.get(name)))?;
+        let method = self.get_method(class, name)?;
         let instance = Handle::try_from(self.get(0))?;
         self.collect_garbage_if_needed();
         let bm = self.heap.bound_methods.bind(instance, method);
@@ -494,7 +491,7 @@ impl VM {
                     let name = self.call_frame.read_symbol(&self.heap)?;
                     let arity = self.call_frame.read_byte(&self.heap);
                     let super_class = Handle::try_from(self.pop())?;
-                    let cf = self.invoke_from_class(super_class, name)?;
+                    let cf = self.get_method(super_class, name)?;
                     self.push_frame(cf, arity)?;
                 }
                 Op::True => self.push(Value::TRUE),

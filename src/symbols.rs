@@ -243,6 +243,10 @@ impl KeySet {
     pub fn len(&self) -> usize {
         self.keys.len()
     }
+
+    pub fn get(&self, index: usize) -> SymbolHandle {
+        self.keys[index]
+    }
 }
 
 impl Traceable for KeySet {
