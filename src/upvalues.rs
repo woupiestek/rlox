@@ -153,7 +153,6 @@ impl Upvalues {
         Handle(free as u32)
     }
 
-    // take another shot at recursion?
     pub fn close_upvalues(&mut self, location: u16, stack: &[Value]) {
         while !self.open_heap.is_empty() {
             let handle = self.open_heap[0];

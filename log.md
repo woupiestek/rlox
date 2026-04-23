@@ -1,5 +1,79 @@
 # Rlox
 
+## 2026-04-23
+
+### is there a way?
+
+test implementing object on top of a few vecs of values.
+
+Best idea yet may be:
+
+- have simple allocators for small powers of two, e.g. 8-16-32-64-128-256... at
+  some point, putting objects together would do more harm than good.
+- when an object gets too big: move over to next lane.
+- better fit for the keys sets!
+
+### growing and shrinking
+
+Idea: when going objects, still double them in size, but track them and but on
+sweep, shrink those that are marked to their classes' size.
+
+Note that since classes may gain new fields, the size of the class at instance
+creation time must be recorded, and the offset into the buffer. behind the
+instance pointer there is now: class, length, and offset.
+
+### by class
+
+Does an orthogonal view help? i.e. for each specific size of object allocate a
+buffer to contain 2^k objects of that size. Pool allocation. Each property can
+be layed out it its own array...
+
+Combine ideas: still limit object sizes to 2^k Note that each property only need
+to allocate space for actually used properties. This can be useful if lager
+objects are concentrated in the lower fractions, somehow. That requires moving
+them, or searching for free spots in a way that favors smaller indices for large
+objects.
+
+That could be a way to reduce the need for pooling objects... The trick is then
+to get the objects sorted from large to small even though objects grow
+gradually, and new space for allocations appear at the end. It is like large
+objects should sometime evict smaller ones.
+
+More clever allocation strategies... Like is there still a gain in doubling in
+size now?
+
+Allocate objects in blocks of 256 again. When assigning a new property All the
+objects in the block grow in size, so by 256 values. The block will from now on
+be used for the allocation of bigger objects.
+
+A cache line is typically 64 bytes, so 8 words, in our case 8 values. now the
+assumption is that most methods can aonly tough a few of these values at the
+same time.
+
+Hard to tell when lox is going to profit outside of garbage collection.
+
+### design
+
+- Memory allocated in arrays of e.g. 256 values, together perhaps with a bit
+  array to keep track of free space. Actually allocations could be even less
+  frequent, of course.
+- A batch of objects has one array for each field. So if one of the object does
+  not fit, a new array is added to all objects: this is the primary allocation
+  strategy.
+- Mark and sweep frees some of the objects. Now each batch has a size, so some
+  tightest fit algorithm could be used.
+- Note that old ideas of encoding the batch an object belongs to returns.
+
+### for the next language
+
+- don't allow classes to gain properties dynamically!
+- multiple explictly controlled allocation options: in arrays, in pools, free
+  allocations exceptional.
+
+### closing thoughts
+
+From over 32 to under 5 for the trees benchmark. I've achieved a lot.
+
 ## 2026-04-22
 
 ### fixing the mess...

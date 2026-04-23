@@ -57,8 +57,7 @@ impl Classes {
             self.methods
                 .resize_with((ch.index() + 1).next_power_of_two(), Vec::new);
         } else {
-            self.method_count -= self.methods[ch.index()].len();
-            self.methods[ch.index()] = Vec::new();
+            self.methods[ch.index()].clear();
         }
         if self.field_names.len() <= ch.index() {
             self.field_names

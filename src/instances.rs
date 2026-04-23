@@ -37,9 +37,8 @@ impl Instances {
             self.values
                 .resize((handle as usize + 1).next_power_of_two(), Vec::new());
         } else {
-            self.value_count -= self.values[handle as usize].len();
-            self.values[handle as usize] = vec![Value::UNDEFINED; self.classes.field_count(class)];
-            self.value_count += self.values[handle as usize].len();
+            // main concern: same object put in the place of a huge object, causing a huge memory leak.
+            self.values[handle as usize].clear();
         }
         Handle(handle)
     }
