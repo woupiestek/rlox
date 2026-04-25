@@ -1,5 +1,41 @@
 # Rlox
 
+## 2026-04-25
+
+### simple allocator
+
+In arrays.rs. Basically the free list idea, but it seems to speed up rlox
+enormously. Now used for instances, but also intended for:
+
+- methods
+- upvalues
+- key sets
+
+## 2026-04-24
+
+### allocations
+
+Remember what we are doing it for:
+
+- one issue is locality. organizing data one way or another may be a good way to
+  avoid cahe misses during critical operations
+- another is fragmentation. efficiently reusing memory so that the amount
+  allocated is not much greater than the amount used.
+
+They are connected but not the same. So pool allocators for every size of
+object, or may sizes of object are nice if they somehow balance both needs.
+
+The batches won't really help much at all.
+
+### just an allocator...
+
+Can we imagine a middle ground:
+
+- Allocators for arrays of a generic A, perhaps limited to powers of 2 sizes
+- The allocators actually return u32 handles.
+- Much memory management is done on the inside, in particular certain bound
+  checks, and byte counting. Just not mark and sweep.
+
 ## 2026-04-23
 
 ### is there a way?

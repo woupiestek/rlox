@@ -5,6 +5,7 @@ use crate::vm::VM;
 #[cfg(feature = "trace")]
 mod debug;
 
+mod arrays;
 mod bitarray;
 mod bound_methods;
 mod call_frame;

@@ -15,13 +15,12 @@ pub const HEAP_POWER: usize = 5;
  * Mostly standard, but...
  *
  * Integrates a 32-ary max-heap for finding the upvalues with the highest location on the stack.
- * Shallowness is supposed to make this fast be trading the number of complex iterators
+ * Shallowness is supposed to make this fast by trading the number of complex iterators
  * For simple linear searches.
  */
 pub struct Upvalues {
     handles: HandleSet,
     locations: Vec<u16>,
-    // special case...
     open_heap: Vec<UpvalueHandle>,
     values: Vec<Value>,
 }

@@ -28,8 +28,8 @@ impl BitArray {
 
     pub fn add(&mut self, index: usize) -> bool {
         let i = index / 8;
-        while i >= self.data.len() {
-            self.data.push(0);
+        if i >= self.data.len() {
+            self.data.resize((i + 1).next_power_of_two(), 0);
         }
         self.save(i, self.data[i] | 1 << (index & 7))
     }

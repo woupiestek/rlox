@@ -26,10 +26,12 @@ impl HandleSet {
         }
     }
 
-    fn grow(&mut self) {
-        let len = self.marked.len();
-        let old = mem::replace(&mut self.marked, vec![0; 2 * len].into_boxed_slice());
-        for i in 0..len {
+    fn grow(&mut self, i: usize) {
+        let old = mem::replace(
+            &mut self.marked,
+            vec![0; (i + 1).next_power_of_two()].into_boxed_slice(),
+        );
+        for i in 0..old.len() {
             self.marked[i] = old[i];
         }
     }
@@ -37,7 +39,7 @@ impl HandleSet {
     pub fn clear(&mut self) {
         self.count = 0;
         self.index = 0;
-        self.marked = vec![0; self.marked.len()].into_boxed_slice();
+        self.marked.fill(0);
     }
 
     pub fn is_marked(&self, h: u32) -> bool {
@@ -46,11 +48,10 @@ impl HandleSet {
         self.marked[i] & j > 0
     }
 
-    // mark taken handles
     pub fn mark(&mut self, h: u32) -> bool {
         let i = (h >> 3) as usize;
         if self.marked.len() <= i {
-            self.grow();
+            self.grow(i);
         }
         let j = 1 << (h & THREE_BIT_MASK);
         if self.marked[i] & j == 0 {
@@ -67,17 +68,16 @@ impl HandleSet {
     // move up by one every time
     // allocate more buckets
     pub fn next(&mut self) -> u32 {
+        self.count += 1;
         while self.index < self.marked.len() {
             let j = self.marked[self.index].trailing_ones();
             if j < 8 {
-                self.count += 1;
                 self.marked[self.index] |= 1 << j;
                 return (self.index << 3) as u32 | j;
             }
             self.index += 1;
         }
-        self.grow();
-        self.count += 1;
+        self.grow(self.index);
         self.marked[self.index] = 1;
         (self.index << 3) as u32
     }
@@ -91,12 +91,7 @@ impl HandleSet {
     }
 }
 
-// a mapping from a KIND to another, but...
-// it could be more useful with a generic type
-pub struct Column<T>
-where
-    T: Clone + Default,
-{
+pub struct Column<T: Clone + Default> {
     pub values: Vec<T>,
 }
 
