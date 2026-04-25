@@ -1,6 +1,7 @@
 use std::mem;
 
 use crate::{
+    arrays::{Array, Arrays},
     closures::ClosureHandle,
     handles::{Column, HandleSet},
     heap::{Collector, Handle, Pool, Traceable, CLASS},
@@ -23,8 +24,8 @@ pub struct Classes {
     names: Column<SymbolHandle>,
     method_names: Vec<KeySet>,
     method_name_count: usize,
-    methods: Vec<Vec<ClosureHandle>>,
-    method_count: usize,
+    methods: Arrays<ClosureHandle>,
+    arrays: Column<Array>,
     field_names: Vec<KeySet>,
     field_name_count: usize,
 }
@@ -36,8 +37,8 @@ impl Classes {
             names: Column::new(),
             method_names: Vec::new(),
             method_name_count: 0,
-            methods: Vec::new(),
-            method_count: 0,
+            methods: Arrays::new(),
+            arrays: Column::new(),
             field_names: Vec::new(),
             field_name_count: 0,
         }
@@ -52,12 +53,6 @@ impl Classes {
         } else {
             self.method_name_count -= self.method_names[ch.index()].len();
             self.method_names[ch.index()] = KeySet::new();
-        }
-        if self.methods.len() <= ch.index() {
-            self.methods
-                .resize_with((ch.index() + 1).next_power_of_two(), Vec::new);
-        } else {
-            self.methods[ch.index()].clear();
         }
         if self.field_names.len() <= ch.index() {
             self.field_names
@@ -79,13 +74,11 @@ impl Classes {
 
     pub fn get_method(&self, ch: ClassHandle, name: SymbolHandle) -> ClosureHandle {
         if let Some(index) = self.method_names[ch.index()].find(name) {
-            self.methods[ch.index()][index]
+            self.methods.get_ref(self.arrays.get(ch.0))[index]
         } else {
-            Self::EMPTY_METHOD
+            ClosureHandle::default()
         }
     }
-
-    pub const EMPTY_METHOD: ClosureHandle = Handle(u32::MAX);
 
     pub fn set_method(
         &mut self,
@@ -94,14 +87,12 @@ impl Classes {
         method: ClosureHandle,
     ) -> bool {
         let index = self.method_names[ch.index()].add(name);
-        if self.methods[ch.index()].len() <= index {
-            let new_len = (index + 1).next_power_of_two();
-            self.method_count += new_len - self.methods[ch.index()].len();
-            self.methods[ch.index()].resize(new_len, Self::EMPTY_METHOD);
-        } else if self.methods[ch.index()][index] == Self::EMPTY_METHOD {
-            self.method_count += 1;
+        let mut array = self.arrays.get(ch.0);
+        if array.len() <= index {
+            array = self.methods.realloc(array, index + 1);
+            self.arrays.set(ch.0, array);
         }
-        self.methods[ch.index()][index] = method;
+        self.methods.get_mut(array)[index] = method;
         true
     }
 
@@ -124,14 +115,19 @@ impl Classes {
     }
 
     pub fn clone_methods(&mut self, super_class: ClassHandle, sub_class: ClassHandle) {
-        let len = self.method_names[super_class.index()].len();
-        // guard against multiple reallocations
-        // I know, knowing the number of methods in advance would be nice, but it isn't in lox's bytecode
-        // munificent designed it that way.
-        self.methods[sub_class.index()].reserve(len);
-        for i in 0..len {
+        let super_len = self.method_names[super_class.index()].len();
+        if super_len == 0 {
+            return;
+        }
+        let new_len = self.method_names[sub_class.index()].len() + super_len;
+        let mut array = self.arrays.get(sub_class.0);
+        if array.len() < new_len {
+            array = self.methods.realloc(array, new_len);
+            self.arrays.set(sub_class.0, array);
+        }
+        for i in 0..super_len {
             let name = self.method_names[super_class.index()].get(i);
-            let method = self.methods[super_class.index()][i];
+            let method = self.methods.get_ref(self.arrays.get(super_class.0))[i];
             self.set_method(sub_class, name, method);
         }
     }
@@ -140,7 +136,7 @@ impl Classes {
 impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
         // how to count the number of keys?
-        self.method_count * 8 + self.names.byte_count() + (self.field_names.capacity()+self.method_names.capacity()) * mem::size_of::<KeySet>()
+        self.methods.byte_count() +self.arrays.byte_count() + self.names.byte_count() + (self.field_names.capacity()+self.method_names.capacity()) * mem::size_of::<KeySet>()
         // 4 for the handle, 2 for the index, 100% memory overhead,
         + (self.field_name_count + self.method_name_count) * 12
     }
@@ -154,7 +150,7 @@ impl Pool<CLASS> for Classes {
         for &ch in marked {
             self.field_names[ch as usize].trace(collector);
             self.method_names[ch as usize].trace(collector);
-            for method in &self.methods[ch as usize] {
+            for method in self.methods.get_ref(self.arrays.get(ch)) {
                 method.trace(collector);
             }
         }
@@ -164,5 +160,12 @@ impl Pool<CLASS> for Classes {
         self.handle_set.clear();
     }
 
-    fn sweep(&mut self) {}
+    fn sweep(&mut self) {
+        for i in 0..=self.handle_set.len() as u32 {
+            if !self.handle_set.is_marked(i) {
+                self.methods.free(self.arrays.get(i));
+                self.arrays.set(i, Array::default());
+            }
+        }
+    }
 }

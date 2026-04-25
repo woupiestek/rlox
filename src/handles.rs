@@ -11,7 +11,7 @@ use crate::heap::{Collector, Handle};
 pub struct HandleSet {
     count: usize,
     index: usize,
-    marked: Box<[u8]>,
+    marked: Vec<u8>,
 }
 
 const THREE_BIT_MASK: u32 = 7;
@@ -22,18 +22,12 @@ impl HandleSet {
         Self {
             index: 0,
             count: 0,
-            marked: Box::new([0; 8]),
+            marked: Vec::new(),
         }
     }
 
     fn grow(&mut self, i: usize) {
-        let old = mem::replace(
-            &mut self.marked,
-            vec![0; (i + 1).next_power_of_two()].into_boxed_slice(),
-        );
-        for i in 0..old.len() {
-            self.marked[i] = old[i];
-        }
+        self.marked.resize(i + 1, 0);
     }
 
     pub fn clear(&mut self) {
@@ -45,7 +39,7 @@ impl HandleSet {
     pub fn is_marked(&self, h: u32) -> bool {
         let i = (h >> 3) as usize;
         let j = 1 << (h & THREE_BIT_MASK);
-        self.marked[i] & j > 0
+        i < self.marked.len() && self.marked[i] & j > 0
     }
 
     pub fn mark(&mut self, h: u32) -> bool {
@@ -87,7 +81,11 @@ impl HandleSet {
     }
 
     pub fn byte_count(&self) -> usize {
-        mem::size_of::<Self>() + self.marked.len()
+        mem::size_of::<Self>() + self.marked.capacity()
+    }
+
+    pub fn len(&self) -> usize {
+        self.marked.len() << 3
     }
 }
 

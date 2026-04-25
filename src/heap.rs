@@ -158,7 +158,7 @@ impl<const KIND: usize> From<u32> for Handle<KIND> {
 // this worries me
 impl<const KIND: usize> Default for Handle<KIND> {
     fn default() -> Self {
-        Self(Default::default())
+        Self(u32::MAX)
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{mem, ops::Range, u32};
 
 use crate::{
-    handles::HandleSet,
+    handles::{Column, HandleSet},
     heap::{Collector, Handle, Pool, STRING},
 };
 
@@ -9,70 +9,53 @@ pub type StringHandle = Handle<STRING>;
 
 struct Buffer {
     string: String,
-    tos: Vec<u32>,
 }
 
 impl Buffer {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             string: String::with_capacity(capacity),
-            tos: Vec::new(),
         }
     }
 
-    fn len(&self) -> usize {
-        self.tos.len()
+    fn get(&self, range: Range<usize>) -> &str {
+        &self.string[range]
     }
 
-    fn ran(&self, index: usize) -> Range<usize> {
-        let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
-        let to = self.tos[index] as usize;
-        from..to
-    }
-
-    fn get(&self, index: usize) -> &str {
-        &self.string[self.ran(index)]
-    }
-
-    fn add(&mut self, str: &str) -> usize {
+    fn add(&mut self, str: &str) -> Range<usize> {
+        let from = self.string.len();
         self.string.push_str(str);
-        let index = self.tos.len();
-        self.tos.push(self.string.len() as u32);
-        index
+        from..self.string.len()
     }
 
     fn byte_count(&self) -> usize {
-        mem::size_of::<Self>() + self.string.capacity() + self.tos.capacity() * 4
+        mem::size_of::<Self>() + self.string.capacity()
     }
 }
 
 pub struct Strings {
     keys: HandleSet,
     buffer: Buffer,
-    offsets: Vec<u32>,
+    ranges: Column<Range<usize>>,
 }
 
 impl Strings {
-    const OFFSET: u32 = 16;
     pub fn new() -> Self {
         Self {
             keys: HandleSet::new(),
             buffer: Buffer::with_capacity(0),
-            offsets: Vec::new(),
+            ranges: Column::new(),
         }
     }
 
     pub fn get(&self, handle: StringHandle) -> &str {
-        self.buffer.get((handle.0 - Self::OFFSET) as usize)
+        self.buffer.get(self.ranges.get(handle.0))
     }
 
     pub fn put(&mut self, string: &str) -> StringHandle {
-        let key = self.keys.next() as usize;
-        while self.offsets.len() <= key as usize {
-            self.offsets.push(u32::MAX);
-        }
-        self.offsets[key] = self.buffer.add(string) as u32;
-        let handle = Handle(key as u32 + Self::OFFSET);
+        let key = self.keys.next();
+        self.ranges.set(key, self.buffer.add(string));
+        let handle = Handle(key);
         handle
     }
 
@@ -90,12 +73,7 @@ impl Pool<STRING> for Strings {
     }
 
     fn mark(&mut self, key: u32) -> bool {
-        // let's just be honest
-        if key >= Self::OFFSET {
-            self.keys.mark(key - Self::OFFSET)
-        } else {
-            false
-        }
+        self.keys.mark(key)
     }
 
     fn trace_all(&mut self, _marked: &Vec<u32>, _collector: &mut Collector) {}
@@ -105,17 +83,16 @@ impl Pool<STRING> for Strings {
     }
 
     fn sweep(&mut self) {
-        if self.keys.count() * 4 > self.buffer.len() * 3 {
+        if self.keys.count() * 4 > self.keys.len() * 3 {
             // don't compactify yet
             return;
         }
         let capacity = self.buffer.string.capacity();
         let buffer = mem::replace(&mut self.buffer, Buffer::with_capacity(capacity));
-        for i in 0..self.offsets.len() {
+        for i in 0..self.keys.len() as u32 {
             if self.keys.is_marked(i as u32) {
-                self.offsets[i] = self.buffer.add(buffer.get(self.offsets[i] as usize)) as u32;
-            } else {
-                self.offsets[i] = u32::MAX;
+                self.ranges
+                    .set(i, self.buffer.add(buffer.get(self.ranges.get(i))));
             }
         }
     }

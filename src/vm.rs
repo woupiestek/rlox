@@ -3,7 +3,7 @@ use std::{mem, time};
 use crate::{
     bound_methods::BoundMethodHandle,
     call_frame::CallFrame,
-    classes::{ClassHandle, Classes},
+    classes::ClassHandle,
     closures::ClosureHandle,
     common::STACK_SIZE,
     compiler::compile,
@@ -187,7 +187,7 @@ impl VM {
                     .instances
                     .classes
                     .get_method(class, self.init_string);
-                return if init == Classes::EMPTY_METHOD {
+                return if init == ClosureHandle::default() {
                     if arity > 0 {
                         err!(
                             "Expected no arguments for {} but got {}.",
@@ -231,7 +231,7 @@ impl VM {
         name: SymbolHandle,
     ) -> Result<ClosureHandle, String> {
         let closure = self.heap.instances.classes.get_method(class, name);
-        if closure == Classes::EMPTY_METHOD {
+        if closure == ClosureHandle::default() {
             err!("Undefined property '{}'", self.heap.symbols.get(name))
         } else {
             Ok(closure)

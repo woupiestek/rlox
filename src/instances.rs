@@ -1,5 +1,5 @@
 use crate::{
-    arrays::Arrays,
+    arrays::{Array, Arrays},
     classes::{ClassHandle, Classes},
     handles::{Column, HandleSet},
     heap::{Collector, Handle, Heap, Pool, Traceable, INSTANCE},
@@ -13,8 +13,7 @@ pub struct Instances {
     handles: HandleSet,
     class_handles: Column<ClassHandle>,
     values: Arrays<Value>,
-    arrays: Column<u32>,
-    max_handle: u32,
+    arrays: Column<Array>,
     pub classes: Classes,
 }
 
@@ -26,19 +25,12 @@ impl Instances {
             values: Arrays::new(),
             arrays: Column::new(),
             classes: Classes::new(),
-            max_handle: 0,
         }
     }
 
     pub fn new_instance(&mut self, class: ClassHandle) -> InstanceHandle {
         let handle = self.handles.next();
-        if self.max_handle < handle {
-            self.max_handle = handle;
-        }
         self.class_handles.set(handle, class);
-        // todo: what if field count is 0?
-        let array = self.values.alloc(self.classes.field_count(class));
-        self.arrays.set(handle, array);
         Handle(handle)
     }
 
@@ -68,7 +60,7 @@ impl Instances {
     pub fn set_property(&mut self, ih: InstanceHandle, key: SymbolHandle, value: Value) -> bool {
         let index = self.classes.add_field(self.class_handles.get(ih.0), key);
         let mut array = self.arrays.get(ih.0);
-        if self.values.len(array) <= index {
+        if array.len() <= index {
             array = self.values.realloc(array, index + 1);
             self.arrays.set(ih.0, array);
         }
@@ -80,9 +72,7 @@ impl Instances {
     pub fn delete_property(&mut self, ih: InstanceHandle, key: SymbolHandle) -> bool {
         let array = self.arrays.get(ih.0);
         if let Some(index) = self.classes.find_field(self.class_handles.get(ih.0), key) {
-            if index < self.values.len(array)
-                && self.values.get_ref(array)[index] != Value::UNDEFINED
-            {
+            if index < array.len() && self.values.get_ref(array)[index] != Value::UNDEFINED {
                 self.values.get_mut(array)[index] = Value::UNDEFINED;
                 return true;
             }
@@ -117,15 +107,11 @@ impl Pool<INSTANCE> for Instances {
     }
 
     fn sweep(&mut self) {
-        let mut max_handle = 0;
-        // self.handles.count is not what we are looking for...
-        for i in 0..=self.max_handle {
-            if self.handles.is_marked(i) {
-                max_handle = i;
-            } else {
+        for i in 0..self.handles.len() as u32 {
+            if !self.handles.is_marked(i) {
                 self.values.free(self.arrays.get(i));
+                self.arrays.set(i, Array::default());
             }
         }
-        self.max_handle = max_handle;
     }
 }

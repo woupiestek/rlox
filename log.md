@@ -36,6 +36,11 @@ Can we imagine a middle ground:
 - Much memory management is done on the inside, in particular certain bound
   checks, and byte counting. Just not mark and sweep.
 
+### more encoding
+
+The indirection can be mind bending is is not always needed or helpful.
+So now ship arrays with the data that is otherwise stored in the parent.
+
 ## 2026-04-23
 
 ### is there a way?

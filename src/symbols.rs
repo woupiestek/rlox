@@ -1,4 +1,4 @@
-use std::{mem, u32};
+use std::{mem, ops::Range, u32};
 
 use crate::{
     handles::{Column, HandleSet},
@@ -16,36 +16,27 @@ impl SymbolHandle {
 
 struct Buffer {
     data: String,
-    tos: Vec<u32>,
 }
 
 impl Buffer {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             data: String::with_capacity(capacity),
-            tos: Vec::new(),
         }
     }
 
-    fn len(&self) -> usize {
-        self.tos.len()
+    fn get(&self, range: Range<u32>) -> &str {
+        &self.data[range.start as usize..range.end as usize]
     }
 
-    fn get(&self, index: usize) -> &str {
-        let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
-        let to = self.tos[index] as usize;
-        &self.data[from..to]
-    }
-
-    fn add(&mut self, str: &str) -> usize {
+    fn add(&mut self, str: &str) -> Range<u32> {
+        let from = self.data.len() as u32;
         self.data.push_str(str);
-        let index = self.tos.len();
-        self.tos.push(self.data.len() as u32);
-        index
+        from..self.data.len() as u32
     }
 
     fn byte_count(&self) -> usize {
-        mem::size_of::<Self>() + self.data.capacity() + self.tos.capacity() * 4
+        mem::size_of::<Self>() + self.data.capacity()
     }
 }
 
@@ -54,7 +45,7 @@ pub struct Symbols {
     keys: HandleSet,
     mask: usize,
     buffer: Buffer,
-    offsets: Column<u32>,
+    ranges: Column<Range<u32>>,
 }
 
 impl Symbols {
@@ -64,7 +55,7 @@ impl Symbols {
             keys: HandleSet::new(),
             mask: 7, // self.handle_set.len() - 1
             buffer: Buffer::with_capacity(0),
-            offsets: Column::new(),
+            ranges: Column::new(),
         }
     }
 
@@ -78,7 +69,6 @@ impl Symbols {
     }
 
     fn find(&self, symbol: &str) -> (bool, usize) {
-        assert!(self.buffer.len() * 4 < self.indices.len() * 3);
         let mut hash = self.hash(symbol);
         loop {
             match self.indices[hash] {
@@ -95,7 +85,7 @@ impl Symbols {
     }
 
     pub fn get(&self, handle: SymbolHandle) -> &str {
-        self.buffer.get(handle.0 as usize)
+        self.buffer.get(self.ranges.get(handle.0))
     }
 
     fn grow(&mut self) {
@@ -106,11 +96,11 @@ impl Symbols {
         };
         self.indices = vec![SymbolHandle::EMPTY; capacity].into_boxed_slice();
         self.mask = capacity - 1;
-        for i in 0..self.buffer.len() {
-            if self.keys.is_marked(i as u32) {
-                let str = self.buffer.get(i);
+        for i in 0..self.keys.len() as u32 {
+            if self.keys.is_marked(i) {
+                let str = self.buffer.get(self.ranges.get(i));
                 let (_, index) = self.find(str);
-                self.indices[index] = Handle(i as u32);
+                self.indices[index] = Handle(i);
             }
         }
     }
@@ -126,7 +116,7 @@ impl Symbols {
         }
 
         let key = self.keys.next();
-        self.offsets.set(key, self.buffer.add(symbol) as u32);
+        self.ranges.set(key, self.buffer.add(symbol));
         let handle = Handle(key);
         self.indices[index] = handle;
         handle
@@ -137,7 +127,7 @@ impl Pool<SYMBOL> for Symbols {
     fn byte_count(&self) -> usize {
         mem::size_of::<Symbols>()
             + self.indices.len() * 4
-            + self.offsets.byte_count()
+            + self.ranges.byte_count()
             + self.buffer.byte_count()
             + self.keys.byte_count()
     }
@@ -157,20 +147,16 @@ impl Pool<SYMBOL> for Symbols {
     }
 
     fn sweep(&mut self) {
-        if self.keys.count() * 4 > self.buffer.len() * 3 {
+        if self.keys.count() * 4 > self.keys.len() * 3 {
             // don't compactify yet
             return;
         }
         let capacity = self.buffer.data.capacity();
         let buffer = mem::replace(&mut self.buffer, Buffer::with_capacity(capacity));
-        for i in 0..self.offsets.values.len() {
-            if self.keys.is_marked(i as u32) {
-                self.offsets.set(
-                    i as u32,
-                    self.buffer
-                        .add(buffer.get(self.offsets.get(i as u32) as usize))
-                        as u32,
-                );
+        for i in 0..self.ranges.values.len() as u32 {
+            if self.keys.is_marked(i) {
+                self.ranges
+                    .set(i, self.buffer.add(buffer.get(self.ranges.get(i))));
             }
         }
     }

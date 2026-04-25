@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, ops::Range};
 
 /*
 * Memory safe free list allocator
@@ -7,86 +7,87 @@ use std::mem;
 * The caller is responsible for checking the length and deciding whether to realloc or not.
 */
 
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub struct Array {
+    from: u32,
+    len: u32,
+}
+
+impl Array {
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    fn range(&self) -> Range<usize> {
+        (self.from as usize)..((self.from + self.len) as usize)
+    }
+}
+
 pub struct Arrays<A: Copy + Default> {
     elements: Vec<A>,
-    tos: Vec<u32>,
-    free: Vec<u32>,
+    free: Vec<Array>,
 }
 
 impl<A: Copy + Default> Arrays<A> {
     pub fn new() -> Self {
         Self {
             elements: Vec::with_capacity(8),
-            tos: Vec::new(),
             free: Vec::new(),
         }
     }
 
-    pub fn get_ref(&self, index: u32) -> &[A] {
-        let index = index as usize;
-        let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
-        let to = self.tos[index] as usize;
-        &self.elements[from..to]
+    pub fn get_ref(&self, array: Array) -> &[A] {
+        &self.elements[array.range()]
     }
 
-    pub fn get_mut(&mut self, index: u32) -> &mut [A] {
-        let index = index as usize;
-        let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
-        let to = self.tos[index] as usize;
-        &mut self.elements[from..to]
+    pub fn get_mut(&mut self, array: Array) -> &mut [A] {
+        &mut self.elements[array.range()]
     }
 
-    pub fn len(&self, index: u32) -> usize {
-        let index = index as usize;
-        let from = if index == 0 { 0 } else { self.tos[index - 1] } as usize;
-        let to = self.tos[index] as usize;
-        to - from
-    }
-
-    pub fn alloc(&mut self, min_len: usize) -> u32 {
+    fn alloc(&mut self, min_len: usize) -> Array {
         for i in 0..self.free.len() {
-            let index = self.free[i];
-            if self.len(index) >= min_len {
+            let array = self.free[i];
+            if array.len() >= min_len {
                 let last = self.free.pop().unwrap();
                 if i < self.free.len() {
                     self.free[i] = last;
                 };
-                for i in 0..self.len(index) {
-                    self.get_mut(index)[i] = A::default();
+                for i in 0..array.len() {
+                    self.get_mut(array)[i] = A::default();
                 }
-                return index;
+                return array;
             }
         }
         // no empty allocations please!
         let min_len = min_len.max(8);
-        let to = self.tos.last().unwrap_or(&0) + min_len as u32;
-        if to > self.elements.len() as u32 {
-            self.elements
-                .resize(to.next_power_of_two() as usize, A::default());
-        }
-        let index = self.tos.len() as u32;
-        self.tos.push(to);
-        index
+        let array = Array {
+            from: self.elements.len() as u32,
+            len: min_len as u32,
+        };
+        self.elements.append(&mut vec![A::default(); min_len]);
+        array
     }
 
-    pub fn free(&mut self, index: u32) {
-        self.free.push(index);
+    pub fn free(&mut self, array: Array) {
+        if array == Array::default() {
+            return;
+        }
+        self.free.push(array);
     }
 
     // assume the caller did the len check to decide whether to realloc or not
-    pub fn realloc(&mut self, index: u32, new_min_len: usize) -> u32 {
-        let new_index = self.alloc(new_min_len);
-        for i in 0..self.len(index) {
-            self.get_mut(new_index)[i] = self.get_ref(index)[i];
+    pub fn realloc(&mut self, array: Array, new_min_len: usize) -> Array {
+        let new_array = self.alloc(new_min_len);
+        for i in 0..array.len() {
+            self.get_mut(new_array)[i] = self.get_ref(array)[i];
         }
-        self.free(index);
-        new_index
+        self.free(array);
+        new_array
     }
 
     pub fn byte_count(&self) -> usize {
         mem::size_of::<Self>()
             + self.elements.capacity() * mem::size_of::<A>()
-            + self.tos.capacity() * mem::size_of::<u32>()
-            + self.free.capacity() * mem::size_of::<u32>()
+            + self.free.capacity() * mem::size_of::<Array>()
     }
 }
