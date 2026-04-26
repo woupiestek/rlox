@@ -45,7 +45,7 @@ impl<A: Copy + Default> Arrays<A> {
     }
 
     fn alloc(&mut self, min_len: usize) -> Array {
-        for i in 0..self.free.len() {
+        for i in (0..self.free.len()).rev() {
             let array = self.free[i];
             if array.len() >= min_len {
                 let last = self.free.pop().unwrap();
@@ -58,7 +58,6 @@ impl<A: Copy + Default> Arrays<A> {
                 return array;
             }
         }
-        // no empty allocations please!
         let min_len = min_len.max(8);
         let array = Array {
             from: self.elements.len() as u32,

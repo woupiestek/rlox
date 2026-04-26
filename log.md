@@ -11,6 +11,31 @@ enormously. Now used for instances, but also intended for:
 - upvalues
 - key sets
 
+### key sets
+
+Many bugs. It is not as natural.
+
+Ideas:
+
+- split the capacity and length parts... one is about the spcae allocated to a
+  key set, the other about actual elements.
+- split indices and key sets?
+- when everything works, try buddy allocation, at least for indices?
+
+Basically, key sets are just Arrays of SymbolHandle. Due to bigger allocations
+than asked, an extra length parameter is needed. Then another structure is added
+to get from keys to their position in the array.
+
+I just have to debug this monster anyway.
+
+### debugged
+
+I couldn't sleep. Bench marks have not improved except those for trees, where
+the imporvement is remarkable. Guessing at bytecounts is over in these cases,
+that is at least a good thing.
+
+Perhaps the buddy algorithm can help somehow.
+
 ## 2026-04-24
 
 ### allocations
@@ -38,8 +63,8 @@ Can we imagine a middle ground:
 
 ### more encoding
 
-The indirection can be mind bending is is not always needed or helpful.
-So now ship arrays with the data that is otherwise stored in the parent.
+The indirection can be mind bending is is not always needed or helpful. So now
+ship arrays with the data that is otherwise stored in the parent.
 
 ## 2026-04-23
 

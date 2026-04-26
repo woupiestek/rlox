@@ -1,11 +1,10 @@
-use std::mem;
-
 use crate::{
     arrays::{Array, Arrays},
     closures::ClosureHandle,
     handles::{Column, HandleSet},
     heap::{Collector, Handle, Pool, Traceable, CLASS},
-    symbols::{KeySet, SymbolHandle, Symbols},
+    key_sets::{KeySet, KeySets},
+    symbols::{SymbolHandle, Symbols},
     values::Value,
 };
 
@@ -22,12 +21,11 @@ pub type ClassHandle = Handle<CLASS>;
 pub struct Classes {
     handle_set: HandleSet,
     names: Column<SymbolHandle>,
-    method_names: Vec<KeySet>,
-    method_name_count: usize,
+    key_sets: KeySets,
+    method_names: Column<KeySet>,
     methods: Arrays<ClosureHandle>,
     arrays: Column<Array>,
-    field_names: Vec<KeySet>,
-    field_name_count: usize,
+    field_names: Column<KeySet>,
 }
 
 impl Classes {
@@ -35,32 +33,17 @@ impl Classes {
         Self {
             handle_set: HandleSet::new(),
             names: Column::new(),
-            method_names: Vec::new(),
-            method_name_count: 0,
+            key_sets: KeySets::new(),
+            method_names: Column::new(),
             methods: Arrays::new(),
             arrays: Column::new(),
-            field_names: Vec::new(),
-            field_name_count: 0,
+            field_names: Column::new(),
         }
     }
 
     pub fn new_class(&mut self, name: SymbolHandle) -> ClassHandle {
         let ch = Handle(self.handle_set.next());
         self.names.set(ch.0, name);
-        if self.method_names.len() <= ch.index() {
-            self.method_names
-                .resize_with((ch.index() + 1).next_power_of_two(), KeySet::new);
-        } else {
-            self.method_name_count -= self.method_names[ch.index()].len();
-            self.method_names[ch.index()] = KeySet::new();
-        }
-        if self.field_names.len() <= ch.index() {
-            self.field_names
-                .resize_with((ch.index() + 1).next_power_of_two(), KeySet::new);
-        } else {
-            self.field_name_count -= self.field_names[ch.index()].len();
-            self.field_names[ch.index()] = KeySet::new();
-        }
         ch
     }
 
@@ -73,60 +56,62 @@ impl Classes {
     }
 
     pub fn get_method(&self, ch: ClassHandle, name: SymbolHandle) -> ClosureHandle {
-        if let Some(index) = self.method_names[ch.index()].find(name) {
+        let set = self.method_names.get(ch.0);
+        if let Some(index) = self.key_sets.find(set, name) {
             self.methods.get_ref(self.arrays.get(ch.0))[index]
         } else {
             ClosureHandle::default()
         }
     }
 
-    pub fn set_method(
-        &mut self,
-        ch: ClassHandle,
-        name: SymbolHandle,
-        method: ClosureHandle,
-    ) -> bool {
-        let index = self.method_names[ch.index()].add(name);
+    pub fn set_method(&mut self, ch: ClassHandle, name: SymbolHandle, method: ClosureHandle) {
+        let set = self.method_names.get(ch.0);
         let mut array = self.arrays.get(ch.0);
-        if array.len() <= index {
-            array = self.methods.realloc(array, index + 1);
+        if let Some(index) = self.key_sets.find(set, name) {
+            self.methods.get_mut(array)[index] = method;
+            return;
+        }
+        self.method_names.set(ch.0, self.key_sets.add(set, name));
+        if array.len() < set.key_len() + 1 {
+            array = self.methods.realloc(array, set.key_len() + 1);
             self.arrays.set(ch.0, array);
         }
-        self.methods.get_mut(array)[index] = method;
-        true
+        self.methods.get_mut(array)[set.key_len()] = method;
     }
 
     pub fn find_field(&self, ch: ClassHandle, key: SymbolHandle) -> Option<usize> {
-        self.field_names[ch.index()].find(key)
+        let set = self.field_names.get(ch.0);
+        self.key_sets.find(set, key)
     }
 
     pub fn add_field(&mut self, ch: ClassHandle, key: SymbolHandle) -> usize {
-        let layout = &mut self.field_names[ch.index()];
-        if let Some(index) = layout.find(key) {
-            index
-        } else {
-            self.field_name_count += 1;
-            layout.add(key)
+        if let Some(index) = self.find_field(ch, key) {
+            return index;
         }
+        let set = self.field_names.get(ch.0);
+        let index = set.key_len();
+        self.field_names.set(ch.0, self.key_sets.add(set, key));
+        index
     }
 
     pub fn field_count(&self, ch: ClassHandle) -> usize {
-        self.field_names[ch.index()].len()
+        self.field_names.get(ch.0).key_len()
     }
 
     pub fn clone_methods(&mut self, super_class: ClassHandle, sub_class: ClassHandle) {
-        let super_len = self.method_names[super_class.index()].len();
+        let super_set = self.method_names.get(super_class.0);
+        let super_len = super_set.key_len();
         if super_len == 0 {
             return;
         }
-        let new_len = self.method_names[sub_class.index()].len() + super_len;
+        let new_len = self.method_names.get(sub_class.0).key_len() + super_len;
         let mut array = self.arrays.get(sub_class.0);
         if array.len() < new_len {
             array = self.methods.realloc(array, new_len);
             self.arrays.set(sub_class.0, array);
         }
         for i in 0..super_len {
-            let name = self.method_names[super_class.index()].get(i);
+            let name = self.key_sets.get(super_set, i);
             let method = self.methods.get_ref(self.arrays.get(super_class.0))[i];
             self.set_method(sub_class, name, method);
         }
@@ -136,9 +121,12 @@ impl Classes {
 impl Pool<CLASS> for Classes {
     fn byte_count(&self) -> usize {
         // how to count the number of keys?
-        self.methods.byte_count() +self.arrays.byte_count() + self.names.byte_count() + (self.field_names.capacity()+self.method_names.capacity()) * mem::size_of::<KeySet>()
-        // 4 for the handle, 2 for the index, 100% memory overhead,
-        + (self.field_name_count + self.method_name_count) * 12
+        self.methods.byte_count()
+            + self.arrays.byte_count()
+            + self.names.byte_count()
+            + self.field_names.byte_count()
+            + self.method_names.byte_count()
+            + self.key_sets.byte_count()
     }
 
     fn mark(&mut self, handle: u32) -> bool {
@@ -148,8 +136,12 @@ impl Pool<CLASS> for Classes {
     fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
         self.names.trace_all(marked, collector);
         for &ch in marked {
-            self.field_names[ch as usize].trace(collector);
-            self.method_names[ch as usize].trace(collector);
+            for key in self.key_sets.get_ref(self.method_names.get(ch)) {
+                key.trace(collector);
+            }
+            for key in self.key_sets.get_ref(self.field_names.get(ch)) {
+                key.trace(collector);
+            }
             for method in self.methods.get_ref(self.arrays.get(ch)) {
                 method.trace(collector);
             }
@@ -163,6 +155,10 @@ impl Pool<CLASS> for Classes {
     fn sweep(&mut self) {
         for i in 0..=self.handle_set.len() as u32 {
             if !self.handle_set.is_marked(i) {
+                self.key_sets.free(self.method_names.get(i));
+                self.method_names.set(i, KeySet::default());
+                self.key_sets.free(self.field_names.get(i));
+                self.method_names.set(i, KeySet::default());
                 self.methods.free(self.arrays.get(i));
                 self.arrays.set(i, Array::default());
             }

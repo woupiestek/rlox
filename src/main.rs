@@ -18,6 +18,7 @@ mod functions;
 mod handles;
 mod heap;
 mod instances;
+mod key_sets;
 mod natives;
 mod op;
 mod scanner;

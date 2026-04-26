@@ -2,7 +2,7 @@ use std::{mem, ops::Range, u32};
 
 use crate::{
     handles::{Column, HandleSet},
-    heap::{Collector, Handle, Pool, Traceable, SYMBOL},
+    heap::{Collector, Handle, Pool, SYMBOL},
 };
 
 pub type SymbolHandle = Handle<SYMBOL>;
@@ -158,87 +158,6 @@ impl Pool<SYMBOL> for Symbols {
                 self.ranges
                     .set(i, self.buffer.add(buffer.get(self.ranges.get(i))));
             }
-        }
-    }
-}
-
-pub struct KeySet {
-    keys: Vec<SymbolHandle>,
-    indices: Box<[u16]>,
-}
-
-impl KeySet {
-    const UNDEFINED: u16 = u16::MAX;
-
-    pub fn new() -> Self {
-        Self {
-            keys: Vec::new(),
-            indices: Box::new([Self::UNDEFINED; 8]),
-        }
-    }
-
-    fn hash(&self, key: SymbolHandle) -> (bool, u16) {
-        let mask = self.indices.len() as u16 - 1;
-        let mut hash = (key.0 as u16).reverse_bits() >> mask.leading_zeros();
-        loop {
-            if self.indices[hash as usize] == Self::UNDEFINED {
-                return (false, hash as u16);
-            }
-            if self.keys[self.indices[hash as usize] as usize] == key {
-                return (true, hash as u16);
-            }
-            hash = (hash + 1) & mask
-        }
-    }
-
-    fn grow(&mut self) {
-        let new_len = ((self.keys.len() * 4 + 2) / 3).next_power_of_two();
-        self.indices = vec![Self::UNDEFINED; new_len].into_boxed_slice();
-        for i in 0..self.keys.len() {
-            let key = self.keys[i];
-            let (_, hash) = self.hash(key);
-            self.indices[hash as usize] = i as u16;
-        }
-    }
-
-    pub fn add(&mut self, key: SymbolHandle) -> usize {
-        let (matched, hash) = self.hash(key);
-        if matched {
-            return self.indices[hash as usize] as usize;
-        }
-        let index = self.keys.len() as u16;
-        self.keys.push(key);
-        // two options
-        if self.indices.len() * 3 > self.keys.len() * 4 {
-            self.indices[hash as usize] = index;
-        } else {
-            self.grow();
-        }
-        index as usize
-    }
-
-    pub fn find(&self, key: SymbolHandle) -> Option<usize> {
-        let (matched, hash) = self.hash(key);
-        if matched {
-            Some(self.indices[hash as usize] as usize)
-        } else {
-            None
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.keys.len()
-    }
-
-    pub fn get(&self, index: usize) -> SymbolHandle {
-        self.keys[index]
-    }
-}
-
-impl Traceable for KeySet {
-    fn trace(&self, collector: &mut Collector) {
-        for &key in &self.keys {
-            key.trace(collector);
         }
     }
 }

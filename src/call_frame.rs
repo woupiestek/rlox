@@ -73,11 +73,10 @@ impl CallFrame {
 
     pub fn print(ip: isize, ch: ClosureHandle, heap: &Heap) {
         let fh = heap.closures.get_function(ch);
-        let lp = heap.functions.get_frame(fh).lp;
         eprintln!(
             "  at {} line {}",
             heap.functions.to_string(fh, heap),
-            heap.functions.chunk.get_line(lp, ip as usize)
+            heap.functions.get_line(fh, ip as usize)
         )
     }
 }

@@ -47,14 +47,12 @@ impl Chunk {
         len
     }
 
-    // the problem case
+    // not producing correct line numbers.
     pub fn get_line(&self, frame: usize, ip: usize) -> u16 {
         // start from start of frame, not from the beginning!
         let mut run_length: usize = self.frames[frame].lp;
-
         let i0 = self.frames[frame].lp;
-        let l = self.lines.len();
-        let i1 = if frame + 1 == l {
+        let i1 = if frame + 1 == self.frames.len() {
             self.frames.len()
         } else {
             self.frames[frame + 1].lp
@@ -170,6 +168,10 @@ impl Functions {
                 self.upvalue_counts.get(fh.0)
             )
         }
+    }
+
+    pub fn get_line(&self, fh: FunctionHandle, ip: usize) -> u16 {
+        self.chunk.get_line(self.frames.get(fh.0), ip)
     }
 }
 
