@@ -1,5 +1,129 @@
 # Rlox
 
+## 2026-04-27
+
+### buddy allocator
+
+No way I am doing the block header thing of course.
+
+- The same position will have multiple references.
+- full memory would be just 2^32 entries: block 0? free if nothing is allocated
+
+- yeah, no of leading zeros would work There are a couple fo ways to do the
+  free/occupied thing. A bitset is probably too much. free hashset?
+
+I see a free list for every order, using the linked list structure...
+
+At most 2^16 keys, maybe 3*2^15, at least 6, so those are the boundaries. i.e.
+size and offset fit into a single u16
+
+I am thinking a bitset, marking occupied slots? Trouble: if a parent is
+occupied, so are the children. So mark free slots instead, with the assumption
+that anything beyond the horizon is free.
+
+### encoding of size and offset
+
+Trailing ones: encode the size of the block in the number of trailing ones. To
+find the offet into the arrays of keys, simply ignore those ones and bit shift
+When scaning for blocks of a size, only consider those with sufficient trailing
+ones.
+
+So track free blocks to a point. Why wouldn't tracking occupied work? Because I
+am confused about the meaning. of course the chaing of bigger blocks is
+automatically occupied to, all the way up to the infitie trailing zero ones. So
+freedom needs to be noted. This also means that there must be a rule to declare
+block beyond some point free.
+
+Top-down traversal of blocks is better, so the freedom/occupancy of the biggest
+blocks can be recorded Both systems just suck!
+
+The problem: i imagine a bitset to track which blocks are free/occupied. For
+this bitset each block needs a unique number: the encoding of its size and
+offset.
+
+- I guess occupied should be the default, with the bitset recording freedom. The
+  pointer based implementation does this.
+- This does not apply to the biggest blocks
+
+Could that be the solution? Max size is size 2^16: simply keep a pointer to the
+next free block Below that, keep track of maximal free blocks
+
+Note: in the buddy system, every block has a header, recording its size and
+whether it is free. This means a little overhead on every block. In our case,
+the bit set would have to be allocated a bit sooner. 8*2+6*4+2 So there may be
+2^13
+
+No! Not true! The number of blocks really changes. i.e. splitting allocates a
+header and coalescing frees it.
+
+- bigger keysets would benefit from more spacing. i.e. put the header in the key
+  array. no, that ain't it.
+- it is the index that grows neatly, that plus a fixed header size is tricky
+- rather than binary splits, split into a list of all smaller sizes
+
+### two roads
+
+- coverings: something with binary tries, to track occupansy
+- just use the ids
+
+tries: bitset for the 2^16 blocks, then maybe for each such block a bitset as
+needed. but the idea is that the occupied
+
+### headers
+
+Sparse offsets issues The buddies system works with a header at each offset.
+This gives linear time access to free/occupied data. I want to replace that
+somehow,
+
+Observation, again: Instead of free nodes, consider overcapacity.
+
+real creative: reverse bits. 0 -> 0 remains at the beginning of the block 1 ->
+1^15 that is halfway 2 -> 1^14
+
+Binary break up as desired. ~ parent is found be removing the first one. When
+looking for a free spot, Try the next available spot further down, and ask of
+the parent: Can I have half of your space? Two breaking conditions:
+
+- half of space is less than the new block requires. This put an upper bound on
+  the search range, as higher numbers get lower capacity.
+- half of space is less then buddy requires. In those cases, skip to the next
+  index.
+
+On free: double the capacity of the buddy.
+
+Free incides are still important! If the parent is freed, it can be reused for
+nodes with sufficient capacity.
+
+### reversing bits
+
+This feels like the opposite of avpoid fragmentation, but who knows? The idea
+is: reverse the bits to get offsets spread out through space. This means the
+allocations will generally be as far as part as possible.
+
+No mind, each node has a size and a bit to indicate whether free. Suppose we
+freed the parent element? Better choice for an allocation, is it not?
+
+What is causing me trouble now? By reserving the bits, headers are created in a
+breadth first way, which guides where allocation happen. Fine. What does this
+means for the free list?
+
+I am not making any progress... again.
+
+### breaking up and coalescing
+
+So what are we actually doing!? I don't know. It feels like I found a
+workaround: Use bit reversal to traverse the overlapping blocks in breadth first
+order. Allocations are deliberately spread around, so overlap is not likely, but
+there must always be a check.
+
+What to do when block are freed is harder to understand. Maybe the max space
+idea should be followed: always pick the biggest available block.
+
+### done
+
+yes, after going through all that, I now have modified keysets to keep keysets by 'order'
+using alignment, coal
+
 ## 2026-04-25
 
 ### simple allocator

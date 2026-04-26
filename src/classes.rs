@@ -89,9 +89,8 @@ impl Classes {
             return index;
         }
         let set = self.field_names.get(ch.0);
-        let index = set.key_len();
         self.field_names.set(ch.0, self.key_sets.add(set, key));
-        index
+        set.key_len()
     }
 
     pub fn field_count(&self, ch: ClassHandle) -> usize {
