@@ -35,6 +35,37 @@ constants would really help.
 I don't feel like doing his now. I don't expect to see a big improvement with
 the given benchmarks.
 
+### buddies, afterthoughts
+
+The system works well bottom up. Some logic is needed to progressively allocate
+more space, and coalesce-on-free could benefit from a fast way to tell and
+change which blocks are free, but the assumption is that free block will remain
+rare.
+
+Reverse bits might still be interesting for dynamic arrays. By spreading
+allocations as wide as possible there is room for growth for each array. So
+instead of using the smallest possible space, use the largest. More allocations
+means that the capacity per allocation diminishes, which leads to this
+conundrum: what if one of the arrays has already grown past the available space?
+There are dynamic upper and lower bounds to how much space is assigned to each
+offset!
+
+This is clearly orginal work, which means that there is little info on what to
+do.
+
+To avoid fragmentation, a global top capacity must be avoided. instead, certain
+positions become invalid, as they overlap allocated space.
+
+1. each offset starts with a length and capacity
+2. if any ancestor is already using the space, the offset is unavailable
+3. otherwise, steal capacity from the ancestors.
+
+Now one of the parents need more than capacity, and therefore moves. A huge
+number of slots is now becomes free. So how to work those in?
+
+The free one at the end can be dropped. Then the index with the highest capacity
+should be allocated first.
+
 ## 2026-04-26
 
 ### buddy allocator

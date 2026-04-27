@@ -7,7 +7,7 @@ use crate::symbols::SymbolHandle;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct KeySet {
-    offset: u32,
+    ptr: u32,
     size: u16,
     len: u16,
 }
@@ -18,7 +18,7 @@ impl KeySet {
     }
 
     pub fn ptr(&self) -> usize {
-        6 * self.offset as usize
+        3 * self.ptr as usize
     }
 
     pub fn range(&self) -> Range<usize> {
@@ -47,15 +47,15 @@ impl KeySets {
         if set.size == 0 {
             return (false, usize::MAX);
         }
-        let mask = 8 * set.size - 1;
+        let mask = 4 * set.size - 1;
         let mut hash = (key.0 as u16).reverse_bits() >> mask.leading_zeros();
-        let offset = set.offset as usize;
+        let offset = set.ptr as usize;
         loop {
-            let i = 8 * offset + hash as usize;
+            let i = 4 * offset + hash as usize;
             if self.indices[i] == Self::UNDEFINED {
                 return (false, i);
             }
-            if self.keys[6 * offset + self.indices[i] as usize] == key {
+            if self.keys[3 * offset + self.indices[i] as usize] == key {
                 return (true, i);
             }
             hash = (hash + 1) & mask
@@ -71,85 +71,67 @@ impl KeySets {
         }
     }
 
-    fn _alloc(&mut self, size: u16) -> Option<u32> {
+    fn _alloc(&mut self, size: u32) -> u32 {
         let order = size.ilog2() as usize;
-        if order >= self.free.len() {
-            return None;
-        }
-        if let Some(offset) = self.free[order].pop() {
-            return Some(offset);
-        }
-        if let Some(offset) = self._alloc(size * 2) {
-            self.free[order].push(offset | size as u32);
-            return Some(offset);
-        }
-        None
-    }
-
-    fn _grow(&mut self, size: u16) -> u32 {
-        let order = size.ilog2() as usize;
-        if self.free.len() < order {
-            self.free.resize_with(order, Vec::new);
-        }
-        let mut len = (self.indices.len() / 8) as u32;
-        for i in 0..order {
-            if len.is_multiple_of(2 << i) {
-                continue;
+        if order < self.free.len() {
+            let offset = if let Some(offset) = self.free[order].pop() {
+                offset
+            } else {
+                let offset = self._alloc(2 * size);
+                self.free[order].push(offset | size);
+                offset
+            };
+            for i in 0..4 * size as usize {
+                self.indices[4 * offset as usize + i] = Self::UNDEFINED;
             }
-            self.free[i].push(len);
-            len = len.next_multiple_of(2 << i);
+            return offset;
         }
-        len
+
+        let offset = if self.keys.len() == 0 {
+            // zero step
+            self.free = vec![vec![]; order];
+            self.free.push(vec![size]);
+            0
+        } else {
+            // inductive step
+            for p in self.free.len()..order {
+                self.free.push(vec![(1 << p) as u32]);
+            }
+            self.free.push(Vec::new());
+            size
+        };
+        self.keys.resize(6 * size as usize, SymbolHandle::EMPTY);
+        self.indices.resize(8 * size as usize, Self::UNDEFINED);
+        offset
     }
 
     fn alloc(&mut self, size: u16) -> KeySet {
-        if let Some(offset) = self._alloc(size) {
-            let from = 8 * offset as usize;
-            let to = from + 8 * size as usize;
-            for i in from..to as usize {
-                self.indices[i] = Self::UNDEFINED;
-            }
-            return KeySet {
-                offset,
-                size,
-                len: 0,
-            };
-        }
-        let offset = self._grow(size);
-        let len = offset as usize + size as usize;
-        self.keys.resize(6 * len, SymbolHandle::EMPTY);
-        self.indices.resize(8 * len, Self::UNDEFINED);
-        KeySet {
+        return KeySet {
             len: 0,
+            ptr: self._alloc(size as u32),
             size,
-            offset,
-        }
+        };
     }
 
     fn _free(&mut self, offset: u32, size: u16) {
         let order = size.ilog2() as usize;
         // buddy search
         let buddy = offset ^ size as u32;
-        if order < self.free.len() {
-            for i in 0..self.free[order].len() {
-                if self.free[order][i] == buddy {
-                    self.free[order].swap_remove(i);
-                    self._free(offset & buddy, size * 2);
-                    return;
-                }
+        for i in 0..self.free[order].len() {
+            if self.free[order][i] == buddy {
+                self.free[order].swap_remove(i);
+                self._free(offset & buddy, size * 2);
+                return;
             }
-            if order >= self.free.len() {
-                self.free.resize_with(order + 1, Vec::new);
-            }
-            self.free[order].push(offset);
         }
+        self.free[order].push(offset);
     }
 
     pub fn free(&mut self, set: KeySet) {
         if set == KeySet::default() {
             return;
         }
-        self._free(set.offset, set.size);
+        self._free(set.ptr, set.size);
     }
 
     // assume any growing is done
@@ -175,7 +157,7 @@ impl KeySets {
         if matched {
             return set;
         }
-        if set.size * 6 > set.len {
+        if set.size * 3 > set.len {
             self.push(&mut set, key, index);
             return set;
         }

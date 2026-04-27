@@ -462,7 +462,6 @@ impl VM {
                 }
                 Op::SetGlobal => {
                     let name = self.call_frame.read_symbol(&self.heap)?;
-                    // the booleans are killing me
                     if self.set_global(name, self.get(0)) {
                         self.heap.instances.delete_property(self.globals, name);
                         return err!("Undefined variable '{}'.", self.heap.symbols.get(name));
