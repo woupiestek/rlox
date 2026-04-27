@@ -71,13 +71,11 @@ impl Symbols {
     fn find(&self, symbol: &str) -> (bool, usize) {
         let mut hash = self.hash(symbol);
         loop {
-            match self.indices[hash] {
-                SymbolHandle::EMPTY => return (false, hash),
-                handle => {
-                    if self.get(handle) == symbol {
-                        return (true, hash);
-                    }
-                }
+            if self.indices[hash] == SymbolHandle::EMPTY {
+                return (false, hash);
+            }
+            if self.get(self.indices[hash]) == symbol {
+                return (true, hash);
             }
             hash += 1;
             hash &= self.mask;

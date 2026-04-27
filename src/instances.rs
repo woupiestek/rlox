@@ -49,9 +49,9 @@ impl Instances {
 
     pub fn get_property(&self, ih: InstanceHandle, key: SymbolHandle) -> Value {
         if let Some(index) = self.classes.find_field(self.class_handles.get(ih.0), key) {
-            let values = self.values.get_ref(self.arrays.get(ih.0));
-            if index < values.len() {
-                return values[index];
+            let array = self.arrays.get(ih.0);
+            if index < array.len() {
+                return self.values[array.ptr() + index];
             }
         }
         Value::UNDEFINED
@@ -64,16 +64,16 @@ impl Instances {
             array = self.values.realloc(array, index + 1);
             self.arrays.set(ih.0, array);
         }
-        let new_key = self.values.get_ref(array)[index] == Value::UNDEFINED;
-        self.values.get_mut(array)[index] = value;
+        let new_key = self.values[array.ptr() + index] == Value::UNDEFINED;
+        self.values[array.ptr() + index] = value;
         new_key
     }
 
     pub fn delete_property(&mut self, ih: InstanceHandle, key: SymbolHandle) -> bool {
         let array = self.arrays.get(ih.0);
         if let Some(index) = self.classes.find_field(self.class_handles.get(ih.0), key) {
-            if index < array.len() && self.values.get_ref(array)[index] != Value::UNDEFINED {
-                self.values.get_mut(array)[index] = Value::UNDEFINED;
+            if index < array.len() && self.values[array.ptr() + index] != Value::UNDEFINED {
+                self.values[array.ptr() + index] = Value::UNDEFINED;
                 return true;
             }
         }
@@ -95,7 +95,7 @@ impl Pool<INSTANCE> for Instances {
 
     fn trace_all(&mut self, marked: &Vec<u32>, collector: &mut Collector) {
         for &ih in marked {
-            for &value in self.values.get_ref(self.arrays.get(ih)) {
+            for &value in &self.values[self.arrays.get(ih).range()] {
                 value.trace(collector);
             }
         }

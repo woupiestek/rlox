@@ -1,4 +1,4 @@
-use std::{mem, ops::Range};
+use std::mem;
 
 use crate::{
     handles::{Column, HandleSet},
@@ -7,7 +7,7 @@ use crate::{
     values::Value,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ChunkFrame {
     pub ip: usize,
     pub lp: usize,
@@ -19,8 +19,7 @@ pub struct Chunk {
     code: Vec<u8>,
     lines: Vec<u16>,
     run_lengths: Vec<u16>,
-    constants: Vec<Value>,   // run time data structure
-    frames: Vec<ChunkFrame>, //
+    constants: Vec<Value>,
 }
 
 impl Chunk {
@@ -30,37 +29,29 @@ impl Chunk {
             lines: Vec::new(),
             run_lengths: Vec::new(),
             constants: Vec::new(),
-            frames: Vec::new(),
         }
     }
-    pub fn add(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) -> usize {
-        let len = self.frames.len();
-        self.frames.push(ChunkFrame {
+    pub fn add(&mut self, cd: &[u8], ln: &[u16], rl: &[u16], cn: &[Value]) -> ChunkFrame {
+        let frame = ChunkFrame {
             ip: self.code.len(),
             lp: self.lines.len(),
             cp: self.constants.len(),
-        });
+        };
         self.code.extend_from_slice(cd);
         self.lines.extend_from_slice(ln);
         self.run_lengths.extend_from_slice(rl);
         self.constants.extend_from_slice(cn);
-        len
+        frame
     }
 
     // not producing correct line numbers.
-    pub fn get_line(&self, frame: usize, ip: usize) -> u16 {
+    pub fn get_line(&self, frame: ChunkFrame, ip: usize) -> u16 {
         // start from start of frame, not from the beginning!
-        let mut run_length: usize = self.frames[frame].lp;
-        let i0 = self.frames[frame].lp;
-        let i1 = if frame + 1 == self.frames.len() {
-            self.frames.len()
-        } else {
-            self.frames[frame + 1].lp
-        };
-        for i in i0..i1 {
-            run_length += self.run_lengths[i] as usize;
+        let mut run_length = self.run_lengths[frame.lp] as usize;
+        for lp in frame.lp..self.run_lengths.len() {
+            run_length += self.run_lengths[lp] as usize;
             if run_length > ip {
-                return self.lines[i];
+                return self.lines[lp];
             }
         }
         return 0;
@@ -92,7 +83,7 @@ pub struct Functions {
     names: Column<SymbolHandle>,
     arities: Column<u8>,
     upvalue_counts: Column<u8>,
-    frames: Column<usize>,
+    frames: Column<ChunkFrame>,
     pub chunk: Chunk,
     handles: HandleSet,
 }
@@ -104,7 +95,6 @@ impl Functions {
             names: Column::new(),
             arities: Column::new(),
             upvalue_counts: Column::new(),
-            // indirection to allow compactification...
             frames: Column::new(),
             chunk: Chunk::new(),
             handles: HandleSet::new(),
@@ -117,7 +107,7 @@ impl Functions {
         name: Option<SymbolHandle>,
         arity: u8,
         upvalue_count: u8,
-        frame: usize,
+        frame: ChunkFrame,
     ) -> FunctionHandle {
         let i = self.handles.next();
         self.arities.set(i, arity);
@@ -135,20 +125,8 @@ impl Functions {
         self.upvalue_counts.get(fh.0) as usize
     }
 
-    pub fn get_frame(&self, fh: FunctionHandle) -> &ChunkFrame {
-        &self.chunk.frames[self.frames.get(fh.0)]
-    }
-
-    fn constants(&self, index: u32) -> Range<usize> {
-        let frame = self.frames.get(index);
-        let from = self.chunk.frames[frame].cp;
-        let len = self.chunk.frames.len();
-        let to = if frame + 1 == len {
-            self.chunk.constants.len()
-        } else {
-            self.chunk.frames[frame + 1].cp
-        };
-        from..to
+    pub fn get_frame(&self, fh: FunctionHandle) -> ChunkFrame {
+        self.frames.get(fh.0)
     }
 
     #[cfg(feature = "trace")]
@@ -198,7 +176,18 @@ impl Pool<FUNCTION> for Functions {
             }
         }
         for &i in marked {
-            for constant in self.constants(i) {
+            // the length of the constant array is no longe recorded
+            // this only works because no garbage is actually collected here
+            // if function memory is not managed that way,
+            // then we should just get rid of this pool.
+            let from = self.get_frame(Handle(i)).cp;
+            let next = self.get_frame(Handle(i + 1)).cp;
+            let to = if next == 0 {
+                self.chunk.constants.len()
+            } else {
+                next
+            };
+            for constant in from..to {
                 self.chunk.constants[constant].trace(collector)
             }
         }

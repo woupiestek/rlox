@@ -2,6 +2,41 @@
 
 ## 2026-04-27
 
+### ideas
+
+My own vec: use the buddy system and maybe the reverse bits idea. So one big
+allocation upfront, and then subdivide it as demanded. I guess the free list
+makes more sense to me now, Is double bookkeeping a good idea? like, there is a
+free list for each size, which makes it easy to find free space, but hard to see
+if a buddy is free.
+
+What about a free heap at each size? Would that help to find the buddy though?
+
+Reference counting: when clearing a stack frame, any references could be
+decremented right there. Note, though, that the reference counter gets involved
+everywhere. It is like the heap.
+
+Seems obvious to cache the result of the KeySets::hash method: just remember the
+set, key of the last lookup to avoid doing it all again. I tried it, and saw no
+difference in performance.
+
+### inline caching
+
+Inline kind of means that the cache is made part of the code. The interpreter
+notes the context in which a variable is resolved, and what value came back,
+when that is not mutable. In particular, it can store the class of the method,
+since the same class will always resolve to the same method.
+
+Rlox could look at the instruction pointer (ip) or the constant pointer (cp) an
+decide to link classes and methods to each. This goes in the direction of having
+a global structure for each method name. Having a separate repository of
+constants would really help.
+
+I don't feel like doing his now. I don't expect to see a big improvement with
+the given benchmarks.
+
+## 2026-04-26
+
 ### buddy allocator
 
 No way I am doing the block header thing of course.
@@ -121,8 +156,8 @@ idea should be followed: always pick the biggest available block.
 
 ### done
 
-yes, after going through all that, I now have modified keysets to keep keysets by 'order'
-using alignment, coal
+yes, after going through all that, I now have modified keysets to keep keysets
+by 'order' using alignment, coal
 
 ## 2026-04-25
 

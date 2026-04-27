@@ -22,7 +22,7 @@ impl CallFrame {
 
     pub fn new(sp: usize, closure: ClosureHandle, heap: &Heap) -> Self {
         let function = heap.closures.get_function(closure);
-        let &ChunkFrame { ip, lp: _, cp } = heap.functions.get_frame(function);
+        let ChunkFrame { ip, lp: _, cp } = heap.functions.get_frame(function);
         Self {
             cp,
             ip: ip as isize - 1,

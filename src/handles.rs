@@ -101,14 +101,14 @@ impl<T: Clone + Default> Column<T> {
         let index = index as usize;
         if self.values.len() <= index {
             self.values
-                .resize((index + 1).next_power_of_two(), Default::default());
+                .resize((index + 1).next_power_of_two(), T::default());
         }
         self.values[index] = value;
     }
     pub fn get(&self, index: u32) -> T {
         let index = index as usize;
         if index >= self.values.len() {
-            Default::default()
+            T::default()
         } else {
             self.values[index as usize].clone()
         }

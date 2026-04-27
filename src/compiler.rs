@@ -174,7 +174,7 @@ impl CompileBuffer {
         self.run_lengths.push(0);
     }
 
-    pub fn close_frame(&mut self, chunk: &mut Chunk) -> usize {
+    pub fn close_frame(&mut self, chunk: &mut Chunk) -> ChunkFrame {
         let ChunkFrame { ip, lp, cp } = self.frames.pop().unwrap_or(ChunkFrame {
             ip: 0,
             lp: 0,

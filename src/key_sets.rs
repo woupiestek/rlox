@@ -1,4 +1,7 @@
-use std::mem;
+use std::{
+    mem,
+    ops::{Index, IndexMut, Range},
+};
 
 use crate::symbols::SymbolHandle;
 
@@ -10,12 +13,16 @@ pub struct KeySet {
 }
 
 impl KeySet {
-    pub fn key_len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.len as usize
     }
 
-    fn key_offset(&self) -> usize {
+    pub fn ptr(&self) -> usize {
         6 * self.offset as usize
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        self.ptr()..self.ptr() + self.len()
     }
 }
 
@@ -36,15 +43,7 @@ impl KeySets {
         }
     }
 
-    pub fn get_ref(&self, set: KeySet) -> &[SymbolHandle] {
-        &self.keys[set.key_offset()..set.key_offset() + set.key_len()]
-    }
-
-    pub fn get(&self, set: KeySet, index: usize) -> SymbolHandle {
-        self.keys[set.key_offset() + index]
-    }
-
-    fn hash(&self, set: &KeySet, key: SymbolHandle) -> (bool, usize) {
+    fn hash(&self, set: KeySet, key: SymbolHandle) -> (bool, usize) {
         if set.size == 0 {
             return (false, usize::MAX);
         }
@@ -64,7 +63,7 @@ impl KeySets {
     }
 
     pub fn find(&self, set: KeySet, key: SymbolHandle) -> Option<usize> {
-        let (matched, i) = self.hash(&set, key);
+        let (matched, i) = self.hash(set, key);
         if matched {
             Some(self.indices[i] as usize)
         } else {
@@ -155,16 +154,16 @@ impl KeySets {
 
     // assume any growing is done
     fn push(&mut self, set: &mut KeySet, key: SymbolHandle, index: usize) {
-        self.keys[set.key_offset() + set.key_len()] = key;
+        self.keys[set.ptr() + set.len()] = key;
         self.indices[index] = set.len;
         set.len += 1
     }
 
-    fn grow(&mut self, set: KeySet) -> KeySet {
+    fn grow_set(&mut self, set: KeySet) -> KeySet {
         let mut new_set = self.alloc((set.size + 1).next_power_of_two());
-        for i in 0..set.key_len() {
-            let key = self.keys[set.key_offset() + i];
-            let (_, index) = self.hash(&new_set, key);
+        for i in 0..set.len() {
+            let key = self.keys[set.ptr() + i];
+            let (_, index) = self.hash(new_set, key);
             self.push(&mut new_set, key, index);
         }
         self.free(set);
@@ -172,7 +171,7 @@ impl KeySets {
     }
 
     pub fn add(&mut self, mut set: KeySet, key: SymbolHandle) -> KeySet {
-        let (matched, index) = self.hash(&set, key);
+        let (matched, index) = self.hash(set, key);
         if matched {
             return set;
         }
@@ -180,8 +179,8 @@ impl KeySets {
             self.push(&mut set, key, index);
             return set;
         }
-        let mut new_set = self.grow(set);
-        let (_, index) = self.hash(&new_set, key);
+        let mut new_set = self.grow_set(set);
+        let (_, index) = self.hash(new_set, key);
         self.push(&mut new_set, key, index);
         new_set
     }
@@ -194,56 +193,24 @@ impl KeySets {
     }
 }
 
-// struct Buddies {
-//     // free lists at all levels
-//     free: Vec<Vec<usize>>,
-// }
+impl Index<usize> for KeySets {
+    type Output = SymbolHandle;
 
-// impl Buddies {
-//     pub fn new() -> Self {
-//         Self {
-//             free: vec![vec![0]],
-//         }
-//     }
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.keys[index]
+    }
+}
 
-//     pub fn free(&mut self, id: usize, co_order: usize) {
-//         assert!(id < (1 << co_order));
+impl Index<Range<usize>> for KeySets {
+    type Output = [SymbolHandle];
 
-//         if id > 0 && co_order > 0 && co_order < self.free.len() {
-//             let buddy = id ^ (1 << (co_order - 1));
-//             // search buddy in the free list,
-//             // actually putting block together to keep the free lists short
-//             for i in 0..self.free[co_order].len() {
-//                 if self.free[co_order][i] == buddy {
-//                     self.free[co_order].swap_remove(i);
-//                     self.free(buddy, co_order - 1);
-//                     return;
-//                 }
-//             }
-//         }
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        &self.keys[index]
+    }
+}
 
-//         self.free[co_order].push(id);
-//     }
-
-//     pub fn alloc(&mut self, co_order: usize) -> Option<usize> {
-//         if co_order < self.free.len() {
-//             if let Some(id) = self.free[co_order].pop() {
-//                 return Some(id);
-//             }
-//         }
-
-//         if co_order == 0 {
-//             return None;
-//         }
-
-//         if let Some(id) = self.alloc(co_order - 1) {
-//             if co_order >= self.free.len() {
-//                 self.free.resize_with(co_order + 1, Vec::new)
-//             }
-//             self.free[co_order].push(id ^ (1 << (co_order - 1)));
-//             return Some(id);
-//         }
-
-//         None
-//     }
-// }
+impl IndexMut<usize> for KeySets {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.keys[index]
+    }
+}

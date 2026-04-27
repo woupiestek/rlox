@@ -13,7 +13,7 @@ pub struct Closures {
     functions: Column<FunctionHandle>,
     handles: HandleSet,
     next: usize,
-    offsets: Column<u32>,
+    ups: Column<u32>,
     pub upvalues: Box<[UpvalueHandle]>,
     upvalue_counts: Column<u8>,
 }
@@ -24,7 +24,7 @@ impl Closures {
             functions: Column::new(),
             handles: HandleSet::new(),
             next: 0,
-            offsets: Column::new(),
+            ups: Column::new(),
             upvalue_counts: Column::new(),
             upvalues: vec![Handle(0); 8].into_boxed_slice(),
         }
@@ -45,7 +45,7 @@ impl Closures {
         if ch.0 & Self::TOP_BIT == 0 {
             return 0;
         }
-        self.offsets.get(ch.0 ^ Self::TOP_BIT) as usize
+        self.ups.get(ch.0 ^ Self::TOP_BIT) as usize
     }
 
     pub fn set_upvalue(&mut self, ch: ClosureHandle, index: usize, uh: UpvalueHandle) {
@@ -64,8 +64,8 @@ impl Closures {
             if !self.handles.is_marked(i) {
                 continue;
             }
-            let offset = self.offsets.get(i) as usize;
-            self.offsets.set(i, next as u32);
+            let offset = self.ups.get(i) as usize;
+            self.ups.set(i, next as u32);
             for j in 0..self.upvalue_counts.get(i) as usize {
                 self.upvalues[next] = old[offset + j];
                 next += 1;
@@ -80,7 +80,7 @@ impl Closures {
         }
         let index = self.handles.next();
         self.functions.set(index, fh);
-        self.offsets.set(index, self.next as u32);
+        self.ups.set(index, self.next as u32);
         self.upvalue_counts.set(index, uc as u8);
         self.next += uc;
         if self.next >= self.upvalues.len() {
@@ -98,7 +98,7 @@ impl Pool<CLOSURE> for Closures {
         BYTE_COUNT
             + self.handles.byte_count()
             + self.functions.byte_count()
-            + self.offsets.byte_count()
+            + self.ups.byte_count()
             + self.upvalue_counts.byte_count()
             + self.upvalues.len() * 4
     }
@@ -114,7 +114,7 @@ impl Pool<CLOSURE> for Closures {
             }
             let index = handle ^ Self::TOP_BIT;
             self.functions.get(index).trace(collector);
-            let from = self.offsets.get(index) as usize;
+            let from = self.ups.get(index) as usize;
             let to = from + self.upvalue_counts.get(index) as usize;
             for j in from..to {
                 self.upvalues[j].trace(collector);

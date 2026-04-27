@@ -225,6 +225,8 @@ impl VM {
         )
     }
 
+    // try inline caching here?
+    // how?
     fn get_method(
         &mut self,
         class: ClassHandle,

@@ -1,4 +1,7 @@
-use std::{mem, ops::Range};
+use std::{
+    mem,
+    ops::{Index, IndexMut, Range},
+};
 
 /*
 * Memory safe free list allocator
@@ -14,11 +17,15 @@ pub struct Array {
 }
 
 impl Array {
+    pub fn ptr(&self) -> usize {
+        self.from as usize
+    }
+
     pub fn len(&self) -> usize {
         self.len as usize
     }
 
-    fn range(&self) -> Range<usize> {
+    pub fn range(&self) -> Range<usize> {
         (self.from as usize)..((self.from + self.len) as usize)
     }
 }
@@ -36,24 +43,12 @@ impl<A: Copy + Default> Arrays<A> {
         }
     }
 
-    pub fn get_ref(&self, array: Array) -> &[A] {
-        &self.elements[array.range()]
-    }
-
-    pub fn get_mut(&mut self, array: Array) -> &mut [A] {
-        &mut self.elements[array.range()]
-    }
-
     fn alloc(&mut self, min_len: usize) -> Array {
         for i in (0..self.free.len()).rev() {
-            let array = self.free[i];
-            if array.len() >= min_len {
-                let last = self.free.pop().unwrap();
-                if i < self.free.len() {
-                    self.free[i] = last;
-                };
-                for i in 0..array.len() {
-                    self.get_mut(array)[i] = A::default();
+            if self.free[i].len() >= min_len {
+                let array = self.free.swap_remove(i);
+                for i in array.range() {
+                    self.elements[i] = A::default();
                 }
                 return array;
             }
@@ -78,7 +73,7 @@ impl<A: Copy + Default> Arrays<A> {
     pub fn realloc(&mut self, array: Array, new_min_len: usize) -> Array {
         let new_array = self.alloc(new_min_len);
         for i in 0..array.len() {
-            self.get_mut(new_array)[i] = self.get_ref(array)[i];
+            self.elements[new_array.ptr() + i] = self.elements[array.ptr() + i];
         }
         self.free(array);
         new_array
@@ -88,5 +83,27 @@ impl<A: Copy + Default> Arrays<A> {
         mem::size_of::<Self>()
             + self.elements.capacity() * mem::size_of::<A>()
             + self.free.capacity() * mem::size_of::<Array>()
+    }
+}
+
+impl<A: Copy + Default> Index<usize> for Arrays<A> {
+    type Output = A;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.elements[index]
+    }
+}
+
+impl<A: Copy + Default> Index<Range<usize>> for Arrays<A> {
+    type Output = [A];
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        &self.elements[index]
+    }
+}
+
+impl<A: Copy + Default> IndexMut<usize> for Arrays<A> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.elements[index]
     }
 }
